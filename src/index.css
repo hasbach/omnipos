@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-app-bg: var(--app-bg);
+  --color-app-ink: var(--app-ink);
+  --color-app-surface: var(--app-surface);
+  --color-app-border: var(--app-border);
+}
+
+:root {
+  --app-bg: #E4E3E0;
+  --app-ink: #141414;
+  --app-surface: #FFFFFF;
+  --app-border: #141414;
+}
+
+.dark {
+  --app-bg: #0A0A0A;
+  --app-ink: #F5F5F5;
+  --app-surface: #141414;
+  --app-border: #F5F5F5;
+}
+
+@layer base {
+  body {
+    @apply bg-app-bg text-app-ink selection:bg-app-ink selection:text-app-bg transition-colors duration-300;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: currentColor;
+  opacity: 0.1;
+  border-radius: 10px;
+}
+
+/* Hide number input arrows */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+@media print {
+  @page {
+    margin: 1cm;
+  }
+  
+  body * {
+    visibility: hidden;
+  }
+  
+  #printable-report, #printable-report * {
+    visibility: visible;
+  }
+  
+  #printable-report {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    visibility: visible !important;
+  }
+
+  /* Ensure background colors are printed */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

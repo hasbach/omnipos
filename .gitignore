@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+dist-electron/
+dist-monitor/
+dist-server/
+release/
+coverage/
+.DS_Store
+*.log
+*.db
+.env*
+!.env.example
+.claude/settings.local.json

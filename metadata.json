@@ -1,0 +1,5 @@
+{
+  "name": "OmniPOS",
+  "description": "A high-performance POS system with multi-currency support, partial payments, and multi-device database synchronization.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>OmniPOS — Terminal Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0a0a0f;
+      --surface: #13131a;
+      --border: #2a2a3a;
+      --ink: #f0f0f8;
+      --accent: #6c63ff;
+      --accent-dim: #4a43c0;
+      --success: #22c55e;
+      --muted: rgba(240,240,248,0.5);
+    }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-app-region: drag;
+      overflow: hidden;
+    }
+    #titlebar {
+      height: 38px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      flex-shrink: 0;
+    }
+    .titlebar-logo { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 800; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.8; }
+    .logo-box { width: 20px; height: 20px; background: var(--accent); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 900; }
+    #close-btn {
+      -webkit-app-region: no-drag;
+      width: 24px; height: 24px;
+      border: none; background: transparent; color: var(--muted);
+      border-radius: 4px; cursor: pointer; font-size: 16px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #close-btn:hover { background: #ff4444; color: white; }
+
+    #main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      -webkit-app-region: no-drag;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 40px;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 32px 64px rgba(0,0,0,0.5);
+    }
+    .card-header { text-align: center; margin-bottom: 32px; }
+    .card-header h1 { font-size: 28px; font-weight: 900; letter-spacing: -0.03em; margin-bottom: 6px; }
+    .card-header p { font-size: 14px; opacity: 0.5; }
+
+    .field-group { margin-bottom: 20px; }
+    label { display: block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.5; margin-bottom: 6px; }
+    input[type="text"] {
+      width: 100%; padding: 12px 14px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; color: var(--ink); font-size: 15px;
+      font-weight: 600; outline: none; transition: border-color 0.2s;
+    }
+    input[type="text"]:focus { border-color: var(--accent); }
+    input[type="text"]::placeholder { opacity: 0.3; }
+
+    .divider { display: flex; align-items: center; gap: 12px; margin: 24px 0; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
+    .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    .mode-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .mode-btn {
+      padding: 20px 16px; background: var(--bg); border: 2px solid var(--border);
+      border-radius: 14px; cursor: pointer; text-align: center;
+      transition: all 0.2s; color: var(--ink);
+    }
+    .mode-btn:hover { border-color: var(--accent); background: rgba(108,99,255,0.08); }
+    .mode-btn .mode-icon { font-size: 28px; margin-bottom: 8px; }
+    .mode-btn .mode-title { font-size: 13px; font-weight: 800; display: block; }
+    .mode-btn .mode-desc { font-size: 11px; opacity: 0.45; margin-top: 4px; display: block; }
+
+    /* Client panel */
+    #client-panel { display: none; margin-top: 20px; }
+    #client-panel.visible { display: block; }
+    .scan-btn {
+      width: 100%; padding: 12px; background: var(--bg);
+      border: 1px dashed var(--border); border-radius: 10px;
+      color: var(--muted); font-size: 13px; font-weight: 700;
+      cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .scan-btn:hover { border-color: var(--accent); color: var(--accent); }
+    #scan-results { margin-top: 12px; space-y: 6px; }
+    .result-item {
+      padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; justify-content: space-between;
+      transition: all 0.15s; margin-top: 8px;
+    }
+    .result-item:hover { border-color: var(--success); }
+    .result-badge { font-size: 10px; background: rgba(34,197,94,0.15); color: var(--success); border-radius: 20px; padding: 2px 8px; font-weight: 800; }
+    .ip-row { display: flex; gap: 8px; margin-top: 12px; }
+    .ip-row input { flex: 1; }
+    .ip-btn {
+      padding: 12px 14px; background: var(--accent); border: none;
+      border-radius: 10px; color: white; font-weight: 800; font-size: 13px;
+      cursor: pointer; white-space: nowrap; transition: all 0.2s;
+    }
+    .ip-btn:hover { background: var(--accent-dim); }
+
+    .status-msg { margin-top: 16px; padding: 12px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; display: none; }
+    .status-msg.info { background: rgba(108,99,255,0.12); border: 1px solid rgba(108,99,255,0.3); color: var(--accent); display: block; }
+    .status-msg.error { background: rgba(255,80,80,0.12); border: 1px solid rgba(255,80,80,0.3); color: #ff6b6b; display: block; }
+    .status-msg.success { background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.3); color: var(--success); display: block; }
+
+    .connect-btn {
+      width: 100%; margin-top: 20px; padding: 14px;
+      background: var(--accent); border: none; border-radius: 12px;
+      color: white; font-size: 14px; font-weight: 900; letter-spacing: 0.05em;
+      text-transform: uppercase; cursor: pointer; transition: all 0.2s;
+    }
+    .connect-btn:hover { background: var(--accent-dim); transform: translateY(-1px); }
+    .connect-btn:active { transform: scale(0.98); }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="titlebar">
+    <div class="titlebar-logo">
+      <div class="logo-box">Ω</div>
+      OmniPOS — Terminal Setup
+    </div>
+    <button id="close-btn" title="Close">✕</button>
+  </div>
+
+  <div id="main">
+    <div class="card">
+      <div class="card-header">
+        <h1>Configure Terminal</h1>
+        <p>Set up this device as a Host server or connect it to an existing one on your network.</p>
+      </div>
+
+      <div class="field-group">
+        <label>Terminal Name</label>
+        <input type="text" id="terminal-name" placeholder="e.g. POS 1, Main Counter, Bar" maxlength="30" />
+      </div>
+
+      <div class="divider">Select Mode</div>
+
+      <div class="mode-btns">
+        <button class="mode-btn" id="host-btn" onclick="chooseHost()">
+          <div class="mode-icon">💻</div>
+          <span class="mode-title">Host (Main)</span>
+          <span class="mode-desc">Run local server &amp; database</span>
+        </button>
+        <button class="mode-btn" id="client-btn" onclick="chooseClient()">
+          <div class="mode-icon">🔗</div>
+          <span class="mode-title">Client</span>
+          <span class="mode-desc">Connect to another device</span>
+        </button>
+      </div>
+
+      <div id="client-panel">
+        <button class="scan-btn" onclick="scanNetwork()">
+          <span id="scan-icon">📡</span>
+          <span id="scan-label">Scan Local Network for OmniPOS Server</span>
+        </button>
+        <div id="scan-results"></div>
+
+        <div style="margin-top:16px;">
+          <label>Or enter IP manually</label>
+          <div class="ip-row">
+            <input type="text" id="manual-ip" placeholder="e.g. 192.168.1.50:3000" />
+            <button class="ip-btn" onclick="useManualIP()">Use</button>
+          </div>
+        </div>
+
+        <div id="status" class="status-msg"></div>
+
+        <button class="connect-btn" id="connect-btn" onclick="saveClientConfig()" style="display:none">
+          Connect to This Server
+        </button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  let selectedMode = null;
+  let selectedHost = null;
+
+  document.getElementById('close-btn').onclick = () => window.electronSetup.close();
+
+  function chooseHost() {
+    selectedMode = 'host';
+    document.getElementById('host-btn').style.borderColor = '#6c63ff';
+    document.getElementById('client-btn').style.borderColor = '';
+    document.getElementById('client-panel').classList.remove('visible');
+
+    const name = document.getElementById('terminal-name').value.trim() || 'Main';
+    window.electronSetup.saveConfig({ mode: 'host', terminalId: name });
+  }
+
+  function chooseClient() {
+    selectedMode = 'client';
+    document.getElementById('client-btn').style.borderColor = '#6c63ff';
+    document.getElementById('host-btn').style.borderColor = '';
+    document.getElementById('client-panel').classList.add('visible');
+  }
+
+  async function scanNetwork() {
+    const scanLabel = document.getElementById('scan-label');
+    const scanIcon = document.getElementById('scan-icon');
+    const results = document.getElementById('scan-results');
+    results.innerHTML = '';
+    scanLabel.textContent = 'Scanning... (up to 4 seconds)';
+    scanIcon.textContent = '⏳';
+
+    const servers = await window.electronSetup.scanNetwork();
+
+    scanLabel.textContent = servers.length > 0
+      ? `Found ${servers.length} server(s)` 
+      : 'No servers found — try manual IP';
+    scanIcon.textContent = servers.length > 0 ? '✅' : '📡';
+
+    servers.forEach(addr => {
+      const item = document.createElement('div');
+      item.className = 'result-item';
+      item.innerHTML = `<span>http://${addr}</span><span class="result-badge">FOUND</span>`;
+      item.onclick = () => selectServer(addr);
+      results.appendChild(item);
+    });
+  }
+
+  function selectServer(addr) {
+    selectedHost = addr;
+    document.getElementById('manual-ip').value = addr;
+    showStatus(`Selected: http://${addr}`, 'success');
+    document.getElementById('connect-btn').style.display = 'block';
+  }
+
+  function useManualIP() {
+    const val = document.getElementById('manual-ip').value.trim();
+    if (!val) return;
+    selectedHost = val.includes(':') ? val : `${val}:3000`;
+    showStatus(`Will connect to: http://${selectedHost}`, 'info');
+    document.getElementById('connect-btn').style.display = 'block';
+  }
+
+  function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = `status-msg ${type}`;
+  }
+
+  async function saveClientConfig() {
+    if (!selectedHost) { showStatus('Please select or enter a server address.', 'error'); return; }
+    const name = document.getElementById('terminal-name').value.trim() || 'POS';
+    window.electronSetup.saveConfig({ mode: 'client', terminalId: name, hostAddress: `http://${selectedHost}` });
+  }
+</script>
+</body>
+</html>
