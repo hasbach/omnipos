@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { supabase } from './lib/supabase';
 import LiveMonitorWeb from './pages/LiveMonitorWeb';
 import OnlineSale from './pages/OnlineSale';
+import SuperAdminWeb from './pages/SuperAdminWeb';
 import { Tenant } from './types';
 
 // Columns only — deliberately excludes `password` (the bcrypt hash) so it's never
@@ -153,6 +154,30 @@ export default function MonitorApp() {
             </form>
           </div>
         </motion.div>
+      </div>
+    );
+  }
+
+  if (tenant.email === 'hasbach') {
+    return (
+      <div className="h-screen w-screen bg-app-bg text-app-ink flex flex-col overflow-hidden">
+        <header className="flex justify-between items-center p-4 border-b border-app-border bg-app-surface">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-app-ink text-app-bg rounded-lg">
+              <ShoppingCart size={16} />
+            </div>
+            <div>
+              <h1 className="font-bold text-sm uppercase">{tenant.name}</h1>
+              <p className="text-[10px] opacity-50 font-mono tracking-widest">SUPER ADMIN</p>
+            </div>
+          </div>
+          <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
+            Logout
+          </button>
+        </header>
+        <main className="flex-1 overflow-y-auto p-4 md:p-8">
+          <SuperAdminWeb />
+        </main>
       </div>
     );
   }
