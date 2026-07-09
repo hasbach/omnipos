@@ -51,7 +51,11 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "OmniPOS-Setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "OmniPOS-Portable.${ext}"
     },
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**/*"
