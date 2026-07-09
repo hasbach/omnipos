@@ -18,3 +18,27 @@ View your app in AI Studio: https://ai.studio/apps/0ffb89d7-d9fb-4da4-96a8-e89f5
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Cutting a Release
+
+The desktop app auto-updates via `electron-updater`, checking GitHub Releases on
+[hasbach/omnipos](https://github.com/hasbach/omnipos). Every installed copy checks for
+updates ~10s after launch and prompts the user to install. Publishing a release is a
+manual step (there is no CI pipeline for this yet):
+
+1. Bump `"version"` in [package.json](package.json).
+2. Create a GitHub [personal access token](https://github.com/settings/tokens) with
+   `repo` scope and export it:
+   ```
+   $env:GH_TOKEN = "ghp_xxxxxxxxxxxx"
+   ```
+3. Build and publish:
+   ```
+   npm run build
+   npm run build:server
+   npx electron-builder --win --publish always
+   ```
+   This uploads the Windows installer and `latest.yml` to a new GitHub Release tagged
+   with the version from step 1.
+4. That's it — existing installs will detect the new release and offer to update
+   automatically. No further code changes are needed for the update itself to work.
