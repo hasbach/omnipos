@@ -1,8 +1,13 @@
 -- Supabase Database Schema for OmniPOS Synchronization
 -- Run this in your Supabase SQL Editor
 
--- Disable RLS for now to ensure smooth initial sync (enable later for production security)
--- Alternatively, we can use the Service Role Key for backend sync and keep RLS on.
+-- If your project already has these tables from an earlier version of this file, just run
+-- this one line to add the column that's new below, instead of re-running the CREATE TABLEs:
+--   ALTER TABLE public.products ADD COLUMN IF NOT EXISTS track_inventory INTEGER DEFAULT 1;
+
+-- RLS is enabled and enforced via supabase_rls.sql, using the Service Role Key for backend
+-- sync (server/supabase.ts) so it can bypass RLS the same way local Express routes already
+-- scope every query by tenant_id themselves.
 
 CREATE TABLE public.tenants (
     global_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -37,6 +42,7 @@ CREATE TABLE public.products (
     units_per_package INTEGER DEFAULT 1,
     stock INTEGER DEFAULT 0,
     reorder_point INTEGER DEFAULT 0,
+    track_inventory INTEGER DEFAULT 1,
     category TEXT,
     currency TEXT DEFAULT 'USD',
     unit TEXT DEFAULT 'pcs',

@@ -1,24 +1,61 @@
 import React, { useState, useEffect } from 'react';
-import { ShoppingCart } from 'lucide-react';
+import { ShoppingCart, Activity, Banknote } from 'lucide-react';
 import { motion } from 'motion/react';
-import bcrypt from 'bcryptjs';
 import { supabase } from './lib/supabase';
 import LiveMonitorWeb from './pages/LiveMonitorWeb';
+import OnlineSale from './pages/OnlineSale';
 import { Tenant } from './types';
+
+// Columns only — deliberately excludes `password` (the bcrypt hash) so it's never
+// transmitted to the browser at all, let alone stored anywhere client-side.
+const TENANT_COLUMNS = 'global_id, local_id, name, email, local_license_type, local_license_expiry, online_license_type, online_license_expiry, current_version, available_version, scheduled_update_at, created_at, updated_at';
+
+// 'hasbach' is the app-wide identity string for the super-admin tenant (checked throughout
+// the codebase as tenant.email === 'hasbach'), but it isn't a valid email address, so Supabase
+// Auth can't use it directly. Translate it to the real address backing that Auth user.
+const SUPER_ADMIN_LOGIN = 'hasbach';
+const SUPER_ADMIN_AUTH_EMAIL = 'hsalloum60+superadmin@gmail.com';
 
 export default function MonitorApp() {
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [view, setView] = useState<'monitor' | 'sale'>('monitor');
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authForm, setAuthForm] = useState({ email: '', password: '' });
   const [authError, setAuthError] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
-  useEffect(() => {
-    const saved = localStorage.getItem('monitor_tenant');
-    if (saved) {
-      setTenant(JSON.parse(saved));
+  const fetchTenantForSession = async (userId: string) => {
+    const { data, error } = await supabase
+      .from('tenants')
+      .select(TENANT_COLUMNS)
+      .eq('global_id', userId)
+      .single();
+
+    if (error || !data) {
+      setTenant(null);
+      return;
     }
-    setIsAuthLoading(false);
+    setTenant(data as any as Tenant);
+  };
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        fetchTenantForSession(session.user.id).finally(() => setIsAuthLoading(false));
+      } else {
+        setIsAuthLoading(false);
+      }
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        fetchTenantForSession(session.user.id);
+      } else {
+        setTenant(null);
+      }
+    });
+
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -27,25 +64,22 @@ export default function MonitorApp() {
     setIsProcessing(true);
 
     try {
-      const { data, error } = await supabase
-        .from('tenants')
-        .select('*')
-        .eq('email', authForm.email)
-        .single();
+      const loginEmail = authForm.email.trim().toLowerCase() === SUPER_ADMIN_LOGIN
+        ? SUPER_ADMIN_AUTH_EMAIL
+        : authForm.email;
 
-      if (error || !data) {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: loginEmail,
+        password: authForm.password,
+      });
+
+      if (error || !data.user) {
         setAuthError('Invalid email or password');
         setIsProcessing(false);
         return;
       }
 
-      const isValid = await bcrypt.compare(authForm.password, data.password);
-      if (isValid) {
-        setTenant(data);
-        localStorage.setItem('monitor_tenant', JSON.stringify(data));
-      } else {
-        setAuthError('Invalid email or password');
-      }
+      await fetchTenantForSession(data.user.id);
     } catch (err) {
       setAuthError('Network error connecting to cloud');
     } finally {
@@ -53,8 +87,8 @@ export default function MonitorApp() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('monitor_tenant');
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setTenant(null);
   };
 
@@ -135,12 +169,28 @@ export default function MonitorApp() {
             <p className="text-[10px] opacity-50 font-mono tracking-widest">LIVE MONITOR</p>
           </div>
         </div>
-        <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
-          Logout
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-app-bg border border-app-border rounded-lg p-1">
+            <button
+              onClick={() => setView('monitor')}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all ${view === 'monitor' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
+            >
+              <Activity size={12} /> Live Monitor
+            </button>
+            <button
+              onClick={() => setView('sale')}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all ${view === 'sale' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
+            >
+              <Banknote size={12} /> Make a Sale
+            </button>
+          </div>
+          <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
+            Logout
+          </button>
+        </div>
       </header>
       <main className="flex-1 overflow-y-auto p-4 md:p-8">
-        <LiveMonitorWeb tenant={tenant} />
+        {view === 'monitor' ? <LiveMonitorWeb tenant={tenant} /> : <OnlineSale tenant={tenant} />}
       </main>
     </div>
   );

@@ -1,0 +1,10 @@
+node_modules
+build
+dist
+dist-electron
+dist-monitor
+dist-server
+release
+coverage
+.git
+*.db

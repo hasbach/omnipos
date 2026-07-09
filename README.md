@@ -42,3 +42,11 @@ manual step (there is no CI pipeline for this yet):
    with the version from step 1.
 4. That's it — existing installs will detect the new release and offer to update
    automatically. No further code changes are needed for the update itself to work.
+
+## License Activation
+
+New registrations are inactive until approved. To activate your license (or renew a
+subscription), contact:
+
+- **Email:** hsalloum60@gmail.com
+- **Phone:** +961 71 315 744

@@ -1,0 +1,5 @@
+{
+  "buildCommand": "npm run build:monitor",
+  "outputDirectory": "dist-monitor",
+  "framework": null
+}

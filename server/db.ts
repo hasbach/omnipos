@@ -106,6 +106,7 @@ db.exec(`
     status TEXT DEFAULT 'pending',
     terminal_id TEXT,
     terminal_sequence INTEGER,
+    idempotency_key TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id),
     FOREIGN KEY(stakeholder_id) REFERENCES stakeholders(id),
@@ -357,6 +358,7 @@ try { db.exec("ALTER TABLE archived_transactions ADD COLUMN terminal_id TEXT;");
 try { db.exec("ALTER TABLE archived_transactions ADD COLUMN terminal_sequence INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE users ADD COLUMN pin TEXT DEFAULT '0000';"); } catch {}
 try { db.exec("ALTER TABLE products ADD COLUMN track_inventory INTEGER DEFAULT 1;"); } catch {}
+try { db.exec("ALTER TABLE transactions ADD COLUMN idempotency_key TEXT;"); } catch {}
 
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
@@ -441,41 +443,13 @@ if (tenantCount.count === 0) {
   insertCurrency.run(tenantId, "LBP", "LL", 89500, 0);
 }
 
-// Ensure super user 'hasbach' exists
-const superUser = db.prepare("SELECT * FROM tenants WHERE email = ?").get('hasbach');
-if (!superUser) {
-  const hashedSuperPassword = bcrypt.hashSync(process.env.SUPER_ADMIN_PASSWORD || 'admin@22#33', 10);
-  const result = db.prepare("INSERT INTO tenants (name, email, password) VALUES (?, ?, ?)").run('Super Admin', 'hasbach', hashedSuperPassword);
-  const tenantId = result.lastInsertRowid;
-  
-  // Seed basic data for super user
-  db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, ?, ?)").run(tenantId, "Walk-in Customer", "customer");
-  db.prepare("INSERT INTO users (tenant_id, name, role) VALUES (?, ?, ?)").run(tenantId, "Super Admin", "admin");
-  db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(tenantId, "USD", "$", 1, 1);
-  db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(tenantId, "LBP", "LL", 89500, 0);
-  db.prepare("INSERT INTO settings (tenant_id, key, value) VALUES (?, ?, ?)").run(tenantId, "language", "en");
-  db.prepare("INSERT INTO settings (tenant_id, key, value) VALUES (?, ?, ?)").run(tenantId, "store_name", "Super Admin Store");
-}
-
-const currencyCount = db.prepare("SELECT COUNT(*) as count FROM currencies").get() as { count: number };
-if (currencyCount.count === 0) {
-  db.prepare("INSERT INTO currencies (code, symbol, rate, is_default) VALUES (?, ?, ?, ?)").run("USD", "$", 1, 1);
-  db.prepare("INSERT INTO currencies (code, symbol, rate, is_default) VALUES (?, ?, ?, ?)").run("EUR", "€", 0.92, 0);
-  db.prepare("INSERT INTO currencies (code, symbol, rate, is_default) VALUES (?, ?, ?, ?)").run("LBP", "LL", 89500, 0);
-}
-
-const settingsCount = db.prepare("SELECT COUNT(*) as count FROM settings").get() as { count: number };
-if (settingsCount.count === 0) {
-  db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("language", "en");
-  db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("store_name", "OmniPOS Retail");
-  db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("tax_rate", "11");
-}
-
-const usersCount = db.prepare("SELECT COUNT(*) as count FROM users").get() as { count: number };
-if (usersCount.count === 0) {
-  db.prepare("INSERT INTO users (name, role) VALUES (?, ?)").run("Admin", "admin");
-  db.prepare("INSERT INTO users (name, role) VALUES (?, ?)").run("Cashier 1", "staff");
-}
+// The super-admin ('hasbach') account is intentionally NOT auto-seeded here — it lives only
+// in Supabase (a single, deliberately-created row with its own password). Every fresh local
+// install therefore ships with no super-admin account and no default/hardcoded password at
+// all. Logging in still works from any machine: /api/auth/login already tries Supabase first
+// and upserts the authenticated tenant into local SQLite on success, so the correct hash gets
+// cached locally (for offline fallback on that machine) only after a real, successful cloud
+// login — never before.
 
 export function logAction(tenantId: number | string, userId: number | string | null, action: string, details: string) {
   try {

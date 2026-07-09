@@ -15,7 +15,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const hashedPassword = await bcrypt.hash(password, 10);
       
       // We must generate a UUID for global_id locally since Supabase might require it.
-      const newGlobalId = require('crypto').randomUUID();
+      // Node's `crypto` is a Web Crypto global (no import needed) — `require()` isn't
+      // available in this ESM context under tsx, so it must not be used here.
+      const newGlobalId = crypto.randomUUID();
 
       // 1. Insert directly to Supabase first
       const { data: cloudTenant, error: cloudError } = await supabase
@@ -32,6 +34,25 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         
       if (cloudError) {
         throw new Error(cloudError.message);
+      }
+
+      // 1b. Create a matching Supabase Auth user, keyed to the same global_id, so
+      // Row Level Security (`auth.uid() = tenant_id`) resolves correctly for this tenant.
+      // Reuses the bcrypt hash already computed above — plaintext never makes a second trip.
+      // Best-effort: a failure here (or Supabase Auth being briefly unreachable) must not
+      // block local registration — scripts/backfill-supabase-auth.ts can fix it up later.
+      try {
+        const { error: authError } = await supabase.auth.admin.createUser({
+          id: newGlobalId,
+          email,
+          password_hash: hashedPassword,
+          email_confirm: true,
+        });
+        if (authError) {
+          console.error(`Failed to create Supabase Auth user for new tenant ${email}:`, authError.message);
+        }
+      } catch (authErr: any) {
+        console.error(`Failed to create Supabase Auth user for new tenant ${email}:`, authErr.message);
       }
 
       // 2. Insert locally using the cloud ID
@@ -145,15 +166,6 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
   });
 
-  app.get("/api/debug/supabase", async (req, res) => {
-    try {
-      const { data: users, error } = await supabase.from('users').select('*');
-      res.json({ users, error });
-    } catch (err: any) {
-      res.json({ error: err.message });
-    }
-  });
-
   app.get("/api/admin/tenants", authenticate, (req, res) => {
     const currentTenant = db.prepare("SELECT email FROM tenants WHERE id = ?").get(req.session.tenantId) as any;
     if (currentTenant.email !== 'hasbach') {
@@ -174,8 +186,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Default pin is '0000'. Backdoor pin for super admin support.
-    if (user.pin !== pin && pin !== (process.env.SUPER_ADMIN_PIN || '9999')) { 
+    // Default pin is '0000'. Optional support backdoor — only active if explicitly configured;
+    // no hardcoded fallback, so a fresh install has no bypass PIN at all.
+    const superAdminPin = process.env.SUPER_ADMIN_PIN;
+    if (user.pin !== pin && (!superAdminPin || pin !== superAdminPin)) {
       return res.status(401).json({ error: "Invalid PIN" });
     }
 

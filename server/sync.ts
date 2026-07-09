@@ -67,13 +67,13 @@ async function pushToCloud() {
       let unsyncedRecords = [];
       if (tableName === 'tenants') {
         unsyncedRecords = db.prepare(`
-          SELECT * FROM tenants 
-          WHERE email != 'hasbach' AND email != 'demo@example.com' AND (last_synced_at IS NULL OR updated_at > last_synced_at)
+          SELECT * FROM tenants
+          WHERE email NOT IN ('hasbach', 'demo@example.com', 'admin@example.com') AND (last_synced_at IS NULL OR updated_at > last_synced_at)
         `).all() as any[];
       } else {
-        // For other tables, make sure we only push if the tenant isn't hasbach or demo
+        // For other tables, make sure we only push if the tenant isn't hasbach or a seed tenant.
         // Since we don't have a direct email join easily, we'll fetch valid local tenant IDs first.
-        const validTenants = db.prepare(`SELECT id FROM tenants WHERE email != 'hasbach' AND email != 'demo@example.com'`).all() as any[];
+        const validTenants = db.prepare(`SELECT id FROM tenants WHERE email NOT IN ('hasbach', 'demo@example.com', 'admin@example.com')`).all() as any[];
         const validIds = validTenants.map(t => t.id);
         
         if (validIds.length === 0) continue; // No valid tenants to push for
@@ -171,7 +171,7 @@ async function pullFromCloud() {
   for (const tableName of syncTables) {
     try {
       // Get local tenant IDs (excluding super admin 'hasbach' and default seed data)
-      const localTenants = db.prepare(`SELECT id, global_id FROM tenants WHERE email != 'hasbach' AND email != 'admin@example.com' AND global_id IS NOT NULL`).all() as any[];
+      const localTenants = db.prepare(`SELECT id, global_id FROM tenants WHERE email NOT IN ('hasbach', 'demo@example.com', 'admin@example.com') AND global_id IS NOT NULL`).all() as any[];
 
       if (localTenants.length === 0) continue; // No valid tenants to pull for
 
