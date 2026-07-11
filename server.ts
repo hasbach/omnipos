@@ -7,6 +7,11 @@ declare module 'express-session' {
   interface SessionData {
     tenantId: number | string;
     tenantName: string;
+    // Supabase session bits, so the authenticated cloud session can be rehydrated after an
+    // app restart (see server/routes.ts /api/auth/me).
+    sbRefresh?: string;
+    sbGlobalId?: string;
+    sbEmail?: string;
   }
 }
 

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Tenant } from '../types';
 import { 
   Users, 
   Shield, 
@@ -15,11 +14,25 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
+// Tenants now come from the cloud (all businesses), keyed by their global_id UUID rather than
+// a local integer id — so a super-admin on any machine sees every tenant, not just the few
+// mirrored into this install's local database.
+interface AdminTenant {
+  global_id: string;
+  name: string;
+  email: string;
+  local_license_type: 'year' | 'lifetime';
+  local_license_expiry?: string;
+  online_license_type: 'monthly' | 'lifetime';
+  online_license_expiry?: string;
+  created_at?: string;
+}
+
 export default function SuperAdminDashboard() {
-  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState<Partial<Tenant>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<AdminTenant>>({});
 
   const fetchTenants = async () => {
     setLoading(true);
@@ -27,7 +40,7 @@ export default function SuperAdminDashboard() {
       const res = await fetch('/api/admin/tenants');
       if (res.ok) {
         const data = await res.json();
-        setTenants(data);
+        if (Array.isArray(data)) setTenants(data);
       }
     } catch (err) {
       console.error('Fetch tenants error:', err);
@@ -40,14 +53,14 @@ export default function SuperAdminDashboard() {
     fetchTenants();
   }, []);
 
-  const handleEdit = (tenant: Tenant) => {
-    setEditingId(tenant.id);
+  const handleEdit = (tenant: AdminTenant) => {
+    setEditingId(tenant.global_id);
     setEditForm(tenant);
   };
 
-  const handleSave = async (id: number) => {
+  const handleSave = async (globalId: string) => {
     try {
-      const res = await fetch(`/api/admin/tenants/${id}/license`, {
+      const res = await fetch(`/api/admin/tenants/${globalId}/license`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editForm)
@@ -144,7 +157,7 @@ export default function SuperAdminDashboard() {
       <div className="grid gap-4">
         {tenants.map(tenant => (
           <motion.div 
-            key={tenant.id}
+            key={tenant.global_id}
             layout
             className="bg-app-surface border border-app-border rounded-2xl p-6 shadow-sm hover:shadow-md transition-all"
           >
@@ -159,9 +172,9 @@ export default function SuperAdminDashboard() {
                 </div>
               </div>
               
-              {editingId === tenant.id ? (
+              {editingId === tenant.global_id ? (
                 <button 
-                  onClick={() => handleSave(tenant.id)}
+                  onClick={() => handleSave(tenant.global_id)}
                   className="px-4 py-2 bg-app-ink text-app-bg rounded-lg font-bold uppercase text-[10px] flex items-center gap-2"
                 >
                   <Save size={14} /> Save Changes
@@ -183,7 +196,7 @@ export default function SuperAdminDashboard() {
                   <Monitor size={14} /> Local Software
                 </div>
                 
-                {editingId === tenant.id ? (
+                {editingId === tenant.global_id ? (
                   <div className="space-y-3">
                     <select 
                       className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"
@@ -227,7 +240,7 @@ export default function SuperAdminDashboard() {
                   <Globe size={14} /> Online Monitor
                 </div>
                 
-                {editingId === tenant.id ? (
+                {editingId === tenant.global_id ? (
                   <div className="space-y-3">
                     <select 
                       className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"

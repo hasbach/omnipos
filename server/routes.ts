@@ -1,10 +1,115 @@
 import { db, logAction } from "./db.js";
 import bcrypt from "bcryptjs";
-import { supabase } from "./supabase.js";
+import { anonSupabase } from "./supabase.js";
 import { forceInitialSync } from "./sync.js";
+import {
+  setActiveSession,
+  getActiveSession,
+  rehydrateActiveSession,
+  createAuthedClient,
+  clearActiveSession,
+} from "./session.js";
 import { EscPos } from "./printing/escpos.js";
 import { buildReceiptBuffer, buildTestPrintBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
+
+// The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
+// can't use it directly — translate it to the real address backing that Auth user (kept in
+// sync with src/MonitorApp.tsx's SUPER_ADMIN_AUTH_EMAIL).
+const SUPER_ADMIN_LOGIN = 'hasbach';
+const SUPER_ADMIN_AUTH_EMAIL = 'hsalloum60+superadmin@gmail.com';
+
+// Shared login routine used by both /api/auth/login and auto-login after registration.
+// Tries real Supabase Auth first (so cloud sync + RLS work); falls back to the local bcrypt
+// check when the cloud is unreachable (offline mode) so the local POS keeps working.
+async function establishLogin(
+  email: string,
+  password: string,
+  req: any
+): Promise<{ ok: boolean; status: number; error: string | null; tenant: any }> {
+  const loginEmail = String(email).trim().toLowerCase() === SUPER_ADMIN_LOGIN
+    ? SUPER_ADMIN_AUTH_EMAIL
+    : email;
+
+  // 1. Attempt cloud auth.
+  let cloudSession: { access_token: string; refresh_token: string } | null = null;
+  let cloudUserId: string | null = null;
+  try {
+    const { data, error } = await anonSupabase.auth.signInWithPassword({ email: loginEmail, password });
+    if (!error && data.session && data.user) {
+      cloudSession = { access_token: data.session.access_token, refresh_token: data.session.refresh_token };
+      cloudUserId = data.user.id;
+    }
+  } catch {
+    // network/offline — fall through to the local bcrypt fallback below
+  }
+
+  if (cloudSession && cloudUserId) {
+    // Read the tenant's own row (RLS-scoped) to mirror it locally.
+    const authed = await createAuthedClient(cloudSession);
+    const { data: cloudTenant, error: tErr } = await authed
+      .from('tenants')
+      .select('*')
+      .eq('global_id', cloudUserId)
+      .single();
+    if (tErr || !cloudTenant) {
+      return { ok: false, status: 500, error: 'Signed in, but could not load your business profile.', tenant: null };
+    }
+
+    // Upsert into local SQLite (source of truth for the offline POS).
+    const existing = db.prepare("SELECT id FROM tenants WHERE global_id = ? OR email = ?")
+      .get(cloudTenant.global_id, cloudTenant.email) as any;
+    let localId: number;
+    if (existing) {
+      db.prepare(`UPDATE tenants SET global_id = ?, name = ?, email = ?, password = ?, local_license_type = ?, local_license_expiry = ?, online_license_type = ?, online_license_expiry = ?, current_version = COALESCE(?, current_version), available_version = COALESCE(?, available_version), scheduled_update_at = ? WHERE id = ?`)
+        .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry, cloudTenant.current_version, cloudTenant.available_version, cloudTenant.scheduled_update_at, existing.id);
+      localId = existing.id;
+    } else {
+      const insert = db.prepare(`INSERT INTO tenants (global_id, name, email, password, local_license_type, local_license_expiry, online_license_type, online_license_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry);
+      localId = Number(insert.lastInsertRowid);
+    }
+
+    const isSuperAdmin = cloudTenant.email === SUPER_ADMIN_AUTH_EMAIL || cloudTenant.email === SUPER_ADMIN_LOGIN;
+    const isSeed = ['demo@example.com', 'admin@example.com'].includes(cloudTenant.email);
+
+    // Seed the minimum a POS needs (Walk-in customer, Admin user, default currency) the first
+    // time a real business appears on this machine — registration now happens in the cloud
+    // (edge function) and no longer seeds these locally.
+    if (!isSuperAdmin && !isSeed) {
+      const userCount = db.prepare("SELECT COUNT(*) as c FROM users WHERE tenant_id = ?").get(localId) as any;
+      if (userCount.c === 0) {
+        db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, ?, ?)").run(localId, "Walk-in Customer", "customer");
+        db.prepare("INSERT INTO users (tenant_id, name, role) VALUES (?, ?, ?)").run(localId, "Admin", "admin");
+        db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(localId, "USD", "$", 1, 1);
+      }
+    }
+
+    // Register the authenticated session so sync + admin endpoints can act as this tenant.
+    await setActiveSession(localId, cloudTenant.global_id, cloudTenant.email, cloudSession);
+    req.session.tenantId = localId;
+    req.session.tenantName = cloudTenant.name;
+    req.session.sbRefresh = cloudSession.refresh_token;
+    req.session.sbGlobalId = cloudTenant.global_id;
+    req.session.sbEmail = cloudTenant.email;
+
+    // Pull this tenant's cloud data down (no-op for super-admin/seed accounts).
+    try { await forceInitialSync(); } catch (e) { console.error('Initial sync error:', e); }
+
+    const tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(localId) as any;
+    return { ok: true, status: 200, error: null, tenant };
+  }
+
+  // 2. Offline fallback: local bcrypt check (only works for a tenant already mirrored locally).
+  const localTenant = db.prepare("SELECT * FROM tenants WHERE email = ?").get(email) as any;
+  if (localTenant && await bcrypt.compare(password, localTenant.password)) {
+    req.session.tenantId = localTenant.id;
+    req.session.tenantName = localTenant.name;
+    return { ok: true, status: 200, error: null, tenant: localTenant };
+  }
+
+  return { ok: false, status: 401, error: 'Invalid email or password', tenant: null };
+}
 
 export function setupRoutes(app: any, wss: any, broadcast: Function, authenticate: any) {
   // API Routes
@@ -12,115 +117,48 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/auth/register", async (req, res) => {
     const { name, email, password } = req.body;
     try {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      
-      // We must generate a UUID for global_id locally since Supabase might require it.
-      // Node's `crypto` is a Web Crypto global (no import needed) — `require()` isn't
-      // available in this ESM context under tsx, so it must not be used here.
-      const newGlobalId = crypto.randomUUID();
+      // Account creation needs the service-role key, which must never ship in this app — so it
+      // runs in the trusted `register-tenant` Supabase Edge Function. We call it with the public
+      // anon key; the function creates the Auth user + cloud tenant row (license inactive).
+      const { data: fnData, error: fnError } = await anonSupabase.functions.invoke('register-tenant', {
+        body: { name, email, password },
+      });
 
-      // 1. Insert directly to Supabase first
-      const { data: cloudTenant, error: cloudError } = await supabase
-        .from('tenants')
-        .insert([{ 
-          global_id: newGlobalId,
-          name, 
-          email, 
-          password: hashedPassword,
-          local_license_type: 'year' // Use 'year' default; null expiry will keep it inactive
-        }])
-        .select()
-        .single();
-        
-      if (cloudError) {
-        throw new Error(cloudError.message);
+      if (fnError) {
+        let msg = 'Registration failed. Please try again.';
+        try {
+          const ctx = (fnError as any).context;
+          if (ctx && typeof ctx.json === 'function') {
+            const j = await ctx.json();
+            if (j?.error) msg = j.error;
+          }
+        } catch { /* keep default message */ }
+        return res.status(400).json({ error: msg });
+      }
+      if (!fnData || !fnData.success) {
+        return res.status(400).json({ error: fnData?.error || 'Registration failed. Please try again.' });
       }
 
-      // 1b. Create a matching Supabase Auth user, keyed to the same global_id, so
-      // Row Level Security (`auth.uid() = tenant_id`) resolves correctly for this tenant.
-      // Reuses the bcrypt hash already computed above — plaintext never makes a second trip.
-      // Best-effort: a failure here (or Supabase Auth being briefly unreachable) must not
-      // block local registration — scripts/backfill-supabase-auth.ts can fix it up later.
-      try {
-        const { error: authError } = await supabase.auth.admin.createUser({
-          id: newGlobalId,
-          email,
-          password_hash: hashedPassword,
-          email_confirm: true,
-        });
-        if (authError) {
-          console.error(`Failed to create Supabase Auth user for new tenant ${email}:`, authError.message);
-        }
-      } catch (authErr: any) {
-        console.error(`Failed to create Supabase Auth user for new tenant ${email}:`, authErr.message);
+      // Account exists in the cloud now — log in to establish the session and seed local data.
+      const result = await establishLogin(email, password, req);
+      if (!result.ok) {
+        return res.status(200).json({ success: true, needsLogin: true, name });
       }
-
-      // 2. Insert locally using the cloud ID
-      const result = db.prepare("INSERT INTO tenants (global_id, name, email, password, local_license_type) VALUES (?, ?, ?, ?, ?)").run(cloudTenant.global_id, name, email, hashedPassword, 'year');
-      const tenantId = result.lastInsertRowid;
-
-      // Seed basic data for new tenant
-      db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, ?, ?)").run(tenantId, "Walk-in Customer", "customer");
-      db.prepare("INSERT INTO users (tenant_id, name, role) VALUES (?, ?, ?)").run(tenantId, "Admin", "admin");
-      db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(tenantId, "USD", "$", 1, 1);
-
-      req.session.tenantId = tenantId;
-      req.session.tenantName = name;
-      
-      // We will add a force push function to sync.ts shortly or just rely on the interval.
-      // Actually, since we need it up immediately for the super admin:
-      const { forcePushToCloud } = await import('./sync.js');
-      if (forcePushToCloud) {
-        forcePushToCloud().catch(console.error);
-      }
-
-      res.json({ success: true, tenantId, name });
+      res.json({ success: true, tenantId: result.tenant.id, name: result.tenant.name });
     } catch (error: any) {
       console.error("Register Error:", error);
-      res.status(400).json({ error: "Email already registered or invalid data" });
+      res.status(400).json({ error: error.message || "Registration failed" });
     }
   });
 
   app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body;
-    
     try {
-      // 1. Try Supabase first
-      const { data: cloudTenant, error } = await supabase
-        .from('tenants')
-        .select('*')
-        .eq('email', email)
-        .single();
-
-      let tenant = null;
-
-      if (cloudTenant && await bcrypt.compare(password, cloudTenant.password)) {
-        // Cloud auth successful. Upsert into local DB.
-        const existing = db.prepare("SELECT id FROM tenants WHERE global_id = ? OR email = ?").get(cloudTenant.global_id, cloudTenant.email) as any;
-        if (existing) {
-          db.prepare(`UPDATE tenants SET global_id = ?, name = ?, email = ?, password = ?, local_license_type = ?, local_license_expiry = ?, online_license_type = ?, online_license_expiry = ? WHERE id = ?`)
-            .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry, existing.id);
-          tenant = { ...cloudTenant, id: existing.id };
-        } else {
-          const insert = db.prepare(`INSERT INTO tenants (global_id, name, email, password, local_license_type, local_license_expiry, online_license_type, online_license_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry);
-          tenant = { ...cloudTenant, id: insert.lastInsertRowid };
-        }
-        
-        // Force an initial sync to pull data
-        if (tenant.email !== 'hasbach') {
-          await forceInitialSync();
-        }
-      } else {
-        // 2. Fallback to local DB if cloud fails (offline mode)
-        tenant = db.prepare("SELECT * FROM tenants WHERE email = ?").get(email) as any;
-        if (!tenant || !(await bcrypt.compare(password, tenant.password))) {
-          return res.status(401).json({ error: "Invalid email or password" });
-        }
+      const result = await establishLogin(email, password, req);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.error });
       }
-
-      req.session.tenantId = tenant.id;
-      req.session.tenantName = tenant.name;
+      const tenant = result.tenant;
       res.json({
         success: true,
         tenantId: tenant.id,
@@ -135,44 +173,76 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         scheduled_update_at: tenant.scheduled_update_at
       });
     } catch (err) {
-       console.error("Login Error:", err);
-       res.status(500).json({ error: "Internal server error during login" });
+      console.error("Login Error:", err);
+      res.status(500).json({ error: "Internal server error during login" });
     }
   });
 
   app.post("/api/auth/logout", (req, res) => {
+    clearActiveSession();
     req.session.destroy(() => {
       res.json({ success: true });
     });
   });
 
-  app.get("/api/auth/me", (req, res) => {
-    if (req.session.tenantId) {
-      const tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(req.session.tenantId) as any;
-      res.json({
-        tenantId: req.session.tenantId,
-        name: req.session.tenantName,
-        email: tenant.email,
-        local_license_type: tenant.local_license_type,
-        local_license_expiry: tenant.local_license_expiry,
-        online_license_type: tenant.online_license_type,
-        online_license_expiry: tenant.online_license_expiry,
-        current_version: tenant.current_version,
-        available_version: tenant.available_version,
-        scheduled_update_at: tenant.scheduled_update_at
-      });
-    } else {
-      res.status(401).json({ error: "Not logged in" });
+  app.get("/api/auth/me", async (req: any, res) => {
+    if (!req.session.tenantId) {
+      return res.status(401).json({ error: "Not logged in" });
     }
+    const tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(req.session.tenantId) as any;
+    if (!tenant) {
+      return res.status(401).json({ error: "Not logged in" });
+    }
+
+    // After an app restart the Express cookie still says "logged in", but the in-memory cloud
+    // session is gone. Rehydrate it from the stored refresh token so sync + admin keep working.
+    if (!getActiveSession() && req.session.sbRefresh && req.session.sbGlobalId) {
+      const ok = await rehydrateActiveSession(
+        req.session.tenantId,
+        req.session.sbGlobalId,
+        req.session.sbEmail || tenant.email,
+        req.session.sbRefresh
+      );
+      if (ok) {
+        const s = getActiveSession();
+        if (s) req.session.sbRefresh = s.refreshToken;
+        forceInitialSync().catch(() => {});
+      }
+    }
+
+    res.json({
+      tenantId: req.session.tenantId,
+      name: req.session.tenantName,
+      email: tenant.email,
+      local_license_type: tenant.local_license_type,
+      local_license_expiry: tenant.local_license_expiry,
+      online_license_type: tenant.online_license_type,
+      online_license_expiry: tenant.online_license_expiry,
+      current_version: tenant.current_version,
+      available_version: tenant.available_version,
+      scheduled_update_at: tenant.scheduled_update_at
+    });
   });
 
-  app.get("/api/admin/tenants", authenticate, (req, res) => {
+  // Super-admin: list ALL tenants from the cloud (not just those mirrored locally), scoped by
+  // the "Super admin read all tenants" RLS policy under the active hasbach session.
+  app.get("/api/admin/tenants", authenticate, async (req: any, res) => {
     const currentTenant = db.prepare("SELECT email FROM tenants WHERE id = ?").get(req.session.tenantId) as any;
-    if (currentTenant.email !== 'hasbach') {
+    if (!currentTenant || currentTenant.email !== 'hasbach') {
       return res.status(403).json({ error: "Forbidden" });
     }
-    const tenants = db.prepare("SELECT id, name, email, local_license_type, local_license_expiry, online_license_type, online_license_expiry, created_at FROM tenants").all();
-    res.json(tenants);
+    const session = getActiveSession();
+    if (!session) {
+      return res.status(503).json({ error: "Cloud session unavailable. Please log out and log back in." });
+    }
+    const { data, error } = await session.client
+      .from('tenants')
+      .select('global_id, name, email, local_license_type, local_license_expiry, online_license_type, online_license_expiry, created_at')
+      .order('created_at', { ascending: false });
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data);
   });
 
   // Verify User PIN
@@ -196,23 +266,37 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     res.json({ success: true, user: { id: user.id, name: user.name, role: user.role } });
   });
 
-  app.post("/api/admin/tenants/:id/license", authenticate, (req, res) => {
+  // Super-admin: update any tenant's license in the cloud, keyed by the tenant's global_id.
+  // Goes through the admin_update_tenant_license RPC under the active hasbach session (which
+  // re-checks super-admin server-side and only ever touches the four license columns).
+  app.post("/api/admin/tenants/:id/license", authenticate, async (req: any, res) => {
     const currentTenant = db.prepare("SELECT email FROM tenants WHERE id = ?").get(req.session.tenantId) as any;
-    if (currentTenant.email !== 'hasbach') {
+    if (!currentTenant || currentTenant.email !== 'hasbach') {
       return res.status(403).json({ error: "Forbidden" });
     }
-    const { id } = req.params;
+    const session = getActiveSession();
+    if (!session) {
+      return res.status(503).json({ error: "Cloud session unavailable. Please log out and log back in." });
+    }
+    const { id } = req.params; // tenant global_id (UUID)
     const { local_license_type, local_license_expiry, online_license_type, online_license_expiry } = req.body;
 
-    db.prepare(`
-    UPDATE tenants 
-    SET local_license_type = ?, 
-        local_license_expiry = ?, 
-        online_license_type = ?, 
-        online_license_expiry = ?,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(local_license_type, local_license_expiry, online_license_type, online_license_expiry, id);
+    const { error } = await session.client.rpc('admin_update_tenant_license', {
+      p_tenant_id: id,
+      p_local_license_type: local_license_type,
+      p_local_license_expiry: local_license_expiry || null,
+      p_online_license_type: online_license_type,
+      p_online_license_expiry: online_license_expiry || null,
+    });
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    // Mirror into the local row too, if this tenant happens to exist locally.
+    try {
+      db.prepare(`UPDATE tenants SET local_license_type = ?, local_license_expiry = ?, online_license_type = ?, online_license_expiry = ?, updated_at = CURRENT_TIMESTAMP WHERE global_id = ?`)
+        .run(local_license_type, local_license_expiry || null, online_license_type, online_license_expiry || null, id);
+    } catch { /* local mirror is best-effort */ }
 
     res.json({ success: true });
   });
