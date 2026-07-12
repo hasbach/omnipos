@@ -16,8 +16,8 @@ export default function PaymentModal() {
   const { 
   products, setProducts, cart, setCart, stakeholders, setStakeholders, selectedStakeholder, setSelectedStakeholder, 
   barcodeInput, setBarcodeInput, isProcessing, setIsProcessing, recentTransactions, setRecentTransactions, 
-  selectedCurrency, setSelectedCurrency, showCheckout, setShowCheckout, payments, setPayments, 
-  paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency, 
+  currencies = CURRENCIES, selectedCurrency, setSelectedCurrency, showCheckout, setShowCheckout, payments, setPayments,
+  paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency,
   showAddCustomerModal, setShowAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, 
   setIsPriceChecker, globalDiscount, setGlobalDiscount, lastTransaction, setLastTransaction, searchTerm, 
   setSearchTerm, selectedCategory, setSelectedCategory, suggestions, setSuggestions, currentPage, 
@@ -581,7 +581,7 @@ return (<>
                                 </div>
 
                                 <div className="grid grid-cols-3 gap-2">
-                                  {CURRENCIES.map(c => (
+                                  {currencies.map((c: any) => (
                                     <button
                                       key={c.code}
                                       onClick={() => setPaymentCurrency(c)}
@@ -765,7 +765,7 @@ return (<>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 mt-2">
-                  {CURRENCIES.map((c: any) => (
+                  {currencies.map((c: any) => (
                     <button
                       key={c.code}
                       onClick={() => setPaymentCurrency(c)}

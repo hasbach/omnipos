@@ -4,7 +4,10 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import App from './App.tsx';
 import Dashboard from './Dashboard.tsx';
 import PriceChecker from './PriceChecker.tsx';
+import { disableNumberInputScroll } from './lib/disableNumberInputScroll';
 import './index.css';
+
+disableNumberInputScroll();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

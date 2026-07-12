@@ -20,6 +20,11 @@ const [products, setProducts] = useState<Product[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
+  // Currencies configured by this tenant in Settings (with symbol/rate/is_default). Starts as the
+  // built-in fallback and is replaced once /api/currencies loads. Rates stay relative to USD (the
+  // internal accounting base), so all the totalUSD math below is unchanged.
+  const [currencies, setCurrencies] = useState<any[]>(CURRENCIES);
+  const currencyInitRef = useRef(false);
   const [selectedCurrency, setSelectedCurrency] = useState(CURRENCIES[2]); // Default to LBP
   const [showCheckout, setShowCheckout] = useState(false);
   const [payments, setPayments] = useState<any[]>([]);
@@ -107,6 +112,7 @@ const [products, setProducts] = useState<Product[]>([]);
             break;
           case 'SETTINGS_UPDATED':
             fetchSettings();
+            fetchCurrencies();
             break;
           case 'UPDATE_AVAILABLE':
             setUpdateVersion(data.version);
@@ -247,6 +253,29 @@ const [products, setProducts] = useState<Product[]>([]);
       .catch(err => console.error('Settings fetch error:', err));
   }, []);
 
+  // Load this tenant's configured currencies and, on first load, default the display + payment
+  // currency to the one marked default in Settings (e.g. LBP). Falls back to USD, then the first
+  // entry, if none is flagged. Subsequent refetches (Settings changes) refresh the list/rates but
+  // don't yank the currency out from under an in-progress sale.
+  const fetchCurrencies = useCallback(() => {
+    fetch('/api/currencies')
+      .then(res => (res.ok ? res.json() : null))
+      .then((rows: any[] | null) => {
+        if (!rows || rows.length === 0) return;
+        const list = rows.map(c => ({ code: c.code, symbol: c.symbol, rate: c.rate, is_default: c.is_default }));
+        setCurrencies(list);
+        if (!currencyInitRef.current) {
+          currencyInitRef.current = true;
+          const def = list.find(c => c.is_default) || list.find(c => c.code === 'USD') || list[0];
+          if (def) {
+            setSelectedCurrency(def);
+            setPaymentCurrency(def);
+          }
+        }
+      })
+      .catch(err => console.error('Currencies fetch error:', err));
+  }, []);
+
 
 
   const fetchDailyHistory = useCallback(async () => {
@@ -365,8 +394,9 @@ const [products, setProducts] = useState<Product[]>([]);
     if (tenant) {
       fetchData();
       fetchSettings();
+      fetchCurrencies();
     }
-  }, [tenant, fetchData, fetchSettings]);
+  }, [tenant, fetchData, fetchSettings, fetchCurrencies]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -425,37 +455,66 @@ const [products, setProducts] = useState<Product[]>([]);
     }));
   };
 
-  const calculateItemTotal = (item: CartItem) => {
-    let baseTotal = item.price * item.quantity;
-    
-    // Bulk pricing logic
+  // --- Currency-aware pricing --------------------------------------------------------------
+  // A product can carry a directly-entered price per currency (price_lbp / package_price_lbp).
+  // When the active (selected) currency has its own entered price we use THAT as authoritative
+  // rather than converting the USD price by the exchange rate — so a product priced at 300,000 LL
+  // shows and charges 300,000, not a rounded conversion. USD remains the stored accounting base
+  // and is DERIVED from the active-currency total, so the receipt, payment amount and change all
+  // agree with what the cashier sees.
+  const activeCode = selectedCurrency?.code || 'USD';
+  const activeRate = selectedCurrency?.rate || 1;
+  // The product model stores exactly two prices: the USD base (`price`) and one local-currency
+  // price (`price_lbp`). So any non-USD currency IS the local currency and maps to price_lbp —
+  // regardless of the code the merchant chose for it (LBP, LB, LL, …). Match on "not USD" rather
+  // than a hard-coded 'LBP', which is what made a currency coded "LB" fall back to conversion.
+  const usesLocalPrice = (code: string) => code !== 'USD';
+  const localCurrency = currencies.find((c: any) => c.code !== 'USD');
+  const localCode = localCurrency?.code || 'LBP';
+  const lbpRate = localCurrency?.rate || activeRate || 89500;
+
+  const hasPrice = (v: any) => v !== null && v !== undefined && v !== '' && !isNaN(Number(v)) && Number(v) > 0;
+  const unitPriceIn = (item: any, code: string, rate: number) =>
+    (usesLocalPrice(code) && hasPrice(item.price_lbp)) ? Number(item.price_lbp) : (Number(item.price) || 0) * rate;
+  const packagePriceIn = (item: any, code: string, rate: number) =>
+    (usesLocalPrice(code) && hasPrice(item.package_price_lbp)) ? Number(item.package_price_lbp) : (Number(item.package_price) || 0) * rate;
+
+  // Item line total in a given currency, honouring bulk pricing and the per-item discount.
+  const itemTotalIn = (item: any, code: string, rate: number) => {
+    let base = unitPriceIn(item, code, rate) * item.quantity;
     if (item.package_price && item.units_per_package && item.units_per_package > 1) {
       const numPackages = Math.floor(item.quantity / item.units_per_package);
       const remainder = item.quantity % item.units_per_package;
-      baseTotal = (numPackages * item.package_price) + (remainder * item.price);
+      base = (numPackages * packagePriceIn(item, code, rate)) + (remainder * unitPriceIn(item, code, rate));
     }
-
-    if (!item.discount || item.discount.value === 0) return baseTotal;
-    
-    if (item.discount.type === 'percentage') {
-      return baseTotal * (1 - item.discount.value / 100);
-    } else {
-      return Math.max(0, baseTotal - item.discount.value);
-    }
+    if (!item.discount || item.discount.value === 0) return base;
+    if (item.discount.type === 'percentage') return base * (1 - item.discount.value / 100);
+    return Math.max(0, base - item.discount.value * rate); // fixed discounts are entered in USD
   };
 
-  const subtotalUSD = cart.reduce((sum, item) => sum + calculateItemTotal(item), 0);
-  const subtotalLBP = Math.round(subtotalUSD * 89500);
-  
-  const totalUSD = (() => {
-    if (globalDiscount.value === 0) return subtotalUSD;
-    if (globalDiscount.type === 'percentage') {
-      return subtotalUSD * (1 - globalDiscount.value / 100);
-    } else {
-      return Math.max(0, subtotalUSD - globalDiscount.value);
-    }
-  })();
-  const totalLBP = Math.round(totalUSD * 89500);
+  const applyGlobalDiscount = (subtotal: number, rate: number) => {
+    if (globalDiscount.value === 0) return subtotal;
+    if (globalDiscount.type === 'percentage') return subtotal * (1 - globalDiscount.value / 100);
+    return Math.max(0, subtotal - globalDiscount.value * rate);
+  };
+
+  // USD line total (accounting base), derived from the active-currency price so what we store
+  // matches what we charge.
+  const calculateItemTotal = (item: CartItem) => itemTotalIn(item as any, activeCode, activeRate) / activeRate;
+  // Local-currency line total straight from the entered price_lbp (for the green "LL" line).
+  const calculateItemTotalLBP = (item: CartItem) => itemTotalIn(item as any, localCode, lbpRate);
+
+  const subtotalActive = cart.reduce((sum, item) => sum + itemTotalIn(item as any, activeCode, activeRate), 0);
+  const totalActive = applyGlobalDiscount(subtotalActive, activeRate);
+
+  const subtotalUSD = subtotalActive / activeRate;
+  const totalUSD = totalActive / activeRate;
+
+  // The secondary "LL" figures always sum the entered LBP prices (matching the per-item LBP lines),
+  // so they stay consistent whether the active currency is LBP or USD.
+  const subtotalLBPraw = cart.reduce((sum, item) => sum + itemTotalIn(item as any, localCode, lbpRate), 0);
+  const subtotalLBP = Math.round(subtotalLBPraw);
+  const totalLBP = Math.round(applyGlobalDiscount(subtotalLBPraw, lbpRate));
 
   useEffect(() => {
     if (showCheckout && !lastTransaction && cart.length > 0) {
@@ -735,6 +794,7 @@ const [products, setProducts] = useState<Product[]>([]);
     setIsProcessing,
     recentTransactions,
     setRecentTransactions,
+    currencies,
     selectedCurrency,
     setSelectedCurrency,
     showCheckout,
@@ -815,6 +875,7 @@ const [products, setProducts] = useState<Product[]>([]);
     updateQuantity,
     applyItemDiscount,
     calculateItemTotal,
+    calculateItemTotalLBP,
     totalUSD,
     filteredProducts,
     printReceipt,

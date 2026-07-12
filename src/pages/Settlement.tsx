@@ -183,13 +183,19 @@ export default function Settlement() {
         body: JSON.stringify(report)
       });
       if (res.ok) {
-        // Also trigger the transaction archival/reset
-        await fetch('/api/tenant/settlement', { method: 'POST' });
-        
+        // Also trigger the transaction archival/reset (local + cloud purge)
+        const settleRes = await fetch('/api/tenant/settlement', { method: 'POST' });
+        const settleData = settleRes.ok ? await settleRes.json().catch(() => null) : null;
+
         setActualBalances(CURRENCIES.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {}));
         setNotes('');
         setShowAdminConfirm(false);
         fetchData();
+
+        if (settleData && settleData.cloudPurged === false) {
+          alert(settleData.warning || 'Settlement completed locally, but the cloud copy could not be cleared. Reconnect to the internet and run the settlement again, otherwise the settled sales may reappear.');
+        }
+
         if (confirm('Settlement saved. All data has been archived and order numbering reset. Would you like to print the X-Report?')) {
           printXReport(report, 'END OF DAY');
         }

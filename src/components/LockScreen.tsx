@@ -18,10 +18,10 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
   const [loading, setLoading] = useState(false);
 
   const handleNumber = (num: string) => {
-    if (pin.length < 4) {
-      setPin(prev => prev + num);
-      setError('');
-    }
+    // Functional update (with the length guard inside) so this stays correct when called from
+    // the global keydown listener below, whose closure would otherwise capture a stale `pin`.
+    setPin(prev => (prev.length < 4 ? prev + num : prev));
+    setError('');
   };
 
   const handleDelete = () => {
@@ -64,6 +64,27 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
       handleUnlock();
     }
   }, [pin]);
+
+  // Physical-keyboard entry: once a user is selected, digits type the PIN, Backspace deletes,
+  // and Escape goes back to the user list — so the PIN can be entered without the mouse.
+  React.useEffect(() => {
+    if (!selectedUser || loading) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        handleNumber(e.key);
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        handleDelete();
+      } else if (e.key === 'Escape') {
+        setSelectedUser(null);
+        setPin('');
+        setError('');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedUser, loading]);
 
   return (
     <div className="fixed inset-0 z-[100] bg-app-bg flex flex-col font-sans">

@@ -19,6 +19,47 @@ import { sendToPrinter } from "./printing/transport.js";
 const SUPER_ADMIN_LOGIN = 'hasbach';
 const SUPER_ADMIN_AUTH_EMAIL = 'hsalloum60+superadmin@gmail.com';
 
+// After an End-of-Day settlement clears the tenant's transactional data locally, the same rows
+// must be removed from the cloud too. Otherwise the sync engine's next pull re-inserts them
+// (the local pull cursor resets once the local rows are gone), and the "settled" sales reappear
+// in history, daily sales and the Live Monitor. Runs as the logged-in tenant, so RLS scopes
+// every delete to their own rows. No-ops (safely) when offline or for non-cloud accounts.
+async function purgeCloudTransactionalData(): Promise<void> {
+  const session = getActiveSession();
+  if (!session || !session.globalId) return;
+  const client = session.client;
+  const tenantGlobalId = session.globalId;
+
+  const chunk = <T,>(arr: T[], size: number): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
+
+  // Use the cloud as the source of truth for what to remove, so children (which have no
+  // ON DELETE CASCADE in the cloud schema) are always deleted before their transactions.
+  const { data: txRows, error } = await client
+    .from('transactions')
+    .select('global_id')
+    .eq('tenant_id', tenantGlobalId);
+  if (error) throw error;
+
+  const txIds = (txRows || []).map((r: any) => r.global_id).filter(Boolean);
+  for (const ids of chunk(txIds, 100)) {
+    const { error: pErr } = await client.from('payments').delete().in('transaction_id', ids);
+    if (pErr) throw pErr;
+    const { error: iErr } = await client.from('transaction_items').delete().in('transaction_id', ids);
+    if (iErr) throw iErr;
+  }
+
+  const { error: tErr } = await client.from('transactions').delete().eq('tenant_id', tenantGlobalId);
+  if (tErr) throw tErr;
+  const { error: cErr } = await client.from('cash_flow').delete().eq('tenant_id', tenantGlobalId);
+  if (cErr) throw cErr;
+  const { error: sErr } = await client.from('cashier_shifts').delete().eq('tenant_id', tenantGlobalId);
+  if (sErr) throw sErr;
+}
+
 // Shared login routine used by both /api/auth/login and auto-login after registration.
 // Tries real Supabase Auth first (so cloud sync + RLS work); falls back to the local bcrypt
 // check when the cloud is unreachable (offline mode) so the local POS keeps working.
@@ -338,7 +379,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     res.json({ success: true });
   });
 
-  app.post("/api/tenant/settlement", authenticate, (req, res) => {
+  app.post("/api/tenant/settlement", authenticate, async (req: any, res) => {
     const tenantId = req.session.tenantId;
 
     const settleData = db.transaction(() => {
@@ -384,17 +425,48 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // Clear manual cash movements so everything resets to zero
       db.prepare("DELETE FROM cash_flow WHERE tenant_id = ?").run(tenantId);
 
-      // Clear daily reports so opening balance resets to zero
-      db.prepare("DELETE FROM daily_reports WHERE tenant_id = ?").run(tenantId);
+      // NOTE: daily_reports are intentionally KEPT — they are the Settlement History shown on
+      // the Settlement page. The just-created report (dated today) is excluded from the opening
+      // balance by /api/cash-flow/summary, so today still zeroes out while the record persists.
 
       // Clear cashier shifts as the day is closed
       db.prepare("DELETE FROM cashier_shifts WHERE tenant_id = ?").run(tenantId);
     });
 
     try {
+      // Clear the cloud FIRST, then do the local reset. The local reset runs synchronously with
+      // no await after it, so no concurrent sync-pull can slip in between and re-insert the rows
+      // we just removed. If the cloud purge fails (e.g. offline) we still settle locally and warn
+      // the operator — the settled sales may resync once the connection returns.
+      let cloudPurged = true;
+      try {
+        await purgeCloudTransactionalData();
+      } catch (cloudErr: any) {
+        cloudPurged = false;
+        console.error('❌ [SETTLEMENT] Cloud purge failed:', cloudErr?.message || cloudErr);
+      }
+
       settleData();
-      logAction(tenantId, 1, 'End of Day Settlement', 'Archived transactions and reset counters');
-      res.json({ success: true });
+
+      logAction(
+        tenantId,
+        1,
+        'End of Day Settlement',
+        cloudPurged
+          ? 'Archived transactions and reset counters (local + cloud)'
+          : 'Local reset done, but CLOUD purge failed — sales may resync. Check connection.'
+      );
+      broadcast({ type: 'TRANSACTIONS_UPDATED' }, tenantId);
+      broadcast({ type: 'CASH_FLOW_UPDATED' }, tenantId);
+
+      if (!cloudPurged) {
+        return res.status(207).json({
+          success: true,
+          cloudPurged: false,
+          warning: 'Local settlement complete, but the cloud copy could not be cleared. Reconnect and settle again, or the settled sales may reappear.'
+        });
+      }
+      res.json({ success: true, cloudPurged: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1339,8 +1411,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const today = new Date().toISOString().split('T')[0];
 
-    // Get last closing balance
-    const lastReport = db.prepare("SELECT actual_balance FROM daily_reports WHERE tenant_id = ? ORDER BY date DESC LIMIT 1").get(tenantId) as any;
+    // Opening balance carries over the previous day's counted cash. Reports dated today are
+    // excluded so that right after an End-of-Day settlement (which files a report for today)
+    // the day zeroes out instead of re-showing the just-settled cash as the opening float.
+    const lastReport = db.prepare("SELECT actual_balance FROM daily_reports WHERE tenant_id = ? AND date < ? ORDER BY date DESC LIMIT 1").get(tenantId, today) as any;
     const openingBalance = lastReport ? lastReport.actual_balance : 0;
 
     // Get cash sales today

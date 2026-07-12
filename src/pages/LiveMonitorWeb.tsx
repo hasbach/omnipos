@@ -4,6 +4,20 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Tenant } from '../types';
 
+// Normalize a timestamp coming from Supabase/Postgres into a value `new Date()` parses as UTC.
+// PostgREST returns timestamptz as e.g. "2026-07-13T07:00:00+00:00" (offset, no "Z"), while the
+// realtime payload can be the raw "2026-07-13 07:00:00" (space, no timezone at all). Blindly
+// appending "Z" to the first form produced "...+00:00Z" — an Invalid Date — which silently
+// dropped every row from the "today" filter and showed Sales Today as $0.
+function normalizeCloudTimestamp(raw: string | null | undefined): string {
+  if (!raw) return raw as string;
+  const s = String(raw);
+  // Already carries timezone info ("Z" or a numeric offset like +00:00 / -05:00): keep as-is.
+  if (s.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(s)) return s.replace(' ', 'T');
+  // No timezone: the value is stored as UTC, so mark it as such.
+  return `${s.replace(' ', 'T')}Z`;
+}
+
 export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
   const [activities, setActivities] = useState<any[]>([]);
   const [stats, setStats] = useState({
@@ -36,8 +50,7 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
       if (data) {
         const formatted = data.map((tx: any) => ({
           ...tx,
-          // Append Z to force UTC parsing since SQLite/Supabase stored it as UTC without timezone
-          created_at: tx.created_at.includes('Z') ? tx.created_at : `${tx.created_at}Z`,
+          created_at: normalizeCloudTimestamp(tx.created_at),
           user_name: tx.users?.name || 'Unknown',
           stakeholder_name: tx.stakeholders?.name
         }));
@@ -73,7 +86,7 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
 
         const formattedTx = {
           ...newTx,
-          created_at: newTx.created_at && newTx.created_at.includes('Z') ? newTx.created_at : `${newTx.created_at}Z`,
+          created_at: normalizeCloudTimestamp(newTx.created_at),
           user_name: user?.name || 'Unknown',
           stakeholder_name: stakeholder?.name
         };

@@ -16,8 +16,8 @@ export default function CartPanel() {
   const { 
   products, setProducts, cart, setCart, stakeholders, setStakeholders, selectedStakeholder, setSelectedStakeholder, 
   barcodeInput, setBarcodeInput, isProcessing, setIsProcessing, recentTransactions, setRecentTransactions, 
-  selectedCurrency, setSelectedCurrency, showCheckout, setShowCheckout, payments, setPayments, 
-  paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency, 
+  currencies = CURRENCIES, selectedCurrency, setSelectedCurrency, showCheckout, setShowCheckout, payments, setPayments,
+  paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency,
   showAddCustomerModal, setShowAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, 
   setIsPriceChecker, globalDiscount, setGlobalDiscount, lastTransaction, setLastTransaction, searchTerm, 
   setSearchTerm, selectedCategory, setSelectedCategory, suggestions, setSuggestions, currentPage, 
@@ -28,7 +28,7 @@ export default function CartPanel() {
   tenant, showUpdateModal, setShowUpdateModal, updateVersion, setUpdateVersion, isUpdating, setIsUpdating, 
   users, currentUser, setCurrentUser, handleLogout, handleInstallUpdate, scheduleForm, setScheduleForm, handleScheduleUpdate, 
   fetchSettings, fetchDailyHistory, handleRefund, fetchData, addToCart, handleBarcodeSubmit, 
-  handleSuggestionClick, updateQuantity, applyItemDiscount, calculateItemTotal, handleCreateCustomer, 
+  handleSuggestionClick, updateQuantity, applyItemDiscount, calculateItemTotal, calculateItemTotalLBP, handleCreateCustomer,
   handleCheckout, handleQuickCash, printReceipt, subtotalUSD, subtotalLBP, totalUSD, totalLBP, 
   totalSelected, categories, filteredProducts, totalPages, paginatedProducts, t, socketRef, 
   barcodeRef, customerDropdownRef, localExpired 
@@ -158,7 +158,7 @@ return (
                       </div>
                       <div className="w-24 text-right font-mono font-bold">
                         <div>${calculateItemTotal(item).toFixed(2)}</div>
-                        <div className="text-[10px] text-emerald-600">{Math.round(calculateItemTotal(item) * 89500).toLocaleString()} LL</div>
+                        <div className="text-[10px] text-emerald-600">{Math.round(calculateItemTotalLBP(item)).toLocaleString()} LL</div>
                       </div>
                       <button 
                         onClick={() => updateQuantity(item.id, -item.quantity)}
@@ -212,7 +212,7 @@ return (
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-xs opacity-50">Display Currency:</span>
                   <div className="flex gap-1">
-                    {CURRENCIES.map(c => (
+                    {currencies.map((c: any) => (
                       <button
                         key={c.code}
                         onClick={() => setSelectedCurrency(c)}
