@@ -98,7 +98,70 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
   const [isScanning, setIsScanning] = useState(false);
   const [showManualAddress, setShowManualAddress] = useState(false);
 
+  // Manual "Check for Updates" (Electron auto-updater) state.
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'latest' | 'error'>('idle');
+  const [updateInfo, setUpdateInfo] = useState<{ version?: string; percent?: number; message?: string }>({});
+
   const t = translations[language];
+
+  // Reflect auto-updater events (broadcast from the main process) as inline status here.
+  useEffect(() => {
+    if (!window.electronAPI?.onUpdateStatus) return;
+    const cleanup = window.electronAPI.onUpdateStatus((data: any) => {
+      switch (data.event) {
+        case 'checking':
+          setUpdateState('checking'); setUpdateInfo({}); break;
+        case 'available':
+          setUpdateState('downloading'); setUpdateInfo({ version: data.version, percent: 0 });
+          // autoDownload is off in the main process — kick off the download ourselves.
+          window.electronAPI?.downloadUpdate?.();
+          break;
+        case 'progress':
+          setUpdateState('downloading'); setUpdateInfo(prev => ({ ...prev, percent: data.percent })); break;
+        case 'downloaded':
+          setUpdateState('downloaded'); setUpdateInfo({ version: data.version }); break;
+        case 'not-available':
+          setUpdateState('latest'); setUpdateInfo({ version: data.version }); break;
+        case 'error':
+          setUpdateState('error'); setUpdateInfo({ message: data.message }); break;
+      }
+    });
+    return cleanup;
+  }, []);
+
+  const handleCheckForUpdates = async () => {
+    if (!window.electronAPI?.checkForUpdates) {
+      setUpdateState('error');
+      setUpdateInfo({ message: 'Updates are only available in the installed desktop app.' });
+      return;
+    }
+    setUpdateState('checking');
+    setUpdateInfo({});
+
+    // Safety net: if no status event and no resolution arrive, don't hang on "checking".
+    const timeout = setTimeout(() => {
+      setUpdateState(prev => (prev === 'checking' ? 'error' : prev));
+      setUpdateInfo(prev => (prev.message ? prev : { message: 'No response from the updater. Check your internet connection.' }));
+    }, 20000);
+
+    try {
+      const res: any = await window.electronAPI.checkForUpdates();
+      clearTimeout(timeout);
+      if (res && res.ok === false) {
+        setUpdateState('error');
+        setUpdateInfo({ message: res.error || 'Update check failed.' });
+      } else if (res && res.checked === false) {
+        // Updater skipped the check — the normal case in an unpackaged/dev build.
+        setUpdateState('error');
+        setUpdateInfo({ message: 'Update checks only run in the installed app (dev build detected).' });
+      }
+      // Otherwise the 'available' / 'not-available' status events drive the UI.
+    } catch (e: any) {
+      clearTimeout(timeout);
+      setUpdateState('error');
+      setUpdateInfo({ message: e?.message || 'Update check failed.' });
+    }
+  };
 
   useEffect(() => {
     fetch('/api/auth/me').then(res => res.json()).then(setTenant);
@@ -627,19 +690,50 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
               </div>
             </div>
             
-            <div className="flex justify-between items-center p-4 bg-app-bg rounded-2xl border border-app-border/10">
-              <div className="flex items-center gap-3">
-                <RefreshCw size={18} className="opacity-40" />
-                <span className="text-[10px] font-black uppercase opacity-40">Software Version</span>
+            <div className="p-4 bg-app-bg rounded-2xl border border-app-border/10 space-y-3">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <RefreshCw size={18} className="opacity-40" />
+                  <span className="text-[10px] font-black uppercase opacity-40">Software Version</span>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-black uppercase">v{tenant.current_version}</p>
+                  {tenant.available_version && tenant.available_version !== tenant.current_version && (
+                    <button
+                      onClick={onShowUpdate}
+                      className="text-[8px] font-black uppercase text-emerald-500 hover:underline"
+                    >
+                      Update Available: v{tenant.available_version}
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="text-right">
-                <p className="text-sm font-black uppercase">v{tenant.current_version}</p>
-                {tenant.available_version && tenant.available_version !== tenant.current_version && (
-                  <button 
-                    onClick={onShowUpdate}
-                    className="text-[8px] font-black uppercase text-emerald-500 hover:underline"
+
+              <div className="flex items-center justify-between gap-3 pt-3 border-t border-app-border/10">
+                <span className="text-[10px] font-bold uppercase tracking-widest opacity-50">
+                  {updateState === 'checking' && 'Checking for updates…'}
+                  {updateState === 'downloading' && `Downloading v${updateInfo.version || ''}… ${updateInfo.percent != null ? Math.round(updateInfo.percent) + '%' : ''}`}
+                  {updateState === 'downloaded' && `v${updateInfo.version || ''} ready to install`}
+                  {updateState === 'latest' && "You're on the latest version"}
+                  {updateState === 'error' && <span className="text-rose-500 normal-case">{updateInfo.message || 'Update check failed'}</span>}
+                  {updateState === 'idle' && 'Check for the newest version'}
+                </span>
+
+                {updateState === 'downloaded' ? (
+                  <button
+                    onClick={() => window.electronAPI?.installUpdate?.()}
+                    className="px-4 py-2 rounded-xl bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all whitespace-nowrap"
                   >
-                    Update Available: v{tenant.available_version}
+                    Restart & Install
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleCheckForUpdates}
+                    disabled={updateState === 'checking' || updateState === 'downloading'}
+                    className="px-4 py-2 rounded-xl bg-app-ink text-app-bg text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-all disabled:opacity-40 flex items-center gap-2 whitespace-nowrap"
+                  >
+                    <RefreshCw size={12} className={updateState === 'checking' || updateState === 'downloading' ? 'animate-spin' : ''} />
+                    Check for Updates
                   </button>
                 )}
               </div>

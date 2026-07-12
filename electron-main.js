@@ -131,10 +131,14 @@ function launchMain(config) {
   mainWindow.setMenu(null);
 
   // === AUTO-UPDATER SETUP ===
-  // Helper to push status events to the renderer
+  // Helper to push status events to EVERY open window. The Admin Dashboard (and its Settings
+  // page, which now has a manual "Check for Updates" button) runs in a separate window opened
+  // with target="_blank", so sending only to mainWindow would leave that window in the dark.
   const sendStatus = (event, payload = {}) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('updater:status', { event, ...payload });
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('updater:status', { event, ...payload });
+      }
     }
   };
 
@@ -150,8 +154,18 @@ function launchMain(config) {
   autoUpdater.on('update-downloaded', (info) => sendStatus('downloaded', { version: info.version }));
   autoUpdater.on('error', (err) => sendStatus('error', { message: err.message }));
 
-  // IPC: renderer requests check
-  ipcMain.handle('updater:check', () => autoUpdater.checkForUpdates());
+  // IPC: renderer requests check. Return a small SERIALIZABLE summary (the raw UpdateCheckResult
+  // carries a CancellationToken that can't cross IPC) and never reject, so the renderer can always
+  // resolve its "checking" state. `checked:false` means the updater skipped the check — which is
+  // what happens in an unpackaged/dev build (app.isPackaged === false).
+  ipcMain.handle('updater:check', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { ok: true, checked: !!result, version: result?.updateInfo?.version || null };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
   // IPC: renderer approves download
   ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate());
   // IPC: renderer requests quit-and-install
