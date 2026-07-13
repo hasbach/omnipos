@@ -1,5 +1,6 @@
 import { db } from './db.js';
 import { getActiveSession } from './session.js';
+import { recomputeAllBalances } from './balance.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 // Offline-first sync, scoped to the ONE tenant currently logged in (see server/session.ts).
@@ -79,8 +80,10 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
       if (unsyncedRecords.length === 0) continue;
 
       // Map local integer 'id' -> 'local_id', strip 'last_synced_at', translate FK ids -> UUIDs.
+      // `balance_baseline` is a local-only column (see server/balance.ts) — never push it to the
+      // cloud, whose stakeholders table doesn't have it (pushing an unknown column errors).
       const payload = unsyncedRecords.map(record => {
-        const { id, last_synced_at, ...rest } = record;
+        const { id, last_synced_at, balance_baseline, ...rest } = record;
         const mapped: any = { ...rest };
         if (id !== undefined) mapped.local_id = id;
         if (fkMap[tableName]) {
@@ -222,6 +225,9 @@ async function runSyncCycle() {
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   await pushToCloud(session.client, session.localId);
   await pullFromCloud(session.client, session.localId, session.globalId);
+  // A pull may have changed transactions/payments without going through the local write paths,
+  // so re-derive balances from the freshly-synced data (see server/balance.ts).
+  recomputeAllBalances(session.localId);
 }
 
 /**
@@ -232,6 +238,7 @@ export async function forceInitialSync() {
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   console.log('⚡ [SYNC] Forcing initial pull for tenant...');
   await pullFromCloud(session.client, session.localId, session.globalId);
+  recomputeAllBalances(session.localId);
   console.log('⚡ [SYNC] Initial pull complete.');
 }
 

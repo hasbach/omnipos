@@ -162,6 +162,12 @@ BEGIN
     INSERT INTO public.payments (transaction_id, amount, method, currency, exchange_rate)
     VALUES (v_transaction_id, v_total, 'cash', 'USD', 1);
   ELSE
+    -- Credit / on account: record a 'credit' payment row (exactly like the POS does) so the
+    -- desktop recognises this as a credit sale instead of defaulting to cash — a credit payment
+    -- never counts as cash received. Then add the total to the customer's outstanding balance.
+    INSERT INTO public.payments (transaction_id, amount, method, currency, exchange_rate)
+    VALUES (v_transaction_id, v_total, 'credit', 'USD', 1);
+
     UPDATE public.stakeholders
       SET balance = balance + v_total
       WHERE global_id = p_stakeholder_id AND tenant_id = v_tenant_id;

@@ -216,6 +216,27 @@ export default function InvoiceManagement() {
       if (!delRes.ok) return alert('Failed to update — could not remove old transaction');
     }
     
+    // Build the payments so the chosen method is always recorded:
+    // - credit: log a 'credit' payment for the full total (like the POS) so it's tagged as a
+    //   credit sale and the whole amount lands on the customer's balance — regardless of Paid.
+    // - cash/card: log the paid amount (if any); any unpaid remainder still goes to the balance.
+    let payments: any[] = [];
+    if (paymentMethod === 'credit') {
+      payments = [{
+        amount: finalTotal,
+        method: 'credit',
+        currency: invoiceCurrency.code,
+        exchange_rate: invoiceCurrency.rate
+      }];
+    } else if (paidAmount > 0) {
+      payments = [{
+        amount: paidAmount,
+        method: paymentMethod,
+        currency: paymentCurrency.code,
+        exchange_rate: paymentCurrency.rate
+      }];
+    }
+
     const transaction = {
       stakeholder_id: selectedStakeholder,
       type: invoiceType,
@@ -231,12 +252,7 @@ export default function InvoiceManagement() {
       exchange_rate: invoiceCurrency.rate,
       discount: globalDiscount,
       tax: globalTax,
-      payments: paidAmount > 0 ? [{
-        amount: paidAmount,
-        method: paymentMethod,
-        currency: paymentCurrency.code,
-        exchange_rate: paymentCurrency.rate
-      }] : []
+      payments
     };
 
     const res = await fetch('/api/transactions', {

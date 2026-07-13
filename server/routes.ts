@@ -1,4 +1,5 @@
 import { db, logAction } from "./db.js";
+import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
 import { forceInitialSync } from "./sync.js";
@@ -58,6 +59,23 @@ async function purgeCloudTransactionalData(): Promise<void> {
   if (cErr) throw cErr;
   const { error: sErr } = await client.from('cashier_shifts').delete().eq('tenant_id', tenantGlobalId);
   if (sErr) throw sErr;
+}
+
+// Delete ONE transaction (and its children) from the cloud. Needed when a synced transaction is
+// deleted or edited (edit = delete + recreate) on the desktop: without this the local delete
+// never reaches Supabase, so the next sync pull re-inserts the original transaction and its
+// balance, silently undoing the change. The stakeholder balance itself rides back to the cloud
+// through the normal push sync (the local balance UPDATE bumps updated_at). No-ops when offline.
+async function purgeCloudTransaction(txGlobalId: string): Promise<void> {
+  const session = getActiveSession();
+  if (!session || !session.globalId || !txGlobalId) return;
+  const client = session.client;
+  const { error: pErr } = await client.from('payments').delete().eq('transaction_id', txGlobalId);
+  if (pErr) throw pErr;
+  const { error: iErr } = await client.from('transaction_items').delete().eq('transaction_id', txGlobalId);
+  if (iErr) throw iErr;
+  const { error: tErr } = await client.from('transactions').delete().eq('global_id', txGlobalId);
+  if (tErr) throw tErr;
 }
 
 // Shared login routine used by both /api/auth/login and auto-login after registration.
@@ -815,7 +833,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     try {
       const tenantId = req.session.tenantId;
       const { name, type, email, phone, balance } = req.body;
-      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, balance) VALUES (?, ?, ?, ?, ?, ?)").run(tenantId, name, type, email, phone, balance);
+      // balance is derived (baseline + tx effects). A brand-new stakeholder has no transactions,
+      // so any starting balance is stored as the baseline.
+      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, balance, balance_baseline) VALUES (?, ?, ?, ?, ?, ?, ?)").run(tenantId, name, type, email, phone, balance || 0, balance || 0);
       logAction(tenantId, 1, 'Stakeholder Created', `Name: ${name}, Type: ${type}`);
       res.json({ id: result.lastInsertRowid });
     } catch (err: any) {
@@ -827,7 +847,14 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.put("/api/stakeholders/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { name, type, email, phone, balance } = req.body;
-    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, balance = ? WHERE id = ? AND tenant_id = ?").run(name, type, email, phone, balance, req.params.id, tenantId);
+    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ? WHERE id = ? AND tenant_id = ?").run(name, type, email, phone, req.params.id, tenantId);
+    // A manually-entered balance is treated as an override: set the baseline so the DERIVED
+    // balance equals what was typed (baseline = entered − transaction effect), then recompute.
+    if (balance !== undefined && balance !== null) {
+      const effect = stakeholderTxEffect(Number(req.params.id), tenantId);
+      db.prepare("UPDATE stakeholders SET balance_baseline = ? WHERE id = ? AND tenant_id = ?").run(Number(balance) - effect, req.params.id, tenantId);
+      recomputeStakeholderBalance(Number(req.params.id), tenantId);
+    }
     logAction(tenantId, 1, 'Stakeholder Updated', `ID: ${req.params.id}, Name: ${name}, Type: ${type}`);
     res.json({ success: true });
   });
@@ -843,11 +870,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const { stakeholder_id, amount, method, currency, exchange_rate } = req.body;
 
     const processDebt = db.transaction(() => {
-      // Adjust balance directly — negative balance means they owe, so ADD payment to move toward zero
-      // e.g. balance = -20, pays 10 → balance = -20 + 10 = -10
-      db.prepare("UPDATE stakeholders SET balance = balance + ? WHERE id = ? AND tenant_id = ?").run(amount, stakeholder_id, tenantId);
-
-      // Create a system transaction ticket to log the payment received
+      // Create a system transaction ticket (0-total 'sale') carrying the payment received. In the
+      // derived-balance model this payment is exactly what moves the balance toward zero, so we
+      // just recompute afterwards instead of nudging the balance directly.
       const result = db.prepare(`
       INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, status)
       VALUES (?, ?, ?, 'sale', 0, ?, ?, 'completed')
@@ -861,6 +886,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       VALUES (?, ?, ?, ?, ?)
     `).run(transactionId, amount, method, currency, exchange_rate);
 
+      recomputeStakeholderBalance(stakeholder_id, tenantId);
       return transactionId;
     });
 
@@ -978,10 +1004,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         }
       }
 
-      const remaining = finalTotal - totalPaid;
-      if (Math.abs(remaining) > 0.01) {
-        const balanceChange = (type === 'sale') ? remaining : -remaining;
-        db.prepare("UPDATE stakeholders SET balance = balance + ? WHERE id = ? AND tenant_id = ?").run(balanceChange, stakeholder_id, tenantId);
+      // Balance is derived, not nudged: recompute it from this stakeholder's transactions +
+      // baseline now that the new transaction and its payments are in place.
+      if (stakeholder_id) {
+        recomputeStakeholderBalance(stakeholder_id, tenantId);
       }
 
       return transactionId;
@@ -1006,7 +1032,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
   });
 
-  app.delete("/api/transactions/:id", authenticate, (req: any, res) => {
+  app.delete("/api/transactions/:id", authenticate, async (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { id } = req.params;
 
@@ -1029,34 +1055,38 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         }
       }
 
-      // Reverse stakeholder balance change
-      if (tx.stakeholder_id) {
-        const payments = db.prepare("SELECT * FROM payments WHERE transaction_id = ?").all(id) as any[];
-        let totalPaid = 0;
-        for (const p of payments) {
-          if (p.method !== 'credit') {
-            totalPaid += (p.amount / (p.exchange_rate || 1));
-          }
-        }
-        const remaining = tx.total_amount - totalPaid;
-        if (Math.abs(remaining) > 0.01) {
-          // Reverse: for sale, remaining was added to balance; for purchase, -remaining was added
-          const reversal = (tx.type === 'sale') ? -remaining : remaining;
-          db.prepare("UPDATE stakeholders SET balance = balance + ? WHERE id = ? AND tenant_id = ?").run(reversal, tx.stakeholder_id, tenantId);
-        }
-      }
-
       db.prepare("DELETE FROM payments WHERE transaction_id = ?").run(id);
       db.prepare("DELETE FROM transaction_items WHERE transaction_id = ?").run(id);
       db.prepare("DELETE FROM transactions WHERE id = ? AND tenant_id = ?").run(id, tenantId);
+
+      // Balance is derived — recompute from the stakeholder's REMAINING transactions.
+      if (tx.stakeholder_id) {
+        recomputeStakeholderBalance(tx.stakeholder_id, tenantId);
+      }
     });
 
     try {
+      // Remove the cloud copy FIRST (if this transaction was ever synced), then delete locally.
+      // Doing it in this order — with no await after the synchronous local delete — means a
+      // concurrent sync pull can't re-insert the row we're removing. Best-effort: if the cloud
+      // call fails (e.g. offline) we still delete locally so the app keeps working; the row may
+      // resync later, which is the same offline limitation the settlement flow has.
+      let cloudDeleted = true;
+      if (tx.global_id) {
+        try {
+          await purgeCloudTransaction(tx.global_id);
+        } catch (cloudErr: any) {
+          cloudDeleted = false;
+          console.error('❌ [DELETE TX] Cloud delete failed:', cloudErr?.message || cloudErr);
+        }
+      }
+
       deleteTx();
-      logAction(tenantId, 1, 'Transaction Deleted', `ID: ${id}, Type: ${tx.type}, Total: ${tx.total_amount}`);
+      logAction(tenantId, 1, 'Transaction Deleted', `ID: ${id}, Type: ${tx.type}, Total: ${tx.total_amount}${cloudDeleted ? '' : ' (LOCAL ONLY — cloud delete failed)'}`);
       broadcast({ type: 'TRANSACTIONS_UPDATED' }, tenantId);
       broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
-      res.json({ success: true });
+      broadcast({ type: 'STAKEHOLDERS_UPDATED' }, tenantId);
+      res.json({ success: true, cloudDeleted });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -1147,9 +1177,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
     transaction.discount = transaction.discount_type ? { type: transaction.discount_type, value: transaction.discount_value } : undefined;
 
-    // Include payments and paid_amount for edit support
+    // Include payments and paid_amount for edit support. Credit ("on account") payments are NOT
+    // real money received, so they don't count toward paid_amount — mirroring how POST computes
+    // the unpaid remainder that goes to the customer's balance.
     const payments = db.prepare("SELECT * FROM payments WHERE transaction_id = ? ORDER BY created_at ASC").all(req.params.id) as any[];
-    const paidAmount = payments.reduce((sum: number, p: any) => sum + (p.amount / (p.exchange_rate || 1)), 0);
+    const paidAmount = payments.reduce((sum: number, p: any) => p.method === 'credit' ? sum : sum + (p.amount / (p.exchange_rate || 1)), 0);
     transaction.payments = payments;
     transaction.paid_amount = paidAmount;
 
@@ -1500,15 +1532,15 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const exRate = exchange_rate || 1;
 
     const balancePayment = db.transaction(() => {
+      // A balance collection/payment isn't tied to a transaction, so it moves the derived balance
+      // toward zero via the stakeholder's BASELINE (negative = owes, so a payment adds toward 0).
       if (direction === 'collect') {
-        // Customer paying their balance → negative balance means they owe, ADD to move toward zero
-        // e.g. balance = -20, pays 10 → balance = -20 + 10 = -10
-        db.prepare("UPDATE stakeholders SET balance = balance + ? WHERE id = ? AND tenant_id = ?").run(amountUSD, stakeholder_id, tenantId);
+        adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD);
         db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, 'in', ?, ?, ?, ?)")
           .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`);
       } else {
-        // Paying a supplier → reduce their outstanding (increase balance), cash goes out
-        db.prepare("UPDATE stakeholders SET balance = balance + ? WHERE id = ? AND tenant_id = ?").run(amountUSD, stakeholder_id, tenantId);
+        // Paying a supplier → reduce their outstanding (move toward zero), cash goes out
+        adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD);
         db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, 'out', ?, ?, ?, ?)")
           .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`);
       }

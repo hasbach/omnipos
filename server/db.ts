@@ -417,6 +417,37 @@ for (const table of allTables) {
   }
 }
 
+// Derived-balance migration: stakeholder.balance becomes balance_baseline + Σ(transaction effects)
+// (see server/balance.ts). This column is intentionally NOT synced to the cloud (see
+// server/sync.ts) — it holds this register's manual balance-payment adjustments going forward.
+// One-time reconciliation: because balances had drifted (incremental += / -= corrupted by edits,
+// deletes and sync), we RECONCILE every balance to its transaction/payment history at migration
+// (baseline = 0, balance = transaction effect). Debt payments made via the POS ("Receive Debt")
+// are stored as transactions, so they're included; only Cash-Flow-Register collections (which
+// aren't tied to a transaction) are not, and would need re-entering.
+const stakeholderCols = db.prepare("PRAGMA table_info(stakeholders)").all() as any[];
+if (!stakeholderCols.some((c: any) => c.name === 'balance_baseline')) {
+  try {
+    db.exec("ALTER TABLE stakeholders ADD COLUMN balance_baseline REAL DEFAULT 0");
+    const sts = db.prepare("SELECT id, tenant_id FROM stakeholders").all() as any[];
+    const paidStmt = db.prepare("SELECT IFNULL(SUM(amount / exchange_rate), 0) as paid FROM payments WHERE transaction_id = ? AND method != 'credit'");
+    const txStmt = db.prepare("SELECT id, type, total_amount FROM transactions WHERE stakeholder_id = ? AND tenant_id = ?");
+    const seed = db.prepare("UPDATE stakeholders SET balance_baseline = 0, balance = ? WHERE id = ?");
+    for (const s of sts) {
+      let effect = 0;
+      for (const t of txStmt.all(s.id, s.tenant_id) as any[]) {
+        const unpaid = (t.total_amount || 0) - ((paidStmt.get(t.id) as any)?.paid || 0);
+        if (t.type === 'sale' || t.type === 'purchase') effect -= unpaid;
+        else if (t.type === 'refund') effect += unpaid;
+      }
+      seed.run(effect, s.id);
+    }
+    console.log(`Reconciled balance for ${sts.length} stakeholders (derived-balance migration).`);
+  } catch (e) {
+    console.error('balance_baseline migration error:', e);
+  }
+}
+
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
 if (tenantCount.count === 0) {
