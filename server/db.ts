@@ -463,9 +463,13 @@ try {
        SET user_id = (SELECT id FROM users u WHERE u.tenant_id = cash_flow.tenant_id ORDER BY (u.role = 'admin') DESC, u.id LIMIT 1)
      WHERE user_id IS NOT NULL
        AND user_id NOT IN (SELECT id FROM users u2 WHERE u2.tenant_id = cash_flow.tenant_id);
+    UPDATE transactions
+       SET stakeholder_id = (SELECT id FROM stakeholders s WHERE s.tenant_id = transactions.tenant_id ORDER BY (s.name = 'Walk-in Customer') DESC, (s.type = 'customer') DESC, s.id LIMIT 1)
+     WHERE stakeholder_id IS NOT NULL
+       AND stakeholder_id NOT IN (SELECT id FROM stakeholders s2 WHERE s2.tenant_id = transactions.tenant_id);
   `);
 } catch (e) {
-  console.error('Cross-tenant user_id repair error:', e);
+  console.error('Cross-tenant reference repair error:', e);
 }
 
 // Seed data if empty

@@ -94,17 +94,31 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
         return mapped;
       });
 
-      const { error } = await client.from(tableName).upsert(payload, { onConflict: 'global_id' });
-      if (error) {
-        console.error(`❌ [SYNC] Failed to push ${tableName}:`, JSON.stringify(error));
-        continue;
-      }
-
       const markSynced = db.prepare(`UPDATE ${tableName} SET last_synced_at = CURRENT_TIMESTAMP WHERE global_id = ?`);
-      const tx = db.transaction((records: any[]) => {
-        for (const record of records) markSynced.run(record.global_id);
-      });
-      tx(unsyncedRecords);
+
+      const { error } = await client.from(tableName).upsert(payload, { onConflict: 'global_id' });
+      if (!error) {
+        const tx = db.transaction((records: any[]) => {
+          for (const record of records) markSynced.run(record.global_id);
+        });
+        tx(unsyncedRecords);
+      } else {
+        // A whole-batch upsert fails if EVEN ONE row is bad (e.g. an FK the cloud rejects),
+        // which would otherwise block every other row indefinitely. Fall back to per-row so the
+        // good rows still sync and the offending row is isolated (and named) in the log.
+        console.error(`❌ [SYNC] Batch push failed for ${tableName}, retrying row-by-row:`, JSON.stringify(error));
+        let pushed = 0;
+        for (let i = 0; i < payload.length; i++) {
+          const { error: rowErr } = await client.from(tableName).upsert(payload[i], { onConflict: 'global_id' });
+          if (rowErr) {
+            console.error(`❌ [SYNC] Skipping ${tableName} global_id=${unsyncedRecords[i].global_id}:`, JSON.stringify(rowErr));
+          } else {
+            markSynced.run(unsyncedRecords[i].global_id);
+            pushed++;
+          }
+        }
+        console.log(`↻ [SYNC] ${tableName}: pushed ${pushed}/${payload.length} rows individually`);
+      }
     } catch (err) {
       console.error(`❌ [SYNC] Error pushing ${tableName}:`, err);
     }

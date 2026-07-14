@@ -33,6 +33,20 @@ function tenantUserId(tenantId: number, requested: any): number | null {
   return first ? first.id : null;
 }
 
+// Same guard for stakeholder_id. The POS defaults the customer to id 1, which for any tenant
+// other than the seed tenant is a FOREIGN tenant's Walk-in — pushing that trips the cloud
+// stakeholders FK and blocks sync. Resolve to this tenant's Walk-in (or first customer), else null.
+function tenantStakeholderId(tenantId: number, requested: any): number | null {
+  if (requested) {
+    const s = db.prepare("SELECT id FROM stakeholders WHERE id = ? AND tenant_id = ?").get(requested, tenantId) as any;
+    if (s) return s.id;
+  }
+  const walkIn = db.prepare(
+    "SELECT id FROM stakeholders WHERE tenant_id = ? ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
+  ).get(tenantId) as any;
+  return walkIn ? walkIn.id : null;
+}
+
 // After an End-of-Day settlement clears the tenant's transactional data locally, the same rows
 // must be removed from the cloud too. Otherwise the sync engine's next pull re-inserts them
 // (the local pull cursor resets once the local rows are gone), and the "settled" sales reappear
@@ -917,9 +931,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/transactions", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { stakeholder_id, user_id, type, items, currency, exchange_rate, payments, discount, tax, terminalId } = req.body;
-    // Always store a user_id that belongs to THIS tenant (never the old hard-coded 1, which is a
-    // seed tenant's user and breaks the cloud users FK, blocking sync).
+    // Always store user_id AND stakeholder_id that belong to THIS tenant (never the old hard-coded
+    // 1 defaults, which point at a seed tenant's rows and break the cloud FKs, blocking sync).
     const resolvedUserId = tenantUserId(tenantId, user_id);
+    const resolvedStakeholderId = tenantStakeholderId(tenantId, stakeholder_id);
 
     const transaction = db.transaction(() => {
       let calculatedTotal = 0;
@@ -961,7 +976,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         tenantId,
-        stakeholder_id,
+        resolvedStakeholderId,
         resolvedUserId,
         type || 'sale',
         finalTotal,
@@ -1023,8 +1038,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       // Balance is derived, not nudged: recompute it from this stakeholder's transactions +
       // baseline now that the new transaction and its payments are in place.
-      if (stakeholder_id) {
-        recomputeStakeholderBalance(stakeholder_id, tenantId);
+      if (resolvedStakeholderId) {
+        recomputeStakeholderBalance(resolvedStakeholderId, tenantId);
       }
 
       return transactionId;
