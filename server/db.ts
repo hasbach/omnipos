@@ -448,6 +448,26 @@ if (!stakeholderCols.some((c: any) => c.name === 'balance_baseline')) {
   }
 }
 
+// Repair cross-tenant user_id references. A transaction (or cash_flow row) whose user_id points
+// to a user from a DIFFERENT tenant breaks cloud sync: the push translates user_id to that user's
+// global_id, which — if the other tenant is a non-synced seed account (e.g. Demo Business, user
+// id 1) — isn't present in the cloud users table, so the whole batch fails the users FK and NO
+// sales sync. This reassigns such rows to their own tenant's admin/first user (or NULL if none).
+try {
+  db.exec(`
+    UPDATE transactions
+       SET user_id = (SELECT id FROM users u WHERE u.tenant_id = transactions.tenant_id ORDER BY (u.role = 'admin') DESC, u.id LIMIT 1)
+     WHERE user_id IS NOT NULL
+       AND user_id NOT IN (SELECT id FROM users u2 WHERE u2.tenant_id = transactions.tenant_id);
+    UPDATE cash_flow
+       SET user_id = (SELECT id FROM users u WHERE u.tenant_id = cash_flow.tenant_id ORDER BY (u.role = 'admin') DESC, u.id LIMIT 1)
+     WHERE user_id IS NOT NULL
+       AND user_id NOT IN (SELECT id FROM users u2 WHERE u2.tenant_id = cash_flow.tenant_id);
+  `);
+} catch (e) {
+  console.error('Cross-tenant user_id repair error:', e);
+}
+
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
 if (tenantCount.count === 0) {

@@ -20,6 +20,19 @@ import { sendToPrinter } from "./printing/transport.js";
 const SUPER_ADMIN_LOGIN = 'hasbach';
 const SUPER_ADMIN_AUTH_EMAIL = 'hsalloum60+superadmin@gmail.com';
 
+// Resolve a user_id that is guaranteed to belong to this tenant. Transactions/cash_flow reference
+// users, and the cloud users FK rejects a user_id from another tenant (e.g. the old hard-coded
+// default of 1, which is a seed tenant's user that never syncs) — that would block the whole
+// sync batch. Falls back to the tenant's admin/first user, or null if the tenant has none.
+function tenantUserId(tenantId: number, requested: any): number | null {
+  if (requested) {
+    const u = db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ?").get(requested, tenantId) as any;
+    if (u) return u.id;
+  }
+  const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
+  return first ? first.id : null;
+}
+
 // After an End-of-Day settlement clears the tenant's transactional data locally, the same rows
 // must be removed from the cloud too. Otherwise the sync engine's next pull re-inserts them
 // (the local pull cursor resets once the local rows are gone), and the "settled" sales reappear
@@ -493,7 +506,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   // Cashier Cash Out: records a shift snapshot, does NOT delete or reset anything
   app.post("/api/tenant/cashout", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const userId = req.body.user_id || 1;
+    const userId = tenantUserId(tenantId, req.body.user_id);
     const { opening_balance, actual_cash, notes } = req.body;
 
     try {
@@ -868,6 +881,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/stakeholders/settle-balance", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { stakeholder_id, amount, method, currency, exchange_rate } = req.body;
+    const debtUserId = tenantUserId(tenantId, req.body.user_id);
 
     const processDebt = db.transaction(() => {
       // Create a system transaction ticket (0-total 'sale') carrying the payment received. In the
@@ -876,7 +890,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const result = db.prepare(`
       INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, status)
       VALUES (?, ?, ?, 'sale', 0, ?, ?, 'completed')
-    `).run(tenantId, stakeholder_id, 1, currency, exchange_rate); // type sale with 0 total marks a debt payment
+    `).run(tenantId, stakeholder_id, debtUserId, currency, exchange_rate); // type sale with 0 total marks a debt payment
 
       const transactionId = result.lastInsertRowid;
 
@@ -903,6 +917,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/transactions", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { stakeholder_id, user_id, type, items, currency, exchange_rate, payments, discount, tax, terminalId } = req.body;
+    // Always store a user_id that belongs to THIS tenant (never the old hard-coded 1, which is a
+    // seed tenant's user and breaks the cloud users FK, blocking sync).
+    const resolvedUserId = tenantUserId(tenantId, user_id);
 
     const transaction = db.transaction(() => {
       let calculatedTotal = 0;
@@ -945,7 +962,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     `).run(
         tenantId,
         stakeholder_id,
-        user_id || 1,
+        resolvedUserId,
         type || 'sale',
         finalTotal,
         currency,
@@ -1024,7 +1041,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     `).get(id);
 
       res.json({ id, success: true });
-      logAction(tenantId, user_id || 1, `Transaction: ${type || 'sale'}`, `ID: ${id}, Total: ${fullTransaction.total_amount} ${fullTransaction.currency}`);
+      logAction(tenantId, resolvedUserId, `Transaction: ${type || 'sale'}`, `ID: ${id}, Total: ${fullTransaction.total_amount} ${fullTransaction.currency}`);
       broadcast({ type: 'TRANSACTIONS_UPDATED', transaction: fullTransaction, terminalId }, tenantId);
       broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
     } catch (error: any) {
@@ -1502,7 +1519,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/cash-flow", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const userId = req.body.user_id || 1;
+    const userId = tenantUserId(tenantId, req.body.user_id);
     const { type, amount, currency, exchange_rate, reason } = req.body;
 
     db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -1516,7 +1533,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   // Balance payment: collect from customer or pay supplier
   app.post("/api/balance-payment", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const userId = req.body.user_id || 1;
+    const userId = tenantUserId(tenantId, req.body.user_id);
     const { stakeholder_id, amount, currency, exchange_rate, direction } = req.body;
     // direction: 'collect' = customer pays us, 'pay' = we pay supplier
 
@@ -1567,7 +1584,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/reports/daily", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const userId = req.body.user_id || 1;
+    const userId = tenantUserId(tenantId, req.body.user_id);
     const {
       date,
       opening_balance,
@@ -1600,7 +1617,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/reports/yearly", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const userId = req.body.user_id || 1;
+    const userId = tenantUserId(tenantId, req.body.user_id);
     const { year, notes } = req.body;
 
     // Calculate totals for the year
