@@ -462,6 +462,18 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
+      // CRITICAL: balance is derived from ACTIVE transactions + baseline. These transactions are
+      // about to be archived and removed from the active table, so BANK each stakeholder's current
+      // active-transaction effect into their baseline first — otherwise their carried-over debt
+      // would vanish at settlement (this is exactly what wiped balances before).
+      const affected = db.prepare("SELECT DISTINCT stakeholder_id FROM transactions WHERE tenant_id = ? AND stakeholder_id IS NOT NULL").all(tenantId) as any[];
+      for (const row of affected) {
+        const eff = stakeholderTxEffect(row.stakeholder_id, tenantId);
+        if (Math.abs(eff) > 0.0000001) {
+          db.prepare("UPDATE stakeholders SET balance_baseline = IFNULL(balance_baseline, 0) + ? WHERE id = ? AND tenant_id = ?").run(eff, row.stakeholder_id, tenantId);
+        }
+      }
+
       // Delete records from active tables
       db.prepare("DELETE FROM payments WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)").run(tenantId);
       db.prepare("DELETE FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)").run(tenantId);

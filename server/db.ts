@@ -472,6 +472,45 @@ try {
   console.error('Cross-tenant reference repair error:', e);
 }
 
+// One-time RECOVERY: the first derived-balance migration computed balances from ACTIVE
+// transactions only, so any customer debt whose credit sales had been archived by a past
+// day-settlement was zeroed. Rebuild it: fold each stakeholder's ARCHIVED transaction effect into
+// their baseline, then recompute balance = baseline + active effect. Convention: negative = owes
+// us; a 'credit' payment is not real money so it never reduces the unpaid amount. Runs once
+// (guarded by _migrations) and only ever ADDS back archived debt — it can't make a balance worse.
+db.exec("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'archived_balance_recovery_v1'").get()) {
+  try {
+    const effectOf = (txRows: any[], paidStmt: any) => {
+      let e = 0;
+      for (const t of txRows) {
+        const unpaid = (t.total_amount || 0) - ((paidStmt.get(t.id) as any)?.p || 0);
+        if (t.type === 'sale' || t.type === 'purchase') e -= unpaid;
+        else if (t.type === 'refund') e += unpaid;
+      }
+      return e;
+    };
+    const archPaid = db.prepare("SELECT IFNULL(SUM(amount / exchange_rate), 0) p FROM archived_payments WHERE transaction_id = ? AND method != 'credit'");
+    const actPaid = db.prepare("SELECT IFNULL(SUM(amount / exchange_rate), 0) p FROM payments WHERE transaction_id = ? AND method != 'credit'");
+    const archTx = db.prepare("SELECT id, type, total_amount FROM archived_transactions WHERE stakeholder_id = ? AND tenant_id = ?");
+    const actTx = db.prepare("SELECT id, type, total_amount FROM transactions WHERE stakeholder_id = ? AND tenant_id = ?");
+    const sts = db.prepare("SELECT id, tenant_id, balance_baseline FROM stakeholders").all() as any[];
+    const setRow = db.prepare("UPDATE stakeholders SET balance_baseline = ?, balance = ? WHERE id = ?");
+    let restored = 0;
+    for (const s of sts) {
+      const archEff = effectOf(archTx.all(s.id, s.tenant_id) as any[], archPaid);
+      const actEff = effectOf(actTx.all(s.id, s.tenant_id) as any[], actPaid);
+      const newBaseline = (s.balance_baseline || 0) + archEff;
+      setRow.run(newBaseline, newBaseline + actEff, s.id);
+      if (Math.abs(archEff) > 0.005) restored++;
+    }
+    db.prepare("INSERT INTO _migrations (name) VALUES ('archived_balance_recovery_v1')").run();
+    console.log(`Archived-balance recovery: restored carried-over debt for ${restored} stakeholders (of ${sts.length}).`);
+  } catch (e) {
+    console.error('archived_balance_recovery_v1 error:', e);
+  }
+}
+
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
 if (tenantCount.count === 0) {
