@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -113,9 +113,17 @@ function openSetupWindow() {
 
 // --- Main POS Window ---
 function launchMain(config) {
+  // Fit the window to whatever display it's actually launched on (POS terminals come in all
+  // shapes, including square/portrait screens far smaller than the 1280x800 default) instead of
+  // always opening at a fixed size that can exceed the screen and push content off-screen.
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const windowWidth = Math.min(1280, screenWidth);
+  const windowHeight = Math.min(800, screenHeight);
+  const fillsScreen = windowWidth >= screenWidth || windowHeight >= screenHeight;
+
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: windowWidth,
+    height: windowHeight,
     title: 'OmniPOS',
     autoHideMenuBar: true,
     frame: false,
@@ -126,6 +134,12 @@ function launchMain(config) {
       preload: path.join(__dirname, 'electron-preload.cjs'),
     },
   });
+
+  // When the display is smaller than the default window (e.g. a square kiosk screen), start
+  // maximized so nothing is left off-screen and the user isn't stuck resizing a frameless window.
+  if (fillsScreen) {
+    mainWindow.maximize();
+  }
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setMenu(null);
