@@ -80,6 +80,7 @@ export default function Settlement() {
   const [activeTab, setActiveTab] = useState<'daily' | 'yearly'>('daily');
   const [showAdminConfirm, setShowAdminConfirm] = useState(false);
   const [cashierShifts, setCashierShifts] = useState<any[]>([]);
+  const [businessName, setBusinessName] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -109,6 +110,13 @@ export default function Settlement() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    // For the printed X-report footer — the business's own name, not the app's.
+    fetch('/api/settings')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => data?.store_name && setBusinessName(data.store_name));
+  }, []);
 
   const totalActualUSD = (Object.entries(actualBalances) as [string, string][]).reduce((sum, [code, val]) => {
     if (!val) return sum;
@@ -261,7 +269,7 @@ export default function Settlement() {
           <div class="row"><span>Actual Bal:</span> <span>$${(report.actual_balance || 0).toFixed(2)}</span></div>
           <div class="row total"><span>Difference:</span> <span class="diff">${diff >= 0 ? '+' : ''}${diff.toFixed(2)}</span></div>
           ${report.notes ? `<div style="margin-top: 15px; font-size: 12px; border-top: 1px dashed #000; padding-top: 5px;"><strong>Notes:</strong><br>${report.notes}</div>` : ''}
-          <div class="footer">OmniPOS v2.5.0<br>${title}</div>
+          <div class="footer">${businessName || 'Business'}<br>${title}</div>
           <script>window.print(); window.close();</script>
         </body>
       </html>

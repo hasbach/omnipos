@@ -17,5 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('updater:status', handler);
     // Return cleanup function
     return () => ipcRenderer.removeListener('updater:status', handler);
-  }
+  },
+
+  // Silent printing: renders the given HTML off-screen and prints it to the OS default printer
+  // with no dialog. Used as the POS's last-resort receipt fallback when no ESC/POS printer is
+  // configured (or direct printing to one failed) — see server/printing/transport.ts for the
+  // normal, already-silent path via network/USB.
+  printSilent: (html) => ipcRenderer.invoke('print:silent-html', { html }),
 });

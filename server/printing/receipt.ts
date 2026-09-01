@@ -42,7 +42,7 @@ export function buildReceiptBuffer(opts: {
 
   p.init();
   p.align('center').bold(true);
-  p.text(opts.storeName || 'OmniPOS Retail').feed(1);
+  p.text(opts.storeName || 'Unnamed Business').feed(1);
   p.bold(false);
   if (opts.businessAddress) p.text(opts.businessAddress).feed(1);
   if (opts.businessPhone) p.text(opts.businessPhone).feed(1);
@@ -105,7 +105,7 @@ export function buildTestPrintBuffer(opts: { storeName?: string; printerName: st
 
   p.init();
   p.align('center').bold(true);
-  p.text(opts.storeName || 'OmniPOS').feed(1);
+  p.text(opts.storeName || 'Unnamed Business').feed(1);
   p.bold(false);
   p.text('--- TEST PRINT ---').feed(1);
   p.text(new Date().toLocaleString()).feed(1);

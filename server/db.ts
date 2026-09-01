@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 
@@ -107,6 +108,7 @@ db.exec(`
     terminal_id TEXT,
     terminal_sequence INTEGER,
     idempotency_key TEXT,
+    original_transaction_id INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id),
     FOREIGN KEY(stakeholder_id) REFERENCES stakeholders(id),
@@ -154,6 +156,7 @@ db.exec(`
     status TEXT,
     terminal_id TEXT,
     terminal_sequence INTEGER,
+    original_transaction_id INTEGER,
     created_at DATETIME,
     archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -297,7 +300,14 @@ if (!columns.some((c: any) => c.name === 'tenant_id')) {
   console.log("Migrating to Multi-Tenant...");
   
   // Create a default tenant
-  const hashedDefaultPassword = bcrypt.hashSync(process.env.DEFAULT_ADMIN_PASSWORD || 'admin123', 10);
+  // This seed tenant's password is only ever checked by the OFFLINE local-bcrypt login fallback
+  // (see establishLogin in server/routes.ts) — a real customer's tenant comes from the cloud
+  // registration flow instead. A fixed fallback like 'admin123' would be a standing, publicly
+  // known credential in every install (the packaged app ships with no .env at all, so this
+  // fallback is what every real install actually uses unless DEFAULT_ADMIN_PASSWORD is set).
+  // Generating a random one instead only matters once — it's hashed and stored in `tenants.password`
+  // right below, so nothing needs to remember or persist the plaintext afterward.
+  const hashedDefaultPassword = bcrypt.hashSync(process.env.DEFAULT_ADMIN_PASSWORD || crypto.randomBytes(18).toString('base64url'), 10);
   const result = db.prepare("INSERT INTO tenants (name, email, password) VALUES (?, ?, ?)").run('Default Business', 'admin@example.com', hashedDefaultPassword);
   const defaultTenantId = result.lastInsertRowid;
 
@@ -359,6 +369,10 @@ try { db.exec("ALTER TABLE archived_transactions ADD COLUMN terminal_sequence IN
 try { db.exec("ALTER TABLE users ADD COLUMN pin TEXT DEFAULT '0000';"); } catch {}
 try { db.exec("ALTER TABLE products ADD COLUMN track_inventory INTEGER DEFAULT 1;"); } catch {}
 try { db.exec("ALTER TABLE transactions ADD COLUMN idempotency_key TEXT;"); } catch {}
+// A refund needs to point back at the sale it's refunding — without it there's no way to verify
+// a refund's price/quantity against what was actually sold (see POST /api/transactions).
+try { db.exec("ALTER TABLE transactions ADD COLUMN original_transaction_id INTEGER;"); } catch {}
+try { db.exec("ALTER TABLE archived_transactions ADD COLUMN original_transaction_id INTEGER;"); } catch {}
 
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
@@ -514,7 +528,14 @@ if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'archived_balance_recove
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
 if (tenantCount.count === 0) {
-  const hashedDefaultPassword = bcrypt.hashSync(process.env.DEFAULT_ADMIN_PASSWORD || 'admin123', 10);
+  // This seed tenant's password is only ever checked by the OFFLINE local-bcrypt login fallback
+  // (see establishLogin in server/routes.ts) — a real customer's tenant comes from the cloud
+  // registration flow instead. A fixed fallback like 'admin123' would be a standing, publicly
+  // known credential in every install (the packaged app ships with no .env at all, so this
+  // fallback is what every real install actually uses unless DEFAULT_ADMIN_PASSWORD is set).
+  // Generating a random one instead only matters once — it's hashed and stored in `tenants.password`
+  // right below, so nothing needs to remember or persist the plaintext afterward.
+  const hashedDefaultPassword = bcrypt.hashSync(process.env.DEFAULT_ADMIN_PASSWORD || crypto.randomBytes(18).toString('base64url'), 10);
   const result = db.prepare("INSERT INTO tenants (name, email, password) VALUES (?, ?, ?)").run('Demo Business', 'demo@example.com', hashedDefaultPassword);
   const tenantId = result.lastInsertRowid;
 

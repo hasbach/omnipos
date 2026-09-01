@@ -15,7 +15,8 @@
     "build:server": "esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist-server/server.js --packages=external --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" && esbuild electron-main.js --bundle --platform=node --target=node20 --outfile=dist-electron/main.js --packages=external --format=esm && shx cp electron-preload.cjs dist-electron/ && shx cp setup-preload.cjs dist-electron/ && shx cp setup.html dist-server/",
     "electron:dev": "npm run build:server && electron .",
     "electron:build": "npm run build && npm run build:server && electron-builder --win",
-    "rebuild": "electron-rebuild -f -w better-sqlite3"
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "test": "node scripts/run-tests.mjs"
   },
   "main": "dist-electron/main.js",
   "build": {

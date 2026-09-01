@@ -33,6 +33,16 @@ function tenantUserId(tenantId: number, requested: any): number | null {
   return first ? first.id : null;
 }
 
+// End-of-Day settlement moves rows out of `transactions`/`transaction_items`/`payments` into
+// `archived_transactions`/`archived_transaction_items`/`archived_payments` and deletes them from
+// the live tables (see /api/tenant/settlement below). Every read path that lists or searches
+// historical sales/invoices has to UNION both, or settled data silently disappears — these two
+// column lists keep that UNION consistent across every query that needs it. `archived_transactions`
+// has no `idempotency_key` column (that check only matters for still-live inserts), so the
+// archived side selects NULL in its place to keep the column count/order aligned.
+const TX_LIVE_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, idempotency_key, original_transaction_id, created_at";
+const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, NULL as idempotency_key, original_transaction_id, created_at";
+
 // Same guard for stakeholder_id. The POS defaults the customer to id 1, which for any tenant
 // other than the seed tenant is a FOREIGN tenant's Walk-in — pushing that trips the cloud
 // stakeholders FK and blocks sync. Resolve to this tenant's Walk-in (or first customer), else null.
@@ -45,6 +55,59 @@ function tenantStakeholderId(tenantId: number, requested: any): number | null {
     "SELECT id FROM stakeholders WHERE tenant_id = ? ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
   ).get(tenantId) as any;
   return walkIn ? walkIn.id : null;
+}
+
+// A refund must reference the sale it's refunding, so its price and quantity can be checked
+// against what was actually sold — otherwise a modified client could submit an arbitrary refund
+// amount (see POST /api/transactions). The sale may already have been archived by an End-of-Day
+// settlement by the time it's refunded, so this checks both tables.
+function findOriginalSale(tenantId: number, originalTransactionId: number): { tx: any; items: any[] } | null {
+  let tx = db.prepare("SELECT * FROM transactions WHERE id = ? AND tenant_id = ?").get(originalTransactionId, tenantId) as any;
+  let itemsTable = "transaction_items";
+  if (!tx) {
+    tx = db.prepare("SELECT * FROM archived_transactions WHERE id = ? AND tenant_id = ?").get(originalTransactionId, tenantId) as any;
+    itemsTable = "archived_transaction_items";
+  }
+  if (!tx) return null;
+  const items = db.prepare(
+    `SELECT product_id, quantity, unit_price, discount_type, discount_value FROM ${itemsTable} WHERE transaction_id = ?`
+  ).all(originalTransactionId) as any[];
+  return { tx, items };
+}
+
+// Quantity of each product already refunded against a given original sale, across both live and
+// archived refund transactions (an earlier refund of the same sale may itself have since been
+// archived) — caps how much of a line item is still eligible to be refunded.
+function refundedQuantityByProduct(tenantId: number, originalTransactionId: number): Record<number, number> {
+  const rows = db.prepare(`
+    SELECT ti.product_id, SUM(ti.quantity) as qty
+    FROM transaction_items ti JOIN transactions t ON ti.transaction_id = t.id
+    WHERE t.tenant_id = ? AND t.type = 'refund' AND t.original_transaction_id = ?
+    GROUP BY ti.product_id
+    UNION ALL
+    SELECT ti.product_id, SUM(ti.quantity) as qty
+    FROM archived_transaction_items ti JOIN archived_transactions t ON ti.transaction_id = t.id
+    WHERE t.tenant_id = ? AND t.type = 'refund' AND t.original_transaction_id = ?
+    GROUP BY ti.product_id
+  `).all(tenantId, originalTransactionId, tenantId, originalTransactionId) as any[];
+  const map: Record<number, number> = {};
+  for (const r of rows) map[r.product_id] = (map[r.product_id] || 0) + (r.qty || 0);
+  return map;
+}
+
+function getSettingsMap(tenantId: number): Record<string, string> {
+  const rows = db.prepare("SELECT key, value FROM settings WHERE tenant_id = ?").all(tenantId) as any[];
+  const map = rows.reduce((acc: any, r: any) => { acc[r.key] = r.value; return acc; }, {} as Record<string, string>);
+
+  // Every tenant already has a real business name (`tenants.name` is NOT NULL) — fall back to
+  // it whenever the owner hasn't set a separate Store Name in Settings, instead of leaving
+  // receipts/reports/the Settings page itself to show a hardcoded, unbranded placeholder.
+  if (!map.store_name) {
+    const tenant = db.prepare("SELECT name FROM tenants WHERE id = ?").get(tenantId) as any;
+    if (tenant?.name) map.store_name = tenant.name;
+  }
+
+  return map;
 }
 
 // After an End-of-Day settlement clears the tenant's transactional data locally, the same rows
@@ -159,15 +222,19 @@ async function establishLogin(
     const isSuperAdmin = cloudTenant.email === SUPER_ADMIN_AUTH_EMAIL || cloudTenant.email === SUPER_ADMIN_LOGIN;
     const isSeed = ['demo@example.com', 'admin@example.com'].includes(cloudTenant.email);
 
-    // Seed the minimum a POS needs (Walk-in customer, Admin user, default currency) the first
-    // time a real business appears on this machine — registration now happens in the cloud
-    // (edge function) and no longer seeds these locally.
+    // Seed the minimum a POS needs (Walk-in customer, Admin user, default currency, store name)
+    // the first time a real business appears on this machine — registration now happens in the
+    // cloud (edge function) and no longer seeds these locally. Seeding store_name from the
+    // tenant's own registered name means receipts print the real business from day one instead
+    // of a hardcoded placeholder (getSettingsMap falls back the same way for any tenant that
+    // already existed before this seed was added).
     if (!isSuperAdmin && !isSeed) {
       const userCount = db.prepare("SELECT COUNT(*) as c FROM users WHERE tenant_id = ?").get(localId) as any;
       if (userCount.c === 0) {
         db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, ?, ?)").run(localId, "Walk-in Customer", "customer");
         db.prepare("INSERT INTO users (tenant_id, name, role) VALUES (?, ?, ?)").run(localId, "Admin", "admin");
         db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(localId, "USD", "$", 1, 1);
+        db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'store_name', ?)").run(localId, cloudTenant.name);
       }
     }
 
@@ -457,8 +524,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       // Move transactions
       db.prepare(`
-      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, created_at)
-      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, created_at
+      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, created_at)
+      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, created_at
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
@@ -848,12 +915,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   });
 
   app.get("/api/settings", authenticate, (req: any, res) => {
-    const settings = db.prepare("SELECT * FROM settings WHERE tenant_id = ?").all(req.session.tenantId);
-    const settingsObj = (settings as any[]).reduce((acc, curr) => {
-      acc[curr.key] = curr.value;
-      return acc;
-    }, {});
-    res.json(settingsObj);
+    res.json(getSettingsMap(req.session.tenantId));
   });
 
   app.post("/api/settings", authenticate, (req: any, res) => {
@@ -942,50 +1004,159 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/transactions", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { stakeholder_id, user_id, type, items, currency, exchange_rate, payments, discount, tax, terminalId } = req.body;
+    const { stakeholder_id, user_id, type, items, currency, exchange_rate, payments, discount, tax, terminalId, original_transaction_id } = req.body;
     // Always store user_id AND stakeholder_id that belong to THIS tenant (never the old hard-coded
     // 1 defaults, which point at a seed tenant's rows and break the cloud FKs, blocking sync).
     const resolvedUserId = tenantUserId(tenantId, user_id);
     const resolvedStakeholderId = tenantStakeholderId(tenantId, stakeholder_id);
+
+    // A refund's price and discount must come from the sale it's refunding — never from the
+    // client — or a modified client could submit an arbitrary refund amount. A purchase's price
+    // is legitimately negotiated per order (there's no catalog price to check it against), but it
+    // still has to be a real, non-negative number rather than whatever the client happened to send.
+    let refundLines: Record<number, { unitPrice: number; discountType: string | null; discountValue: number | null; originalQuantity: number; remaining: number }> | null = null;
+    if (type === 'refund') {
+      if (!original_transaction_id) {
+        return res.status(400).json({ error: "A refund must reference the sale it's refunding." });
+      }
+      const original = findOriginalSale(tenantId, original_transaction_id);
+      if (!original || original.tx.type !== 'sale') {
+        return res.status(400).json({ error: "The referenced sale could not be found." });
+      }
+      const alreadyRefunded = refundedQuantityByProduct(tenantId, original_transaction_id);
+      refundLines = {};
+      for (const oi of original.items) {
+        refundLines[oi.product_id] = {
+          unitPrice: oi.unit_price,
+          discountType: oi.discount_type,
+          discountValue: oi.discount_value,
+          originalQuantity: oi.quantity,
+          remaining: oi.quantity - (alreadyRefunded[oi.product_id] || 0),
+        };
+      }
+      for (const item of items) {
+        if (!(Number.isFinite(item.quantity) && item.quantity > 0)) {
+          return res.status(400).json({ error: `Invalid refund quantity for product ${item.id}.` });
+        }
+        const line = refundLines[item.id];
+        if (!line) {
+          return res.status(400).json({ error: `Product ${item.id} was not part of the original sale.` });
+        }
+        if (item.quantity > line.remaining + 1e-9) {
+          return res.status(400).json({ error: `Cannot refund ${item.quantity} of product ${item.id} — only ${Math.max(0, line.remaining)} remain eligible for refund.` });
+        }
+        line.remaining -= item.quantity; // guards duplicate rows for the same product within one request
+      }
+    } else if (type === 'purchase') {
+      for (const item of items) {
+        if (!(Number.isFinite(item.price) && item.price >= 0)) {
+          return res.status(400).json({ error: `Invalid purchase price for product ${item.id}.` });
+        }
+        if (!(Number.isFinite(item.quantity) && item.quantity > 0)) {
+          return res.status(400).json({ error: `Invalid purchase quantity for product ${item.id}.` });
+        }
+      }
+    }
+
+    // Global discount/tax (a whole-sale adjustment, separate from any per-item discount) used to
+    // be applied with whatever value the client sent, unbounded — a negative value inflates the
+    // total, and a >100% discount empties or overshoots it. A percentage must be a real number in
+    // [0, 100]; a fixed amount must be real and non-negative (a fixed discount larger than the
+    // subtotal is clamped rather than rejected below — that's a legitimate "round down to zero,"
+    // not a suspicious input).
+    const invalidAdjustment = (adj: any, label: string): string | null => {
+      if (!adj) return null;
+      if (adj.type !== 'percentage' && adj.type !== 'fixed') return `Invalid ${label} type.`;
+      if (!Number.isFinite(adj.value) || adj.value < 0) return `Invalid ${label} value.`;
+      if (adj.type === 'percentage' && adj.value > 100) return `${label === 'discount' ? 'Discount' : 'Tax'} percentage cannot exceed 100%.`;
+      return null;
+    };
+    const discountError = invalidAdjustment(discount, 'discount');
+    if (discountError) return res.status(400).json({ error: discountError });
+    const taxError = invalidAdjustment(tax, 'tax');
+    if (taxError) return res.status(400).json({ error: taxError });
 
     const transaction = db.transaction(() => {
       let calculatedTotal = 0;
       const processedItems = items.map((item: any) => {
         const product = db.prepare("SELECT price, package_price, units_per_package, track_inventory FROM products WHERE id = ? AND tenant_id = ?").get(item.id, tenantId) as any;
 
-        let unitPrice = item.price; // Fallback to provided price
+        let unitPrice = item.price; // Fallback to provided price (purchases — validated above)
+        let itemTotal: number;
+        let discountType: string | null = item.discount?.type || null;
+        let discountValue: number | null = item.discount?.value ?? null;
+
         if (type === 'sale' && product) {
           if (product.package_price && product.units_per_package > 1) {
             const numPackages = Math.floor(item.quantity / product.units_per_package);
             const remainder = item.quantity % product.units_per_package;
-            const itemTotal = (numPackages * product.package_price) + (remainder * product.price);
-            unitPrice = itemTotal / item.quantity;
+            const packagedTotal = (numPackages * product.package_price) + (remainder * product.price);
+            unitPrice = packagedTotal / item.quantity;
           } else {
             unitPrice = product.price;
           }
+
+          // Apply the per-item discount (the cart's "DISC" control) the same way the client does
+          // when computing what the cashier actually charges — otherwise total_amount ends up
+          // higher than the payments actually collected on any discounted line item, which
+          // silently overstates recorded revenue in every report and end-of-day reconciliation.
+          itemTotal = unitPrice * item.quantity;
+          if (discountValue) {
+            itemTotal = discountType === 'percentage'
+              ? itemTotal * (1 - discountValue / 100)
+              : Math.max(0, itemTotal - discountValue); // fixed discounts are entered in USD, matching this total's basis
+          }
+        } else if (type === 'refund' && refundLines) {
+          // Re-derive price AND discount from the original sale (validated above) — never trust
+          // the client's for a refund. A fixed discount is prorated to how much of that original
+          // line is actually being refunded, matching the client's own calculateRefundAmount
+          // (src/hooks/usePos.ts) so the two stay in agreement.
+          const line = refundLines[item.id];
+          unitPrice = line.unitPrice;
+          discountType = line.discountType;
+          discountValue = line.discountValue;
+          itemTotal = unitPrice * item.quantity;
+          if (discountType === 'percentage') {
+            itemTotal -= (itemTotal * (discountValue || 0)) / 100;
+          } else if (discountType === 'fixed') {
+            itemTotal -= (discountValue || 0) * (item.quantity / line.originalQuantity);
+          }
+          itemTotal = Math.max(0, itemTotal);
+        } else {
+          // Purchase (price/quantity validated above): the cost is legitimately entered per
+          // order, but the discount, if any, is applied the same way as a sale.
+          itemTotal = unitPrice * item.quantity;
+          if (discountValue) {
+            itemTotal = discountType === 'percentage'
+              ? itemTotal * (1 - discountValue / 100)
+              : Math.max(0, itemTotal - discountValue);
+          }
         }
 
-        const itemTotal = unitPrice * item.quantity;
         calculatedTotal += itemTotal;
 
-        return { ...item, unitPrice, trackInventory: product ? product.track_inventory : 1 };
+        return { ...item, unitPrice, discountType, discountValue, trackInventory: product ? product.track_inventory : 1 };
       });
 
-      // Apply global discount/tax if any (simplified for now, usually they apply to the total)
+      // Apply global discount/tax if any (bounds validated above). A fixed discount is additionally
+      // clamped to the subtotal here, since that bound depends on calculatedTotal — otherwise a
+      // fixed discount larger than the sale would leave a negative total.
       let finalTotal = calculatedTotal;
       if (discount?.type === 'percentage') finalTotal -= (calculatedTotal * (discount.value / 100));
-      else if (discount?.type === 'fixed') finalTotal -= discount.value;
+      else if (discount?.type === 'fixed') finalTotal -= Math.min(discount.value, calculatedTotal);
 
       if (tax?.type === 'percentage') finalTotal += (finalTotal * (tax.value / 100));
       else if (tax?.type === 'fixed') finalTotal += tax.value;
+
+      finalTotal = Math.max(0, finalTotal); // defensive floor — should already hold given the bounds above
 
       const termId = terminalId || 'MAIN';
       const sequenceRow = db.prepare(`SELECT IFNULL(MAX(terminal_sequence), 0) + 1 as next_seq FROM transactions WHERE terminal_id = ? AND tenant_id = ?`).get(termId, tenantId) as any;
       const termSeq = sequenceRow.next_seq;
 
       const info = db.prepare(`
-      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         tenantId,
         resolvedStakeholderId,
@@ -1000,7 +1171,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         tax?.value || null,
         'completed',
         termId,
-        termSeq
+        termSeq,
+        type === 'refund' ? original_transaction_id : null
       );
 
       const transactionId = info.lastInsertRowid;
@@ -1024,8 +1196,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           item.id,
           item.quantity,
           item.unitPrice,
-          item.discount?.type || null,
-          item.discount?.value || null,
+          item.discountType,
+          item.discountValue,
           item.tax?.type || null,
           item.tax?.value || null
         );
@@ -1149,12 +1321,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
     const transactions = db.prepare(`
     SELECT t.*, s.name as stakeholder_name, u.name as user_name
-    FROM transactions t 
-    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id 
+    FROM (
+      SELECT ${TX_LIVE_COLUMNS} FROM transactions
+      WHERE date(created_at) = date(?) AND tenant_id = ? AND type != 'purchase'
+      UNION ALL
+      SELECT ${TX_ARCHIVED_COLUMNS} FROM archived_transactions
+      WHERE date(created_at) = date(?) AND tenant_id = ? AND type != 'purchase'
+    ) t
+    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
     LEFT JOIN users u ON t.user_id = u.id
-    WHERE date(t.created_at) = date(?) AND t.tenant_id = ? AND t.type != 'purchase'
     ORDER BY t.created_at DESC
-  `).all(targetDate, tenantId);
+  `).all(targetDate, tenantId, targetDate, tenantId);
 
     res.json(transactions);
   });
@@ -1163,32 +1340,39 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const { type, stakeholder_id, date_from, date_to } = req.query;
 
-    let query = `
-    SELECT t.*, s.name as stakeholder_name, u.name as user_name
-    FROM transactions t 
-    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id 
-    LEFT JOIN users u ON t.user_id = u.id
-    WHERE t.tenant_id = ?`;
-    const params: any[] = [tenantId];
+    // Same filter clause applied to both the live and archived tables, then UNIONed — a settled
+    // invoice must match the same search filters as an unsettled one to be found at all.
+    let filter = "";
+    const filterParams: any[] = [];
 
     if (type && type !== 'all') {
-      query += " AND t.type = ?";
-      params.push(type);
+      filter += " AND type = ?";
+      filterParams.push(type);
     }
     if (stakeholder_id && stakeholder_id !== 'all') {
-      query += " AND t.stakeholder_id = ?";
-      params.push(stakeholder_id);
+      filter += " AND stakeholder_id = ?";
+      filterParams.push(stakeholder_id);
     }
     if (date_from) {
-      query += " AND date(t.created_at) >= date(?)";
-      params.push(date_from);
+      filter += " AND date(created_at) >= date(?)";
+      filterParams.push(date_from);
     }
     if (date_to) {
-      query += " AND date(t.created_at) <= date(?)";
-      params.push(date_to);
+      filter += " AND date(created_at) <= date(?)";
+      filterParams.push(date_to);
     }
 
-    query += " ORDER BY t.created_at DESC LIMIT 200";
+    const query = `
+    SELECT t.*, s.name as stakeholder_name, u.name as user_name
+    FROM (
+      SELECT ${TX_LIVE_COLUMNS}, 0 as archived FROM transactions WHERE tenant_id = ?${filter}
+      UNION ALL
+      SELECT ${TX_ARCHIVED_COLUMNS}, 1 as archived FROM archived_transactions WHERE tenant_id = ?${filter}
+    ) t
+    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
+    LEFT JOIN users u ON t.user_id = u.id
+    ORDER BY t.created_at DESC LIMIT 200`;
+    const params = [tenantId, ...filterParams, tenantId, ...filterParams];
 
     const transactions = db.prepare(query).all(...params);
     res.json(transactions);
@@ -1196,20 +1380,39 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.get("/api/transactions/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const transaction = db.prepare(`
-    SELECT t.*, s.name as stakeholder_name, u.name as user_name
-    FROM transactions t 
-    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id 
+
+    let transaction = db.prepare(`
+    SELECT t.*, s.name as stakeholder_name, u.name as user_name, 0 as archived
+    FROM transactions t
+    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
     LEFT JOIN users u ON t.user_id = u.id
     WHERE t.id = ? AND t.tenant_id = ?
   `).get(req.params.id, tenantId) as any;
+
+    // Not found live — it may have gone through End-of-Day settlement, which moves it to
+    // archived_transactions. Fall back there so an old invoice can still be opened/viewed
+    // (the frontend treats `archived: true` as read-only — settlement's edit/delete endpoints
+    // only ever touch the live tables, by design).
+    let itemsTable = "transaction_items";
+    let paymentsTable = "payments";
+    if (!transaction) {
+      transaction = db.prepare(`
+      SELECT t.*, s.name as stakeholder_name, u.name as user_name, 1 as archived
+      FROM archived_transactions t
+      LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
+      LEFT JOIN users u ON t.user_id = u.id
+      WHERE t.id = ? AND t.tenant_id = ?
+    `).get(req.params.id, tenantId) as any;
+      itemsTable = "archived_transaction_items";
+      paymentsTable = "archived_payments";
+    }
 
     if (!transaction) return res.status(404).json({ error: "Transaction not found" });
 
     const items = db.prepare(`
     SELECT ti.*, p.name as product_name, p.barcode, p.cost
-    FROM transaction_items ti 
-    JOIN products p ON ti.product_id = p.id 
+    FROM ${itemsTable} ti
+    JOIN products p ON ti.product_id = p.id
     WHERE ti.transaction_id = ?
   `).all(req.params.id);
 
@@ -1224,7 +1427,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     // Include payments and paid_amount for edit support. Credit ("on account") payments are NOT
     // real money received, so they don't count toward paid_amount — mirroring how POST computes
     // the unpaid remainder that goes to the customer's balance.
-    const payments = db.prepare("SELECT * FROM payments WHERE transaction_id = ? ORDER BY created_at ASC").all(req.params.id) as any[];
+    const payments = db.prepare(`SELECT * FROM ${paymentsTable} WHERE transaction_id = ? ORDER BY created_at ASC`).all(req.params.id) as any[];
     const paidAmount = payments.reduce((sum: number, p: any) => p.method === 'credit' ? sum : sum + (p.amount / (p.exchange_rate || 1)), 0);
     transaction.payments = payments;
     transaction.paid_amount = paidAmount;
@@ -1248,16 +1451,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.get("/api/reports/sales", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const sales = db.prepare(`
-    SELECT 
-      DATE(created_at) as date, 
+    SELECT
+      DATE(created_at) as date,
       SUM(CASE WHEN type = 'refund' THEN -total_amount ELSE total_amount END) as total,
       COUNT(id) as count
-    FROM transactions 
-    WHERE tenant_id = ? AND type != 'purchase'
+    FROM (
+      SELECT id, type, total_amount, created_at FROM transactions WHERE tenant_id = ? AND type != 'purchase'
+      UNION ALL
+      SELECT id, type, total_amount, created_at FROM archived_transactions WHERE tenant_id = ? AND type != 'purchase'
+    )
     GROUP BY DATE(created_at)
     ORDER BY date DESC
     LIMIT 30
-  `).all(tenantId);
+  `).all(tenantId, tenantId);
     res.json(sales);
   });
 
@@ -1265,12 +1471,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const date = req.query.date || new Date().toISOString().split('T')[0];
     const sales = db.prepare(`
-    SELECT p.method, SUM(p.amount) as total
-    FROM payments p
-    JOIN transactions t ON p.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'sale' AND date(p.created_at) = ?
-    GROUP BY p.method
-  `).all(tenantId, date);
+    SELECT method, SUM(amount) as total FROM (
+      SELECT p.method, p.amount, p.created_at
+      FROM payments p JOIN transactions t ON p.transaction_id = t.id
+      WHERE t.tenant_id = ? AND t.type = 'sale' AND date(p.created_at) = ?
+      UNION ALL
+      SELECT p.method, p.amount, p.created_at
+      FROM archived_payments p JOIN archived_transactions t ON p.transaction_id = t.id
+      WHERE t.tenant_id = ? AND t.type = 'sale' AND date(p.created_at) = ?
+    )
+    GROUP BY method
+  `).all(tenantId, date, tenantId, date);
     res.json(sales);
   });
 
@@ -1279,14 +1490,22 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const date = req.query.date || new Date().toISOString().split('T')[0];
     const sales = db.prepare(`
     SELECT s.name as customer, SUM(t.total_amount) as total
-    FROM transactions t
+    FROM (
+      SELECT stakeholder_id, total_amount FROM transactions WHERE tenant_id = ? AND type = 'sale' AND date(created_at) = ?
+      UNION ALL
+      SELECT stakeholder_id, total_amount FROM archived_transactions WHERE tenant_id = ? AND type = 'sale' AND date(created_at) = ?
+    ) t
     JOIN stakeholders s ON t.stakeholder_id = s.id
-    WHERE t.tenant_id = ? AND t.type = 'sale' AND date(t.created_at) = ?
     GROUP BY s.id
-  `).all(tenantId, date);
+  `).all(tenantId, date, tenantId, date);
     res.json(sales);
   });
 
+  // Unlike the other /api/reports/* endpoints, this deliberately does NOT union in
+  // archived_transactions. Settlement banks each stakeholder's then-outstanding balance into
+  // stakeholders.balance_baseline as a single lump sum (see /api/tenant/settlement and
+  // server/balance.ts) — there is no per-invoice way to collect against an archived invoice
+  // anymore, so listing its stale "unpaid" amount here would just be misleading, not actionable.
   app.get("/api/reports/unpaid-sales", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const unpaid = db.prepare(`
@@ -1332,61 +1551,58 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       category
     } = req.body;
 
-    let query = `
-    SELECT 
-      t.id as invoice_no,
-      t.created_at as date,
-      t.type,
-      s.name as stakeholder,
-      t.total_amount,
-      t.currency,
-      (SELECT IFNULL(SUM(amount), 0) FROM payments WHERE transaction_id = t.id) as paid_amount,
-      (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM payments WHERE transaction_id = t.id)) as balance,
-      u.name as processed_by
-    FROM transactions t
-    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
-    LEFT JOIN users u ON t.user_id = u.id
-    WHERE t.tenant_id = ?
-  `;
-    const params: any[] = [tenantId];
+    // A settled invoice moves from transactions/transaction_items/payments into their archived_*
+    // counterparts (see /api/tenant/settlement), so this search has to run against both sets of
+    // tables and UNION the results, or it silently misses anything from before the last
+    // settlement — the exact "custom builder can't find an old invoice" bug this fixes.
+    const buildFilter = (itemsTable: string) => {
+      let sql = "";
+      const params: any[] = [];
+      if (stakeholderId) { sql += " AND t.stakeholder_id = ?"; params.push(stakeholderId); }
+      if (type) { sql += " AND t.type = ?"; params.push(type); }
+      if (fromDate) { sql += " AND date(t.created_at) >= date(?)"; params.push(fromDate); }
+      if (toDate) { sql += " AND date(t.created_at) <= date(?)"; params.push(toDate); }
+      if (invoiceNumber) { sql += " AND t.id = ?"; params.push(invoiceNumber); }
+      if (productId) {
+        sql += ` AND t.id IN (SELECT transaction_id FROM ${itemsTable} WHERE product_id = ?)`;
+        params.push(productId);
+      }
+      if (category) {
+        sql += ` AND t.id IN (SELECT ti.transaction_id FROM ${itemsTable} ti JOIN products p ON ti.product_id = p.id WHERE p.category = ?)`;
+        params.push(category);
+      }
+      return { sql, params };
+    };
 
-    if (stakeholderId) {
-      query += " AND t.stakeholder_id = ?";
-      params.push(stakeholderId);
-    }
-    if (type) {
-      query += " AND t.type = ?";
-      params.push(type);
-    }
-    if (fromDate) {
-      query += " AND date(t.created_at) >= date(?)";
-      params.push(fromDate);
-    }
-    if (toDate) {
-      query += " AND date(t.created_at) <= date(?)";
-      params.push(toDate);
-    }
-    if (invoiceNumber) {
-      query += " AND t.id = ?";
-      params.push(invoiceNumber);
-    }
-    if (productId) {
-      query += " AND t.id IN (SELECT transaction_id FROM transaction_items WHERE product_id = ?)";
-      params.push(productId);
-    }
-    if (category) {
-      query += " AND t.id IN (SELECT ti.transaction_id FROM transaction_items ti JOIN products p ON ti.product_id = p.id WHERE p.category = ?)";
-      params.push(category);
-    }
+    const buildBranch = (txTable: string, itemsTable: string, paymentsTable: string) => {
+      const filter = buildFilter(itemsTable);
+      let sql = `
+      SELECT
+        t.id as invoice_no,
+        t.created_at as date,
+        t.type,
+        s.name as stakeholder,
+        t.total_amount,
+        t.currency,
+        (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id) as paid_amount,
+        (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id)) as balance,
+        u.name as processed_by
+      FROM ${txTable} t
+      LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
+      LEFT JOIN users u ON t.user_id = u.id
+      WHERE t.tenant_id = ?${filter.sql}`;
+      if (status === 'paid') {
+        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id)) <= 0.01`;
+      } else if (status === 'unpaid') {
+        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id)) > 0.01`;
+      }
+      return { sql, params: [tenantId, ...filter.params] };
+    };
 
-    // Handle paid/unpaid status
-    if (status === 'paid') {
-      query += " AND (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM payments WHERE transaction_id = t.id)) <= 0.01";
-    } else if (status === 'unpaid') {
-      query += " AND (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM payments WHERE transaction_id = t.id)) > 0.01";
-    }
-
-    query += " ORDER BY t.created_at DESC";
+    const live = buildBranch("transactions", "transaction_items", "payments");
+    const archived = buildBranch("archived_transactions", "archived_transaction_items", "archived_payments");
+    const query = `${live.sql} UNION ALL ${archived.sql} ORDER BY date DESC`;
+    const params = [...live.params, ...archived.params];
 
     try {
       const results = db.prepare(query).all(...params);
@@ -1400,14 +1616,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const stakeholderId = req.params.id;
 
-    // Get all transactions for this stakeholder
+    // Get all transactions for this stakeholder, including any already moved to
+    // archived_transactions by End-of-Day settlement — a customer statement needs the full
+    // history, not just activity since the last settlement.
     const transactions = db.prepare(`
     SELECT t.*, u.name as user_name
-    FROM transactions t
+    FROM (
+      SELECT ${TX_LIVE_COLUMNS}, 0 as archived FROM transactions WHERE tenant_id = ? AND stakeholder_id = ?
+      UNION ALL
+      SELECT ${TX_ARCHIVED_COLUMNS}, 1 as archived FROM archived_transactions WHERE tenant_id = ? AND stakeholder_id = ?
+    ) t
     LEFT JOIN users u ON t.user_id = u.id
-    WHERE t.tenant_id = ? AND t.stakeholder_id = ?
     ORDER BY t.created_at ASC
-  `).all(tenantId, stakeholderId) as any[];
+  `).all(tenantId, stakeholderId, tenantId, stakeholderId) as any[];
 
     const statement: any[] = [];
     let runningBalance = 0;
@@ -1433,9 +1654,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       }
 
       // Get items for this transaction to include in description
+      const itemsTable = t.archived ? "archived_transaction_items" : "transaction_items";
       const items = db.prepare(`
       SELECT ti.quantity, p.name
-      FROM transaction_items ti
+      FROM ${itemsTable} ti
       JOIN products p ON ti.product_id = p.id
       WHERE ti.transaction_id = ?
     `).all(t.id) as any[];
@@ -1457,8 +1679,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       });
 
       // 2. Add payments for this transaction as credits
+      const paymentsTable = t.archived ? "archived_payments" : "payments";
       const payments = db.prepare(`
-      SELECT * FROM payments WHERE transaction_id = ?
+      SELECT * FROM ${paymentsTable} WHERE transaction_id = ?
     `).all(t.id) as any[];
 
       for (const p of payments) {
@@ -1922,11 +2145,6 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   });
 
   // --- ESC/POS PRINTING & CASH DRAWER ---
-
-  function getSettingsMap(tenantId: number): Record<string, string> {
-    const rows = db.prepare("SELECT key, value FROM settings WHERE tenant_id = ?").all(tenantId) as any[];
-    return rows.reduce((acc: any, r: any) => { acc[r.key] = r.value; return acc; }, {});
-  }
 
   function resolveReceiptPrinter(tenantId: number, printerId?: number) {
     if (printerId) {

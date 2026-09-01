@@ -144,6 +144,7 @@ wss.on('connection', (ws: any, req: http.IncomingMessage) => {
 
 import { db, sessionsDir, logAction } from './server/db.js';
 import { setupRoutes } from './server/routes.js';
+import { getOrCreateSessionSecret } from './server/secrets.js';
 
 
 app.use(express.json());
@@ -154,7 +155,7 @@ app.use(session({
     dir: sessionsDir,
     concurrentDB: true
   }),
-  secret: process.env.SESSION_SECRET || 'omnipos-secret-key-fallback',
+  secret: getOrCreateSessionSecret(),
   resave: false,
   saveUninitialized: false,
   cookie: { 

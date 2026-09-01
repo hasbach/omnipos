@@ -110,6 +110,8 @@ declare global {
         bytesPerSecond?: number;
         message?: string;
       }) => void) => (() => void);
+      // Silent printing (no OS print dialog) — see electron-main.js's 'print:silent-html' handler.
+      printSilent: (html: string) => Promise<{ success: boolean; error: string | null }>;
     };
     electronSetup?: {
       scanNetwork: () => Promise<string[]>;

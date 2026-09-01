@@ -341,6 +341,7 @@ const [products, setProducts] = useState<Product[]>([]);
           stakeholder_id: selectedHistoryTransaction.stakeholder_id,
           user_id: currentUser?.id || 1,
           type: 'refund',
+          original_transaction_id: selectedHistoryTransaction.id,
           items: itemsToRefund,
           total_amount: totalRefund,
           currency: selectedHistoryTransaction.currency,
@@ -359,6 +360,9 @@ const [products, setProducts] = useState<Product[]>([]);
         setSelectedHistoryTransaction(null);
         fetchDailyHistory();
         alert('Refund processed successfully');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Failed to process refund.');
       }
     } catch (err) {
       console.error(err);
@@ -694,11 +698,29 @@ const [products, setProducts] = useState<Product[]>([]);
       }
     }
 
+    // This fallback only fires when no receipt printer is configured (or the direct print
+    // failed above), but it still needs to show the tenant's own business info — not a
+    // hardcoded vendor name — so it fetches the same settings the ESC/POS path reads.
+    let settings: any = {};
+    try {
+      const settingsRes = await fetch('/api/settings');
+      if (settingsRes.ok) settings = await settingsRes.json();
+    } catch { /* fall through and print with the defaults below */ }
+
+    const width = 32;
+    const center = (text: string) => {
+      const t = text.slice(0, width);
+      const pad = Math.max(0, width - t.length);
+      const left = Math.floor(pad / 2);
+      return ' '.repeat(left) + t + ' '.repeat(pad - left);
+    };
+
     const stakeholder = stakeholders.find(s => s.id === transaction.stakeholder_id)?.name || 'Walk-in Customer';
     const lines = [
       "================================",
-      "           OMNIPOS              ",
-      "       RETAIL SOLUTIONS         ",
+      center(settings.store_name || 'Unnamed Business'),
+      ...(settings.business_address ? [center(settings.business_address)] : []),
+      ...(settings.business_phone ? [center(settings.business_phone)] : []),
       "================================",
       `Date: ${new Date(transaction.created_at).toLocaleString()}`,
       `Receipt: ${
@@ -731,16 +753,38 @@ const [products, setProducts] = useState<Product[]>([]);
     }
 
     lines.push("================================",
-               "       THANK YOU FOR            ",
-               "       SHOPPING WITH US         ",
+               center(settings.receipt_footer || 'Thank you for shopping with us!'),
                "================================");
 
     const receiptText = lines.join('\n');
-    
-    // Simple print window
+    const receiptHtml = `<pre style="font-family: monospace; font-size: 12px; margin: 0;">${receiptText}</pre>`;
+
+    // Print silently (no Windows dialog) to the OS default printer, same as the direct ESC/POS
+    // path above — a print dialog here was the actual reported bug, not a missing architecture.
+    // Electron's print() callback can simply never fire when the machine has no printer at all
+    // (confirmed in testing — it hangs rather than failing fast), so this races it against a
+    // timeout instead of leaving the cashier stuck mid-checkout with no feedback.
+    if (window.electronAPI?.printSilent) {
+      try {
+        const timeout = new Promise<{ success: false; error: string }>(resolve =>
+          setTimeout(() => resolve({ success: false, error: 'Printing timed out' }), 8000)
+        );
+        const result = await Promise.race([window.electronAPI.printSilent(receiptHtml), timeout]);
+        if (!result?.success) {
+          alert(`Could not print the receipt automatically (${result?.error || 'no printer available'}). Configure a receipt printer under Settings → Printers, or set a default Windows printer.`);
+        }
+      } catch (err) {
+        console.error('Silent print error:', err);
+        alert('Could not print the receipt automatically. Configure a receipt printer under Settings → Printers.');
+      }
+      return;
+    }
+
+    // Not running inside the Electron shell (e.g. a plain browser tab) — no silent-print
+    // channel available, so fall back to the browser's own print dialog as a last resort.
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
-      printWindow.document.write(`<pre style="font-family: monospace; font-size: 12px;">${receiptText}</pre>`);
+      printWindow.document.write(receiptHtml);
       printWindow.document.close();
       printWindow.focus();
       printWindow.print();

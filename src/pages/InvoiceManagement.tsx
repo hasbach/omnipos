@@ -392,19 +392,31 @@ export default function InvoiceManagement() {
               <tr key={i.id} className="hover:bg-app-bg/30 transition-colors group">
                 <td className="p-4 border-b border-app-border font-mono">#{i.id}</td>
                 <td className="p-4 border-b border-app-border">
-                  <span className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-widest ${
-                    i.type === 'refund' ? 'bg-red-500 text-white' :
-                    i.type === 'purchase' ? 'bg-blue-500 text-white' : 'bg-emerald-500 text-white'
-                  }`}>{i.type}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-widest ${
+                      i.type === 'refund' ? 'bg-red-500 text-white' :
+                      i.type === 'purchase' ? 'bg-blue-500 text-white' : 'bg-emerald-500 text-white'
+                    }`}>{i.type}</span>
+                    {i.archived ? (
+                      <span
+                        className="px-2 py-1 rounded text-[8px] font-black uppercase tracking-widest bg-app-bg/60 opacity-60"
+                        title="Archived by an End-of-Day settlement — view only"
+                      >Settled</span>
+                    ) : null}
+                  </div>
                 </td>
                 <td className="p-4 border-b border-app-border font-bold">{i.stakeholder_name}</td>
                 <td className="p-4 border-b border-app-border opacity-50">{new Date(i.created_at).toLocaleString()}</td>
                 <td className="p-4 border-b border-app-border text-right font-mono font-bold">${i.total_amount.toFixed(2)}</td>
                 <td className="p-4 border-b border-app-border text-right">
-                  <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => handleEditInvoice(i.id)} className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all" title="Edit"><Edit2 size={14} /></button>
-                    <button onClick={() => handleDeleteInvoice(i.id)} className="p-2 hover:bg-red-500 hover:text-white rounded-lg transition-all" title="Delete"><Trash2 size={14} /></button>
-                  </div>
+                  {i.archived ? (
+                    <span className="text-[10px] uppercase tracking-widest opacity-40">Settled</span>
+                  ) : (
+                    <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => handleEditInvoice(i.id)} className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all" title="Edit"><Edit2 size={14} /></button>
+                      <button onClick={() => handleDeleteInvoice(i.id)} className="p-2 hover:bg-red-500 hover:text-white rounded-lg transition-all" title="Delete"><Trash2 size={14} /></button>
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

@@ -13,6 +13,7 @@ export default function PriceChecker() {
   const productRef = useRef<Product | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [language, setLanguage] = useState<Language>('en');
+  const [businessName, setBusinessName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const t = translations[language];
 
@@ -25,6 +26,7 @@ export default function PriceChecker() {
       .then(res => res.json())
       .then(settings => {
         if (settings.language) setLanguage(settings.language as Language);
+        if (settings.store_name) setBusinessName(settings.store_name);
       });
 
     // Real-time Sync
@@ -44,6 +46,7 @@ export default function PriceChecker() {
       if (data.type === 'SETTINGS_UPDATED') {
         fetch('/api/settings').then(res => res.json()).then(settings => {
           if (settings.language) setLanguage(settings.language as Language);
+          if (settings.store_name) setBusinessName(settings.store_name);
         });
       }
     };
@@ -91,7 +94,7 @@ export default function PriceChecker() {
             <h1 className="text-4xl font-black tracking-tighter uppercase">{t.price_checker_title}</h1>
           </div>
           <div className="text-right">
-            <p className="text-xs font-black uppercase opacity-50 tracking-widest">OmniPOS System</p>
+            <p className="text-xs font-black uppercase opacity-50 tracking-widest">{businessName || 'Price Checker'}</p>
             <p className="text-lg font-bold">Price Checker Terminal</p>
           </div>
         </header>

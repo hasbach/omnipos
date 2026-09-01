@@ -210,6 +210,44 @@ function launchMain(config) {
     win?.close();
   });
 
+  // Silent printing IPC — the receipt-printing fallback (usePos.ts) calls this when no ESC/POS
+  // printer (network/USB — see server/printing/transport.ts) is configured, or a direct print to
+  // one failed. Renders the given HTML off-screen and prints it to the OS default printer with
+  // silent:true, so no Windows print dialog interrupts a normal sale — that dialog was the actual
+  // reported bug, not a missing printing architecture.
+  //
+  // webContents.print()'s callback can simply never fire when the machine has no printer at all
+  // (confirmed in testing — Windows' print pipeline hangs instead of failing fast), so this forces
+  // the hidden window closed and resolves after a timeout rather than leaking a window + a stuck
+  // print job every time a printerless machine hits Print.
+  ipcMain.removeHandler('print:silent-html');
+  ipcMain.handle('print:silent-html', async (event, { html }) => {
+    return new Promise((resolve) => {
+      const printWin = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(giveUp);
+        // destroy(), not close() — with a print job stuck in Chromium's pipeline (the same
+        // condition that makes the callback never fire on its own), close() alone was observed
+        // to leave the hidden window open indefinitely. destroy() forces it regardless.
+        if (!printWin.isDestroyed()) printWin.destroy();
+        resolve(result);
+      };
+      const giveUp = setTimeout(() => finish({ success: false, error: 'Printing timed out' }), 10000);
+      printWin.webContents.once('did-finish-load', () => {
+        printWin.webContents.print({ silent: true, margins: { marginType: 'none' } }, (success, failureReason) => {
+          finish({ success, error: success ? null : failureReason });
+        });
+      });
+      printWin.webContents.once('did-fail-load', (_e, _code, description) => {
+        finish({ success: false, error: description || 'Failed to render receipt for printing' });
+      });
+      printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    });
+  });
+
   if (config.mode === 'host') {
     // HOST MODE: start local server, then load it
     startLocalServer(config, () => {

@@ -72,6 +72,7 @@ export default function Reports() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedStakeholder, setSelectedStakeholder] = useState('');
+  const [businessName, setBusinessName] = useState('');
 
   // Builder Filters
   const [builderFilters, setBuilderFilters] = useState({
@@ -99,13 +100,18 @@ export default function Reports() {
     fetch('/api/stakeholders')
       .then(res => res.json())
       .then(data => setStakeholders(data));
-    
+
     fetch('/api/products')
       .then(res => res.json())
       .then(data => {
         setProducts(data);
         setCategories(['All', ...new Set(data.map((p: any) => p.category))].filter(Boolean) as string[]);
       });
+
+    // For the printed report header — the business's own name, not the app's.
+    fetch('/api/settings')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => data?.store_name && setBusinessName(data.store_name));
   }, []);
 
   const customQueries = [
@@ -388,7 +394,7 @@ export default function Reports() {
       <div className="bg-app-surface border border-app-border rounded-3xl overflow-hidden min-h-[400px] shadow-sm print:border-none print:shadow-none print:rounded-none">
         <div id="printable-report">
           <div className="hidden print:block mb-8 border-b-2 border-app-ink pb-4">
-            <h1 className="text-2xl font-black uppercase tracking-tighter">OmniPOS Business Report</h1>
+            <h1 className="text-2xl font-black uppercase tracking-tighter">{businessName || 'Business'} Report</h1>
             <p className="text-xs font-bold uppercase tracking-widest opacity-50">
               {reportOptions.find(o => o.id === reportType)?.name} - {new Date().toLocaleDateString()}
             </p>
