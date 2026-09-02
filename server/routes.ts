@@ -33,6 +33,17 @@ function tenantUserId(tenantId: number, requested: any): number | null {
   return first ? first.id : null;
 }
 
+// This is a local desktop app running on the store's own PC, so "today" for cash flow / cashier
+// shifts / settlement must be the machine's LOCAL calendar day, not UTC. `created_at` columns are
+// stored as SQLite CURRENT_TIMESTAMP (UTC), so every comparison against them needs the matching
+// `date(created_at, 'localtime')` — see /api/cash-flow, /api/cash-flow/summary, /api/tenant/cashout.
+// Without this, the business day flips at UTC midnight (3am in Lebanon/EEST), not local midnight,
+// and cash movements made after that silently drop out of "today's" register.
+function localToday(): string {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+}
+
 // End-of-Day settlement moves rows out of `transactions`/`transaction_items`/`payments` into
 // `archived_transactions`/`archived_transaction_items`/`archived_payments` and deletes them from
 // the live tables (see /api/tenant/settlement below). Every read path that lists or searches
@@ -546,6 +557,15 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       db.prepare("DELETE FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)").run(tenantId);
       db.prepare("DELETE FROM transactions WHERE tenant_id = ?").run(tenantId);
 
+      // Archive manual cash movements before clearing them, same as transactions above — settlement
+      // used to just delete these with no trace anywhere, which meant every itemized cash-in/out
+      // and its reason was permanently unrecoverable after every settlement.
+      db.prepare(`
+        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at)
+        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at
+        FROM cash_flow WHERE tenant_id = ?
+      `).run(tenantId);
+
       // Clear manual cash movements so everything resets to zero
       db.prepare("DELETE FROM cash_flow WHERE tenant_id = ?").run(tenantId);
 
@@ -603,33 +623,33 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const { opening_balance, actual_cash, notes } = req.body;
 
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = localToday();
 
       // Calculate this user's cash sales today
       const cashSales = db.prepare(`
         SELECT IFNULL(SUM(p.amount / p.exchange_rate), 0) as total
         FROM payments p JOIN transactions t ON p.transaction_id = t.id
-        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'sale' AND p.method = 'cash' AND date(p.created_at) = ?
+        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'sale' AND p.method = 'cash' AND date(p.created_at, 'localtime') = ?
       `).get(tenantId, userId, today) as any;
 
       const cashRefunds = db.prepare(`
         SELECT IFNULL(SUM(p.amount / p.exchange_rate), 0) as total
         FROM payments p JOIN transactions t ON p.transaction_id = t.id
-        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'refund' AND p.method = 'cash' AND date(p.created_at) = ?
+        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'refund' AND p.method = 'cash' AND date(p.created_at, 'localtime') = ?
       `).get(tenantId, userId, today) as any;
 
       const cashPurchases = db.prepare(`
         SELECT IFNULL(SUM(p.amount / p.exchange_rate), 0) as total
         FROM payments p JOIN transactions t ON p.transaction_id = t.id
-        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'purchase' AND p.method = 'cash' AND date(p.created_at) = ?
+        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'purchase' AND p.method = 'cash' AND date(p.created_at, 'localtime') = ?
       `).get(tenantId, userId, today) as any;
 
       // Cash in/out by this user
       const cashFlow = db.prepare(`
-        SELECT 
+        SELECT
           IFNULL(SUM(CASE WHEN type = 'in' THEN amount / exchange_rate ELSE 0 END), 0) as total_in,
           IFNULL(SUM(CASE WHEN type = 'out' THEN amount / exchange_rate ELSE 0 END), 0) as total_out
-        FROM cash_flow WHERE tenant_id = ? AND user_id = ? AND date(created_at) = ?
+        FROM cash_flow WHERE tenant_id = ? AND user_id = ? AND date(created_at, 'localtime') = ?
       `).get(tenantId, userId, today) as any;
 
       const sales = cashSales.total;
@@ -665,7 +685,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   // Get today's cashier shifts
   app.get("/api/tenant/cashier-shifts", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const date = req.query.date || new Date().toISOString().split('T')[0];
+    const date = req.query.date || localToday();
     const shifts = db.prepare(`
       SELECT cs.*, u.name as user_name 
       FROM cashier_shifts cs 
@@ -1708,20 +1728,31 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   // Cash Flow & Reports
   app.get("/api/cash-flow/summary", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const today = new Date().toISOString().split('T')[0];
+    const today = localToday();
 
-    // Opening balance carries over the previous day's counted cash. Reports dated today are
-    // excluded so that right after an End-of-Day settlement (which files a report for today)
-    // the day zeroes out instead of re-showing the just-settled cash as the opening float.
-    const lastReport = db.prepare("SELECT actual_balance FROM daily_reports WHERE tenant_id = ? AND date < ? ORDER BY date DESC LIMIT 1").get(tenantId, today) as any;
-    const openingBalance = lastReport ? lastReport.actual_balance : 0;
+    // Opening balance carries over the last COUNTED cash from before today — whichever of the two
+    // close-out actions happened most recently: the routine per-shift "Cash Out" (cashier_shifts,
+    // written every day) or the rarer admin "Complete Settlement" (daily_reports). Only reading
+    // daily_reports here would leave the opening balance stuck at 0 for shops that only ever cash
+    // out and rarely run a full settlement. Rows dated today are excluded so that right after an
+    // End-of-Day settlement the day zeroes out instead of re-showing the just-settled cash as the
+    // opening float.
+    const lastCounted = db.prepare(`
+      SELECT actual_balance FROM (
+        SELECT actual_balance, date, created_at FROM daily_reports WHERE tenant_id = ? AND date < ?
+        UNION ALL
+        SELECT actual_cash as actual_balance, date, created_at FROM cashier_shifts WHERE tenant_id = ? AND date < ?
+      )
+      ORDER BY date DESC, created_at DESC LIMIT 1
+    `).get(tenantId, today, tenantId, today) as any;
+    const openingBalance = lastCounted ? lastCounted.actual_balance : 0;
 
     // Get cash sales today
     const cashSales = db.prepare(`
     SELECT SUM(p.amount / p.exchange_rate) as total
     FROM payments p
     JOIN transactions t ON p.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'sale' AND p.method = 'cash' AND date(p.created_at) = ?
+    WHERE t.tenant_id = ? AND t.type = 'sale' AND p.method = 'cash' AND date(p.created_at, 'localtime') = ?
   `).get(tenantId, today) as any;
 
     // Get cash refunds today
@@ -1729,7 +1760,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     SELECT SUM(p.amount / p.exchange_rate) as total
     FROM payments p
     JOIN transactions t ON p.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'refund' AND p.method = 'cash' AND date(p.created_at) = ?
+    WHERE t.tenant_id = ? AND t.type = 'refund' AND p.method = 'cash' AND date(p.created_at, 'localtime') = ?
   `).get(tenantId, today) as any;
 
     // Get cash purchases today
@@ -1737,16 +1768,16 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     SELECT SUM(p.amount / p.exchange_rate) as total
     FROM payments p
     JOIN transactions t ON p.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'purchase' AND p.method = 'cash' AND date(p.created_at) = ?
+    WHERE t.tenant_id = ? AND t.type = 'purchase' AND p.method = 'cash' AND date(p.created_at, 'localtime') = ?
   `).get(tenantId, today) as any;
 
     // Get cash in/out today
     const cashFlow = db.prepare(`
-    SELECT 
+    SELECT
       SUM(CASE WHEN type = 'in' THEN amount / exchange_rate ELSE 0 END) as total_in,
       SUM(CASE WHEN type = 'out' THEN amount / exchange_rate ELSE 0 END) as total_out
     FROM cash_flow
-    WHERE tenant_id = ? AND date(created_at) = ?
+    WHERE tenant_id = ? AND date(created_at, 'localtime') = ?
   `).get(tenantId, today) as any;
 
     const totalSales = cashSales?.total || 0;
@@ -1827,8 +1858,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.get("/api/cash-flow", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const today = new Date().toISOString().split('T')[0];
-    const entries = db.prepare("SELECT * FROM cash_flow WHERE tenant_id = ? AND date(created_at) = ? ORDER BY created_at DESC").all(tenantId, today);
+    const today = localToday();
+    const entries = db.prepare("SELECT * FROM cash_flow WHERE tenant_id = ? AND date(created_at, 'localtime') = ? ORDER BY created_at DESC").all(tenantId, today);
     res.json(entries);
   });
 
@@ -1836,7 +1867,6 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const userId = tenantUserId(tenantId, req.body.user_id);
     const {
-      date,
       opening_balance,
       total_sales,
       total_purchases,
@@ -1847,10 +1877,15 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       notes
     } = req.body;
 
+    // The date is decided here, not trusted from the client — the frontend used to compute it
+    // with `.toISOString()`, which is UTC and drifts from the store's local business day (see
+    // localToday()). Report dates and cash-flow "today" must agree or the opening-balance carry
+    // in /api/cash-flow/summary silently breaks.
+    const date = localToday();
     const difference = actual_balance - closing_balance;
 
     const result = db.prepare(`
-    INSERT INTO daily_reports 
+    INSERT INTO daily_reports
     (tenant_id, user_id, date, opening_balance, total_sales, total_purchases, total_cash_in, total_cash_out, closing_balance, actual_balance, difference, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(tenantId, userId, date, opening_balance, total_sales, total_purchases, total_cash_in, total_cash_out, closing_balance, actual_balance, difference, notes);

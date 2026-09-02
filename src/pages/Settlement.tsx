@@ -141,7 +141,7 @@ export default function Settlement() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           user_id: selectedUserId,
-          opening_balance: 0, // This could be made an input field if needed
+          opening_balance: summary?.openingBalance || 0,
           actual_cash: totalActualUSD,
           notes: notesWithBreakdown
         })
@@ -168,8 +168,12 @@ export default function Settlement() {
       return;
     }
 
+    // Local calendar date for the printed receipt — the server decides the authoritative
+    // stored date itself (see localToday() in server/routes.ts), this is display-only.
+    const localDate = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0];
+
     const report = {
-      date: new Date().toISOString().split('T')[0],
+      date: localDate,
       user_id: selectedUserId,
       opening_balance: summary.openingBalance,
       total_sales: summary.totalSales,

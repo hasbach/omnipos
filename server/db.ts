@@ -226,6 +226,23 @@ db.exec(`
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
 
+  -- End-of-day settlement used to just DELETE FROM cash_flow with no history kept anywhere,
+  -- unlike transactions (which move to archived_transactions first). Settlement now archives here
+  -- before deleting — see /api/tenant/settlement in server/routes.ts. Local-only, not synced to
+  -- the cloud (same convention as archived_transactions/archived_payments in sync.ts).
+  CREATE TABLE IF NOT EXISTS archived_cash_flow (
+    id INTEGER PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    user_id INTEGER,
+    type TEXT,
+    amount REAL NOT NULL,
+    currency TEXT,
+    exchange_rate REAL,
+    reason TEXT,
+    created_at DATETIME,
+    archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS daily_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER NOT NULL,
