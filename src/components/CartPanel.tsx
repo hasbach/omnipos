@@ -100,7 +100,7 @@ return (
               {cart.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center opacity-20 italic">
                   <Package size={64} strokeWidth={1} />
-                  <p className="mt-4">Cart is empty</p>
+                  <p className="mt-4">{t.cart_empty}</p>
                 </div>
               ) : (
                 cart.map((item: any) => (
@@ -122,13 +122,13 @@ return (
                         <div className="flex items-center gap-1">
                           <button 
                             onClick={() => {
-                              const val = prompt('Enter discount value:', item.discount?.value.toString() || '0');
+                              const val = prompt(t.enter_discount_value, item.discount?.value.toString() || '0');
                               if (val !== null) applyItemDiscount(item.id, item.discount?.type || 'percentage', parseFloat(val));
                             }}
                             className={`p-1 rounded text-[10px] font-bold border ${item.discount?.value ? 'bg-orange-500 text-white border-orange-500' : 'border-app-border/20 opacity-30 hover:opacity-100'}`}
                           >
                             <Tag size={10} className="inline mr-1" />
-                            {item.discount?.value ? (item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`) : 'DISC'}
+                            {item.discount?.value ? (item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`) : t.discount_short}
                           </button>
                           {item.discount?.value ? (
                             <button 
@@ -178,19 +178,19 @@ return (
             <div className="flex justify-between items-start">
               <div className="space-y-4">
                 <div>
-                  <p className="text-xs uppercase tracking-widest opacity-50 mb-1">Total Amount</p>
+                  <p className="text-xs uppercase tracking-widest opacity-50 mb-1">{t.total_amount}</p>
                   <div className="flex items-baseline gap-2">
                     <span className="text-4xl font-bold tracking-tighter">${totalUSD.toFixed(2)}</span>
                     <span className="text-xl opacity-40 font-mono">USD</span>
                     <span className="text-xl font-bold text-emerald-600 ml-4">{totalLBP.toLocaleString()} LL</span>
                   </div>
                   {subtotalUSD !== totalUSD && (
-                    <p className="text-xs opacity-50 line-through font-mono mt-1">Subtotal: ${subtotalUSD.toFixed(2)}</p>
+                    <p className="text-xs opacity-50 line-through font-mono mt-1">{t.subtotal}: ${subtotalUSD.toFixed(2)}</p>
                   )}
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase opacity-50">Global Discount:</span>
+                  <span className="text-[10px] font-bold uppercase opacity-50">{t.global_discount_label}</span>
                   <div className="flex items-center gap-1 bg-app-bg/50 p-1 rounded border border-app-border/10">
                     <button 
                       onClick={() => setGlobalDiscount((prev: any) => ({ ...prev, type: prev.type === 'percentage' ? 'fixed' : 'percentage' }))}
@@ -210,7 +210,7 @@ return (
               
               <div className="text-right">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs opacity-50">Display Currency:</span>
+                  <span className="text-xs opacity-50">{t.display_currency_label}</span>
                   <div className="flex gap-1">
                     {currencies.map((c: any) => (
                       <button
@@ -235,9 +235,9 @@ return (
                 onClick={handleQuickCash}
                 className="flex-1 py-4 bg-emerald-600 text-white font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
               >
-                Quick Cash (F3) <Banknote size={20} />
+                {t.quick_cash} (F3) <Banknote size={20} />
               </button>
-              <button 
+              <button
                 disabled={cart.length === 0 || isProcessing}
                 onClick={() => {
                   setPaymentCurrency(selectedCurrency);
@@ -245,7 +245,7 @@ return (
                 }}
                 className="flex-1 py-4 bg-app-ink text-app-bg font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:opacity-90 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
               >
-                Checkout (F1) <ArrowRight size={20} />
+                {t.checkout_key} (F1) <ArrowRight size={20} />
               </button>
             </div>
           </div>

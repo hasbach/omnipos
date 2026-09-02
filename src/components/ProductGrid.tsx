@@ -37,29 +37,29 @@ return (
           <div className="p-4 border-b border-app-border/10 flex flex-col gap-4 flex-shrink-0">
             <div className="flex items-center gap-2">
               <Package size={18} className="opacity-50" />
-              <h2 className="text-xs font-bold uppercase tracking-widest">Product Catalog</h2>
+              <h2 className="text-xs font-bold uppercase tracking-widest">{t.product_catalog}</h2>
             </div>
-            
+
             <div className="space-y-3">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40" size={14} />
-                <input 
+                <input
                   type="text"
-                  placeholder="Search products..."
+                  placeholder={t.search_products}
                   className="w-full pl-9 pr-3 py-2 bg-app-surface border border-app-border/20 rounded text-xs focus:border-app-border outline-none transition-all"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
-              
-              <div className="flex flex-wrap gap-1">
+
+              <div className="flex flex-wrap gap-2">
                 {categories.map(cat => (
                   <button
                     key={cat}
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-2 py-1 text-[9px] font-bold uppercase tracking-tighter border transition-all rounded ${selectedCategory === cat ? 'bg-app-ink text-app-bg border-app-border' : 'border-app-border/10 opacity-50 hover:opacity-100 hover:border-app-border'}`}
+                    className={`px-4 py-2.5 text-xs font-bold uppercase tracking-tight border transition-all rounded-lg ${selectedCategory === cat ? 'bg-app-ink text-app-bg border-app-border' : 'border-app-border/10 opacity-50 hover:opacity-100 hover:border-app-border'}`}
                   >
-                    {cat}
+                    {cat === 'All' ? t.category_all : cat}
                   </button>
                 ))}
               </div>
@@ -83,7 +83,7 @@ return (
             ))}
             {filteredProducts.length === 0 && (
               <div className="col-span-2 py-8 text-center opacity-20 italic text-xs">
-                No products found
+                {t.no_products_found}
               </div>
             )}
           </div>
@@ -91,20 +91,20 @@ return (
           {/* Pagination Controls - always visible at bottom */}
           {totalPages > 1 && (
             <div className="p-4 border-t border-app-border/10 flex justify-between items-center bg-app-surface/30 flex-shrink-0">
-              <button 
+              <button
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                 className="px-3 py-1 bg-app-ink text-app-bg text-[10px] font-black uppercase tracking-widest rounded disabled:opacity-20"
               >
-                Prev
+                {t.prev}
               </button>
-              <span className="text-[10px] font-black opacity-50">Page {currentPage} of {totalPages}</span>
-              <button 
+              <span className="text-[10px] font-black opacity-50">{t.page} {currentPage} {t.of} {totalPages}</span>
+              <button
                 disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
                 className="px-3 py-1 bg-app-ink text-app-bg text-[10px] font-black uppercase tracking-widest rounded disabled:opacity-20"
               >
-                Next
+                {t.next}
               </button>
             </div>
           )}

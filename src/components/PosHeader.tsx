@@ -48,13 +48,13 @@ return (
               onClick={handleLogout}
               className="text-[10px] font-mono uppercase hover:text-red-500 transition-colors"
             >
-              Logout
+              {t.logout}
             </button>
           </div>
           <div className="flex items-center gap-2 text-sm font-mono">
-            <span className="opacity-50 italic">F1 Checkout</span>
-            <span className="opacity-50 italic">F2 Scan</span>
-            <span className="opacity-50 italic">F3 Cash</span>
+            <span className="opacity-50 italic">F1 {t.checkout_key}</span>
+            <span className="opacity-50 italic">F2 {t.scan_key}</span>
+            <span className="opacity-50 italic">F3 {t.cash_key}</span>
           </div>
           <div className="h-8 w-[1px] bg-app-border opacity-10"></div>
           <div className="flex items-center gap-2 relative" ref={customerDropdownRef}>
@@ -65,7 +65,7 @@ return (
                 className="bg-app-bg/50 border border-app-border/20 px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 hover:border-app-border transition-all min-w-[150px] justify-between"
               >
                 <span className="truncate">
-                  {stakeholders.find(s => s.id === selectedStakeholder)?.name || 'Select Customer'}
+                  {stakeholders.find(s => s.id === selectedStakeholder)?.name || t.select_customer}
                 </span>
                 <Plus size={12} className={`transition-transform ${showCustomerDropdown ? 'rotate-45' : ''}`} />
               </button>
@@ -84,7 +84,7 @@ return (
                         <input 
                           autoFocus
                           type="text"
-                          placeholder="Search customers..."
+                          placeholder={t.search_customers}
                           className="w-full pl-7 pr-2 py-1.5 bg-app-surface border border-app-border/20 rounded-md text-xs outline-none focus:border-app-border transition-all"
                           value={customerSearchTerm}
                           onChange={(e) => setCustomerSearchTerm(e.target.value)}
@@ -96,7 +96,7 @@ return (
                         onClick={() => setShowAddCustomerModal(true)}
                         className="w-full text-left px-4 py-3 text-xs font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all flex items-center gap-2 border-b border-app-border/10"
                       >
-                        <Plus size={14} /> Add New Customer
+                        <Plus size={14} /> {t.add_new_customer}
                       </button>
                       {stakeholders
                         .filter(s => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase()))
@@ -119,7 +119,7 @@ return (
                           </button>
                         ))}
                       {stakeholders.filter(s => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase())).length === 0 && (
-                        <div className="p-4 text-center text-[10px] opacity-30 italic">No customers found</div>
+                        <div className="p-4 text-center text-[10px] opacity-30 italic">{t.no_customers_found}</div>
                       )}
                     </div>
                   </motion.div>
@@ -130,7 +130,7 @@ return (
             {showCustomerDropdown === false && selectedStakeholder && stakeholders.find((s: any) => s.id === selectedStakeholder)?.type === 'customer' && stakeholders.find((s: any) => s.id === selectedStakeholder)?.balance < 0 && (
               <button 
                 onClick={() => setShowDebtModal(true)}
-                title="Receive Payment"
+                title={t.receive_payment}
                 className="ml-1 p-1.5 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white rounded-lg transition-colors border border-emerald-500/20"
               >
                 <Banknote size={14} />
@@ -144,11 +144,11 @@ return (
           <div className="flex items-center gap-2">
             <div className="px-3 py-1.5 bg-app-surface border border-app-border rounded-lg flex items-center gap-2">
               <User size={14} className="opacity-50" />
-              <span className="text-[10px] font-black uppercase tracking-widest">{currentUser?.name || 'Cashier'}</span>
+              <span className="text-[10px] font-black uppercase tracking-widest">{currentUser?.name || t.cashier}</span>
             </div>
-            <button 
+            <button
               onClick={() => setCurrentUser(null)}
-              title="Lock Terminal"
+              title={t.lock_terminal}
               className="p-1.5 bg-red-500/10 text-red-500 border border-red-500/20 rounded-lg hover:bg-red-500 hover:text-white transition-all flex items-center justify-center"
             >
               <Shield size={16} />
@@ -159,7 +159,7 @@ return (
             onClick={() => setShowDailyHistory(true)}
             className="flex items-center gap-2 px-3 py-1.5 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
           >
-            <BarChart3 size={14} /> History
+            <BarChart3 size={14} /> {t.history}
           </button>
           <Link 
             to="/price-checker" 
