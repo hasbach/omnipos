@@ -59,12 +59,6 @@ import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
 
-export const CURRENCIES = [
-  { code: 'USD', symbol: '$', rate: 1 },
-  { code: 'EUR', symbol: '€', rate: 0.92 },
-  { code: 'LBP', symbol: 'LL', rate: 89500 },
-];
-
 export default function Settlement() {
   const [dailyReports, setDailyReports] = useState<any[]>([]);
   const [yearlyReports, setYearlyReports] = useState<any[]>([]);
@@ -72,8 +66,13 @@ export default function Settlement() {
   const [users, setUsers] = useState<any[]>([]);
   const parsedCashierId = parseInt(sessionStorage.getItem('currentCashierId') || '');
   const [selectedUserId, setSelectedUserId] = useState<number>(isNaN(parsedCashierId) ? 0 : parsedCashierId);
+  // Only USD (rate 1) is safe as a hardcoded fallback — the local-currency (e.g. LBP) rate must
+  // come from the tenant's own configured rate, fetched below, or a cash-out / settlement done
+  // before that fetch resolves would silently convert the counted drawer cash at a stale guessed
+  // rate instead of the real one.
+  const [currencies, setCurrencies] = useState<any[]>([{ code: 'USD', symbol: '$', rate: 1 }]);
   const [actualBalances, setActualBalances] = useState<Record<string, string>>(
-    CURRENCIES.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {})
+    currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {})
   );
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
@@ -84,12 +83,13 @@ export default function Settlement() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [dailyRes, yearlyRes, summaryRes, usersRes, shiftsRes] = await Promise.all([
+      const [dailyRes, yearlyRes, summaryRes, usersRes, shiftsRes, currenciesRes] = await Promise.all([
         fetch('/api/reports/daily'),
         fetch('/api/reports/yearly'),
         fetch('/api/cash-flow/summary'),
         fetch('/api/users'),
-        fetch('/api/tenant/cashier-shifts')
+        fetch('/api/tenant/cashier-shifts'),
+        fetch('/api/currencies')
       ]);
       if (dailyRes.ok) setDailyReports(await dailyRes.json());
       if (yearlyRes.ok) setYearlyReports(await yearlyRes.json());
@@ -100,6 +100,18 @@ export default function Settlement() {
         if (userData.length > 0 && !selectedUserId) setSelectedUserId(userData[0].id);
       }
       if (shiftsRes.ok) setCashierShifts(await shiftsRes.json());
+      if (currenciesRes.ok) {
+        const rows = await currenciesRes.json();
+        if (Array.isArray(rows) && rows.length > 0) {
+          setCurrencies(rows);
+          // Merge in any newly-seen currency codes without wiping amounts already typed in.
+          setActualBalances(prev => {
+            const merged = { ...prev };
+            rows.forEach((c: any) => { if (!(c.code in merged)) merged[c.code] = ''; });
+            return merged;
+          });
+        }
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -120,7 +132,7 @@ export default function Settlement() {
 
   const totalActualUSD = (Object.entries(actualBalances) as [string, string][]).reduce((sum, [code, val]) => {
     if (!val) return sum;
-    const currency = CURRENCIES.find(c => c.code === code);
+    const currency = currencies.find(c => c.code === code);
     return sum + (parseFloat(val) / (currency?.rate || 1));
   }, 0);
 
@@ -149,7 +161,7 @@ export default function Settlement() {
 
       if (res.ok) {
         const data = await res.json();
-        setActualBalances(CURRENCIES.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {}));
+        setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {}));
         setNotes('');
         fetchData();
         if (confirm('Cash out complete. Your shift has been recorded. Would you like to print the receipt?')) {
@@ -199,7 +211,7 @@ export default function Settlement() {
         const settleRes = await fetch('/api/tenant/settlement', { method: 'POST' });
         const settleData = settleRes.ok ? await settleRes.json().catch(() => null) : null;
 
-        setActualBalances(CURRENCIES.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {}));
+        setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {}));
         setNotes('');
         setShowAdminConfirm(false);
         fetchData();
@@ -342,7 +354,7 @@ export default function Settlement() {
 
                   <div className="space-y-3">
                     <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Actual Cash in Drawer</label>
-                    {CURRENCIES.map(c => (
+                    {currencies.map(c => (
                       <div key={c.code} className="flex items-center gap-3">
                         <div className="w-12 text-xs font-black opacity-50">{c.code}</div>
                         <input
@@ -350,7 +362,7 @@ export default function Settlement() {
                           step="0.01"
                           placeholder="0.00"
                           className="flex-1 p-3 bg-app-bg border border-app-border rounded-xl font-mono text-lg outline-none focus:border-app-ink transition-all"
-                          value={actualBalances[c.code]}
+                          value={actualBalances[c.code] ?? ''}
                           onChange={(e) => setActualBalances(prev => ({ ...prev, [c.code]: e.target.value }))}
                         />
                       </div>

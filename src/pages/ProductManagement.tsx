@@ -59,13 +59,6 @@ import { jsPDF } from 'jspdf';
 
 import 'jspdf-autotable';
 
-
-export const CURRENCIES = [
-  { code: 'USD', symbol: '$', rate: 1 },
-  { code: 'EUR', symbol: '€', rate: 0.92 },
-  { code: 'LBP', symbol: 'LL', rate: 89500 },
-];
-
 export default function ProductManagement() {
   const [products, setProducts] = useState<Product[]>([]);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> & { stockEntryMode?: 'units' | 'packages', stockInput?: number } | null>(null);

@@ -56,13 +56,6 @@ import { jsPDF } from 'jspdf';
 
 import 'jspdf-autotable';
 
-
-export const CURRENCIES = [
-  { code: 'USD', symbol: '$', rate: 1 },
-  { code: 'EUR', symbol: '€', rate: 0.92 },
-  { code: 'LBP', symbol: 'LL', rate: 89500 },
-];
-
 export default function StakeholderManagement() {
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [editing, setEditing] = useState<Partial<Stakeholder> | null>(null);

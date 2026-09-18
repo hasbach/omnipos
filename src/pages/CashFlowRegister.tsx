@@ -2,12 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Wallet, ArrowDownLeft, ArrowUpRight, Users } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-export const CURRENCIES = [
-  { code: 'USD', symbol: '$', rate: 1 },
-  { code: 'EUR', symbol: '€', rate: 0.92 },
-  { code: 'LBP', symbol: 'LL', rate: 89500 },
-];
-
 export default function CashFlowRegister() {
   const [entries, setEntries] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
@@ -25,19 +19,28 @@ export default function CashFlowRegister() {
   const [balDirection, setBalDirection] = useState<'collect' | 'pay'>('collect');
   const [balCurrencyCode, setBalCurrencyCode] = useState('USD');
 
-  const currentCurrency = CURRENCIES.find(c => c.code === selectedCurrencyCode) || CURRENCIES[0];
-  const balCurrency = CURRENCIES.find(c => c.code === balCurrencyCode) || CURRENCIES[0];
+  // Only USD (rate 1) is safe as a hardcoded fallback — anything else must come from the
+  // tenant's own configured rate, fetched below, or every entry recorded before that fetch
+  // resolves would silently use a stale guessed exchange rate instead of the real one.
+  const [currencies, setCurrencies] = useState<any[]>([{ code: 'USD', symbol: '$', rate: 1 }]);
+  const currentCurrency = currencies.find(c => c.code === selectedCurrencyCode) || currencies[0];
+  const balCurrency = currencies.find(c => c.code === balCurrencyCode) || currencies[0];
 
   const fetchData = useCallback(async () => {
     try {
-      const [entriesRes, summaryRes, stakeholdersRes] = await Promise.all([
+      const [entriesRes, summaryRes, stakeholdersRes, currenciesRes] = await Promise.all([
         fetch('/api/cash-flow'),
         fetch('/api/cash-flow/summary'),
         fetch('/api/stakeholders'),
+        fetch('/api/currencies'),
       ]);
       if (entriesRes.ok) setEntries(await entriesRes.json());
       if (summaryRes.ok) setSummary(await summaryRes.json());
       if (stakeholdersRes.ok) setStakeholders(await stakeholdersRes.json());
+      if (currenciesRes.ok) {
+        const rows = await currenciesRes.json();
+        if (Array.isArray(rows) && rows.length > 0) setCurrencies(rows);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -48,7 +51,7 @@ export default function CashFlowRegister() {
   useEffect(() => {
     fetchData();
     const handleSync = (e: any) => {
-      if (e.detail.type === 'CASH_FLOW_UPDATED' || e.detail.type === 'STAKEHOLDERS_UPDATED') {
+      if (e.detail.type === 'CASH_FLOW_UPDATED' || e.detail.type === 'STAKEHOLDERS_UPDATED' || e.detail.type === 'SETTINGS_UPDATED') {
         fetchData();
       }
     };
@@ -166,7 +169,7 @@ export default function CashFlowRegister() {
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Currency</label>
                   <div className="grid grid-cols-3 gap-2">
-                    {CURRENCIES.map(c => (
+                    {currencies.map(c => (
                       <button key={c.code} type="button" onClick={() => setSelectedCurrencyCode(c.code)}
                         className={`py-2 rounded-xl text-[10px] font-black border transition-all ${selectedCurrencyCode === c.code ? 'bg-app-ink text-app-bg border-app-ink' : 'bg-app-bg border-app-border opacity-50 hover:opacity-100'}`}>
                         {c.code}
@@ -241,7 +244,7 @@ export default function CashFlowRegister() {
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Currency</label>
                   <div className="grid grid-cols-3 gap-2">
-                    {CURRENCIES.map(c => (
+                    {currencies.map(c => (
                       <button key={c.code} type="button" onClick={() => setBalCurrencyCode(c.code)}
                         className={`py-2 rounded-xl text-[10px] font-black border transition-all ${balCurrencyCode === c.code ? 'bg-app-ink text-app-bg border-app-ink' : 'bg-app-bg border-app-border opacity-50 hover:opacity-100'}`}>
                         {c.code}

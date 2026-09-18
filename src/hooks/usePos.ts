@@ -273,7 +273,14 @@ const [products, setProducts] = useState<Product[]>([]);
           }
         }
       })
-      .catch(err => console.error('Currencies fetch error:', err));
+      .catch(err => {
+        // Until this succeeds, selectedCurrency/paymentCurrency stay on the hardcoded USD/LBP
+        // placeholder rate — a real sale could go through at that stale guessed rate instead of
+        // the tenant's configured one. Retry rather than leaving the terminal stuck on it for
+        // the rest of the session over a single transient failure.
+        console.error('Currencies fetch error, retrying shortly:', err);
+        setTimeout(() => fetchCurrencies(), 5000);
+      });
   }, []);
 
 

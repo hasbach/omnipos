@@ -2,12 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Search, ShoppingCart, Eye, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-const CURRENCIES = [
-  { code: 'USD', symbol: '$', rate: 1 },
-  { code: 'EUR', symbol: '€', rate: 0.92 },
-  { code: 'LBP', symbol: 'LL', rate: 89500 },
-];
-
 export default function PurchaseManagement() {
   const [purchases, setPurchases] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

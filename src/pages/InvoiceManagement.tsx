@@ -57,19 +57,20 @@ import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
 
-export const CURRENCIES = [
-  { code: 'USD', symbol: '$', rate: 1 },
-  { code: 'EUR', symbol: '€', rate: 0.92 },
-  { code: 'LBP', symbol: 'LL', rate: 89500 },
-];
-
 export default function InvoiceManagement() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
-  
+  // Only USD (rate 1) is safe as a hardcoded fallback — the local-currency (e.g. LBP) rate must
+  // come from the tenant's own configured rate, fetched below, or invoices priced before that
+  // fetch resolves would silently use a stale guessed exchange rate instead of the real one.
+  const [currencies, setCurrencies] = useState<any[]>([{ code: 'USD', symbol: '$', rate: 1 }]);
+  // Any non-USD currency IS the local currency the item-level price_lbp figures track, regardless
+  // of the code the merchant chose for it (matches the same convention usePos.ts uses).
+  const lbpRate = currencies.find(c => c.code !== 'USD')?.rate || 89500;
+
   // Form state
   const [selectedStakeholder, setSelectedStakeholder] = useState<number>(1);
   const [invoiceType, setInvoiceType] = useState<'sale' | 'purchase'>('sale');
@@ -83,8 +84,8 @@ export default function InvoiceManagement() {
   }[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit'>('cash');
   const [paidAmount, setPaidAmount] = useState<number>(0);
-  const [invoiceCurrency, setInvoiceCurrency] = useState(CURRENCIES[0]);
-  const [paymentCurrency, setPaymentCurrency] = useState(CURRENCIES[0]);
+  const [invoiceCurrency, setInvoiceCurrency] = useState(currencies[0]);
+  const [paymentCurrency, setPaymentCurrency] = useState(currencies[0]);
   const [globalDiscount, setGlobalDiscount] = useState<{ type: 'percentage' | 'fixed', value: number }>({ type: 'percentage', value: 0 });
   const [globalTax, setGlobalTax] = useState<{ type: 'percentage' | 'fixed', value: number }>({ type: 'percentage', value: 0 });
   const [itemSearch, setItemSearch] = useState('');
@@ -95,10 +96,13 @@ export default function InvoiceManagement() {
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
 
-  useEffect(() => { 
+  useEffect(() => {
     fetchInvoices();
     fetch('/api/products').then(res => res.json()).then(setProducts);
     fetch('/api/stakeholders').then(res => res.json()).then(setStakeholders);
+    fetch('/api/currencies').then(res => res.ok ? res.json() : null).then(rows => {
+      if (Array.isArray(rows) && rows.length > 0) setCurrencies(rows);
+    }).catch(err => console.error('Currencies fetch error:', err));
   }, []);
 
   useEffect(() => { fetchInvoices(); }, [filterType, filterStakeholder, filterDateFrom, filterDateTo]);
@@ -129,14 +133,14 @@ export default function InvoiceManagement() {
       setEditingId(id);
       setInvoiceType(tx.type || 'sale');
       setSelectedStakeholder(tx.stakeholder_id || 1);
-      setInvoiceCurrency(CURRENCIES.find(c => c.code === tx.currency) || CURRENCIES[0]);
+      setInvoiceCurrency(currencies.find(c => c.code === tx.currency) || currencies[0]);
       setGlobalDiscount(tx.discount || { type: 'percentage', value: 0 });
       setGlobalTax({ type: tx.tax_type || 'percentage', value: tx.tax_value || 0 });
       setInvoiceItems(tx.items.map((item: any) => ({
         product_id: item.product_id,
         quantity: item.quantity,
         price: item.unit_price,
-        price_lbp: Math.round(item.unit_price * 89500),
+        price_lbp: Math.round(item.unit_price * lbpRate),
         discount: { type: item.discount_type || 'percentage', value: item.discount_value || 0 },
         tax: { type: item.tax_type || 'percentage', value: item.tax_value || 0 },
       })));
@@ -147,7 +151,7 @@ export default function InvoiceManagement() {
       if (tx.payments && tx.payments.length > 0) {
         const firstPay = tx.payments[0];
         setPaymentMethod(firstPay.method || 'cash');
-        setPaymentCurrency(CURRENCIES.find(c => c.code === firstPay.currency) || CURRENCIES[0]);
+        setPaymentCurrency(currencies.find(c => c.code === firstPay.currency) || currencies[0]);
       }
       setIsAdding(true);
     } catch (err) { console.error(err); }
@@ -278,7 +282,7 @@ export default function InvoiceManagement() {
         product_id: p.id, 
         quantity: 1, 
         price: initialPrice,
-        price_lbp: Math.round(initialPrice * 89500),
+        price_lbp: Math.round(initialPrice * lbpRate),
         discount: { type: 'percentage', value: 0 },
         tax: { type: 'percentage', value: 0 }
       }]);
@@ -295,20 +299,20 @@ export default function InvoiceManagement() {
           ...newItems[index], 
           product_id: p.id, 
           price: initialPrice,
-          price_lbp: Math.round(initialPrice * 89500)
+          price_lbp: Math.round(initialPrice * lbpRate)
         };
       }
     } else if (field === 'price') {
       const usd = parseFloat(value) || 0;
-      newItems[index] = { ...newItems[index], price: usd, price_lbp: Math.round(usd * 89500) };
+      newItems[index] = { ...newItems[index], price: usd, price_lbp: Math.round(usd * lbpRate) };
     } else if (field === 'price_lbp') {
       const lbp = parseFloat(value) || 0;
-      newItems[index] = { ...newItems[index], price_lbp: lbp, price: parseFloat((lbp / 89500).toFixed(2)) };
+      newItems[index] = { ...newItems[index], price_lbp: lbp, price: parseFloat((lbp / lbpRate).toFixed(2)) };
     } else if (field === 'line_total') {
       const total = parseFloat(value) || 0;
       const qty = newItems[index].quantity || 1;
       const usd = total / qty;
-      newItems[index] = { ...newItems[index], price: usd, price_lbp: Math.round(usd * 89500) };
+      newItems[index] = { ...newItems[index], price: usd, price_lbp: Math.round(usd * lbpRate) };
     } else if (field === 'quantity') {
       const qty = parseInt(value) || 0;
       newItems[index] = { ...newItems[index], quantity: qty };
@@ -458,9 +462,9 @@ export default function InvoiceManagement() {
                   <select 
                     className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
                     value={invoiceCurrency.code}
-                    onChange={e => setInvoiceCurrency(CURRENCIES.find(c => c.code === e.target.value) || CURRENCIES[0])}
+                    onChange={e => setInvoiceCurrency(currencies.find(c => c.code === e.target.value) || currencies[0])}
                   >
-                    {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code} ({c.symbol})</option>)}
+                    {currencies.map(c => <option key={c.code} value={c.code}>{c.code} ({c.symbol})</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -497,9 +501,9 @@ export default function InvoiceManagement() {
                   <select 
                     className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
                     value={paymentCurrency.code}
-                    onChange={e => setPaymentCurrency(CURRENCIES.find(c => c.code === e.target.value) || CURRENCIES[0])}
+                    onChange={e => setPaymentCurrency(currencies.find(c => c.code === e.target.value) || currencies[0])}
                   >
-                    {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code} ({c.symbol})</option>)}
+                    {currencies.map(c => <option key={c.code} value={c.code}>{c.code} ({c.symbol})</option>)}
                   </select>
                 </div>
               </div>
@@ -534,7 +538,7 @@ export default function InvoiceManagement() {
                             const initialPrice = invoiceType === 'purchase' ? (p.cost || 0) : p.price;
                             setInvoiceItems(prev => [...prev, {
                               product_id: p.id, quantity: 1, price: initialPrice,
-                              price_lbp: Math.round(initialPrice * 89500),
+                              price_lbp: Math.round(initialPrice * lbpRate),
                               discount: { type: 'percentage' as const, value: 0 },
                               tax: { type: 'percentage' as const, value: 0 },
                             }]);
