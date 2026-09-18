@@ -691,7 +691,9 @@ const [products, setProducts] = useState<Product[]>([]);
             body: JSON.stringify({ transactionId: transaction.id, printerId: receiptPrinter.id, openDrawer })
           });
           if (printRes.ok) return;
-          console.error('Thermal receipt print failed, falling back to browser print');
+          const errBody = await printRes.json().catch(() => null);
+          console.error('Thermal receipt print failed, falling back to browser print:', errBody?.error);
+          alert(`Receipt printer "${receiptPrinter.name}" failed to print (${errBody?.error || 'unknown error'}). Falling back to a basic print — check the printer is online and its name/address in Settings → Printers still matches.`);
         }
       } catch (err) {
         console.error('Thermal receipt print error, falling back to browser print:', err);

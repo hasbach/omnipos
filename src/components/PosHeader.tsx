@@ -33,15 +33,15 @@ export default function PosHeader() {
   barcodeRef, customerDropdownRef, localExpired, setShowDebtModal
   } = pos as any;
 return (
-<header className="border-b border-app-border p-4 flex justify-between items-center bg-app-surface transition-colors duration-300">
-        <div className="flex items-center gap-3">
+<header className="border-b border-app-border p-4 flex flex-wrap gap-y-2 justify-between items-center bg-app-surface transition-colors duration-300">
+        <div className="flex items-center gap-3 flex-shrink-0">
           <div className="bg-app-ink text-app-bg p-2 rounded transition-colors duration-300">
             <ShoppingCart size={24} />
           </div>
           <h1 className="text-xl font-bold tracking-tight uppercase">OmniPOS <span className="text-xs font-normal opacity-50">v1.0</span></h1>
         </div>
-        
-        <div className="flex items-center gap-6">
+
+        <div className="flex items-center flex-wrap justify-end gap-3 gap-y-2">
           <div className="flex flex-col items-end mr-2">
             <span className="text-xs font-bold uppercase opacity-50">{tenant.name}</span>
             <button 
@@ -56,7 +56,7 @@ return (
             <span className="opacity-50 italic">F2 {t.scan_key}</span>
             <span className="opacity-50 italic">F3 {t.cash_key}</span>
           </div>
-          <div className="h-8 w-[1px] bg-app-border opacity-10"></div>
+          <div className="h-8 w-[1px] bg-app-border opacity-10 flex-shrink-0"></div>
           <div className="flex items-center gap-2 relative" ref={customerDropdownRef}>
             <User size={18} className="opacity-50" />
             <div className="relative">
@@ -138,7 +138,7 @@ return (
             )}
             
           </div>
-          <div className="h-8 w-[1px] bg-app-border opacity-10"></div>
+          <div className="h-8 w-[1px] bg-app-border opacity-10 flex-shrink-0"></div>
           
           {/* User Status & Lock */}
           <div className="flex items-center gap-2">
