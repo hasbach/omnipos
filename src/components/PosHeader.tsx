@@ -1,9 +1,9 @@
 import React from 'react';
-import { 
-  Search, ShoppingCart, User, CreditCard, Banknote, Package, History, 
-  Plus, Minus, Trash2, Barcode, ArrowRight, Settings, DollarSign, Sun, 
-  Moon, Percent, Tag, Printer, CheckCircle2, LayoutDashboard, BarChart3, 
-  Calendar, X, RotateCcw, Shield, AlertTriangle, RefreshCw, Clock
+import {
+  Search, ShoppingCart, User, CreditCard, Banknote, Package, History,
+  Plus, Minus, Trash2, Barcode, ArrowRight, Settings, DollarSign, Sun,
+  Moon, Percent, Tag, Printer, CheckCircle2, LayoutDashboard, BarChart3,
+  Calendar, X, RotateCcw, Shield, AlertTriangle, RefreshCw, Clock, Menu
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
@@ -32,31 +32,62 @@ export default function PosHeader() {
   totalSelected, categories, filteredProducts, totalPages, paginatedProducts, t, socketRef, 
   barcodeRef, customerDropdownRef, localExpired, setShowDebtModal
   } = pos as any;
+
+  const [showHeaderMenu, setShowHeaderMenu] = React.useState(false);
+  const headerMenuRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(event.target as Node)) {
+        setShowHeaderMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
 return (
-<header className="border-b border-app-border p-4 flex flex-wrap gap-y-2 justify-between items-center bg-app-surface transition-colors duration-300">
+<header className="border-b border-app-border px-4 py-2 flex justify-between items-center bg-app-surface transition-colors duration-300">
         <div className="flex items-center gap-3 flex-shrink-0">
-          <div className="bg-app-ink text-app-bg p-2 rounded transition-colors duration-300">
-            <ShoppingCart size={24} />
+          <div className="bg-app-ink text-app-bg p-1.5 rounded transition-colors duration-300">
+            <ShoppingCart size={20} />
           </div>
-          <h1 className="text-xl font-bold tracking-tight uppercase">OmniPOS <span className="text-xs font-normal opacity-50">v1.0</span></h1>
+          <h1 className="text-base font-bold tracking-tight uppercase">OmniPOS <span className="text-xs font-normal opacity-50">v1.0</span></h1>
         </div>
 
-        <div className="flex items-center flex-wrap justify-end gap-3 gap-y-2">
-          <div className="flex flex-col items-end mr-2">
-            <span className="text-xs font-bold uppercase opacity-50">{tenant.name}</span>
-            <button 
-              onClick={handleLogout}
-              className="text-[10px] font-mono uppercase hover:text-red-500 transition-colors"
-            >
-              {t.logout}
-            </button>
+        <div className="relative" ref={headerMenuRef}>
+          <button
+            onClick={() => setShowHeaderMenu(v => !v)}
+            className="flex items-center gap-2 px-3 py-1.5 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
+          >
+            <Menu size={16} /> {currentUser?.name || t.cashier}
+          </button>
+
+          <AnimatePresence>
+            {showHeaderMenu && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="absolute right-0 top-full mt-2 w-[420px] max-w-[92vw] bg-app-surface border border-app-border shadow-2xl rounded-xl p-4 z-[70] flex flex-col gap-3"
+              >
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-xs font-bold uppercase opacity-50">{tenant.name}</span>
+              <button
+                onClick={handleLogout}
+                className="text-[10px] font-mono uppercase hover:text-red-500 transition-colors text-left"
+              >
+                {t.logout}
+              </button>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-mono">
+              <span className="opacity-50 italic">F1 {t.checkout_key}</span>
+              <span className="opacity-50 italic">F2 {t.scan_key}</span>
+              <span className="opacity-50 italic">F3 {t.cash_key}</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2 text-sm font-mono">
-            <span className="opacity-50 italic">F1 {t.checkout_key}</span>
-            <span className="opacity-50 italic">F2 {t.scan_key}</span>
-            <span className="opacity-50 italic">F3 {t.cash_key}</span>
-          </div>
-          <div className="h-8 w-[1px] bg-app-border opacity-10 flex-shrink-0"></div>
+          <div className="h-[1px] bg-app-border opacity-10"></div>
           <div className="flex items-center gap-2 relative" ref={customerDropdownRef}>
             <User size={18} className="opacity-50" />
             <div className="relative">
@@ -138,10 +169,10 @@ return (
             )}
             
           </div>
-          <div className="h-8 w-[1px] bg-app-border opacity-10 flex-shrink-0"></div>
-          
+          <div className="h-[1px] bg-app-border opacity-10"></div>
+
           {/* User Status & Lock */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-2">
             <div className="px-3 py-1.5 bg-app-surface border border-app-border rounded-lg flex items-center gap-2">
               <User size={14} className="opacity-50" />
               <span className="text-[10px] font-black uppercase tracking-widest">{currentUser?.name || t.cashier}</span>
@@ -155,25 +186,30 @@ return (
             </button>
           </div>
 
-          <button 
-            onClick={() => setShowDailyHistory(true)}
-            className="flex items-center gap-2 px-3 py-1.5 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
+          <button
+            onClick={() => { setShowDailyHistory(true); setShowHeaderMenu(false); }}
+            className="flex items-center justify-center gap-2 px-3 py-2 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
           >
             <BarChart3 size={14} /> {t.history}
           </button>
-          <Link 
-            to="/price-checker" 
-            className="flex items-center gap-2 px-3 py-1.5 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
+          <Link
+            to="/price-checker"
+            onClick={() => setShowHeaderMenu(false)}
+            className="flex items-center justify-center gap-2 px-3 py-2 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
           >
             <Search size={14} /> {t.price_checker}
           </Link>
-          <Link 
-            to={`/dashboard?cashierId=${currentUser?.id || ''}`} 
+          <Link
+            to={`/dashboard?cashierId=${currentUser?.id || ''}`}
             target="_blank"
-            className="flex items-center gap-2 px-3 py-1.5 bg-app-ink text-app-bg rounded-lg text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all"
+            onClick={() => setShowHeaderMenu(false)}
+            className="flex items-center justify-center gap-2 px-3 py-2 bg-app-ink text-app-bg rounded-lg text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all"
           >
             <LayoutDashboard size={14} /> {t.dashboard}
           </Link>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </header>
 );

@@ -41,6 +41,7 @@ export function buildReceiptBuffer(opts: {
   const tx = opts.transaction;
 
   p.init();
+  p.feed(2);
   p.align('center').bold(true);
   p.text(opts.storeName || 'Unnamed Business').feed(1);
   p.bold(false);
@@ -88,7 +89,11 @@ export function buildReceiptBuffer(opts: {
   }
 
   p.feed(1).align('center');
-  p.text(opts.receiptFooter || 'Thank you for shopping with us!').feed(3);
+  // Feed well past the printer's print-head-to-cutter gap before cutting — too little feed
+  // here (previously 3 lines) let the cutter fire before this footer line had fully cleared
+  // it, so the footer ended up attached to the top of the *next* receipt instead of the
+  // bottom of this one. This also keeps short (few-item) receipts from feeling cut-off short.
+  p.text(opts.receiptFooter || 'Thank you for shopping with us!').feed(6);
 
   if (opts.openDrawer) {
     p.openDrawer(0);
@@ -104,6 +109,7 @@ export function buildTestPrintBuffer(opts: { storeName?: string; printerName: st
   const p = new EscPos(width);
 
   p.init();
+  p.feed(2);
   p.align('center').bold(true);
   p.text(opts.storeName || 'Unnamed Business').feed(1);
   p.bold(false);
@@ -113,7 +119,7 @@ export function buildTestPrintBuffer(opts: { storeName?: string; printerName: st
   p.align('left');
   p.text(`Printer: ${opts.printerName}`).feed(1);
   p.text(`Connection: ${opts.connection}`).feed(1);
-  p.text(`Paper width: ${opts.paperWidth || 80}mm (${width} cols)`).feed(3);
+  p.text(`Paper width: ${opts.paperWidth || 80}mm (${width} cols)`).feed(6);
   p.cut();
 
   return p.toBuffer();
