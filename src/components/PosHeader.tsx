@@ -55,43 +55,13 @@ return (
           <h1 className="text-base font-bold tracking-tight uppercase">OmniPOS <span className="text-xs font-normal opacity-50">v1.0</span></h1>
         </div>
 
-        <div className="relative" ref={headerMenuRef}>
-          <button
-            onClick={() => setShowHeaderMenu(v => !v)}
-            className="flex items-center gap-2 px-3 py-1.5 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
-          >
-            <Menu size={16} /> {currentUser?.name || t.cashier}
-          </button>
-
-          <AnimatePresence>
-            {showHeaderMenu && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="absolute right-0 top-full mt-2 w-[420px] max-w-[92vw] bg-app-surface border border-app-border shadow-2xl rounded-xl p-4 z-[70] flex flex-col gap-3"
-              >
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col">
-              <span className="text-xs font-bold uppercase opacity-50">{tenant.name}</span>
-              <button
-                onClick={handleLogout}
-                className="text-[10px] font-mono uppercase hover:text-red-500 transition-colors text-left"
-              >
-                {t.logout}
-              </button>
-            </div>
-            <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="opacity-50 italic">F1 {t.checkout_key}</span>
-              <span className="opacity-50 italic">F2 {t.scan_key}</span>
-              <span className="opacity-50 italic">F3 {t.cash_key}</span>
-            </div>
-          </div>
-          <div className="h-[1px] bg-app-border opacity-10"></div>
+        <div className="flex items-center gap-3">
+          {/* Customer stays directly on the header, not tucked in the menu — it's a per-sale
+              action the cashier needs constantly, unlike the menu's occasional-use items. */}
           <div className="flex items-center gap-2 relative" ref={customerDropdownRef}>
             <User size={18} className="opacity-50" />
             <div className="relative">
-              <button 
+              <button
                 onClick={() => setShowCustomerDropdown(!showCustomerDropdown)}
                 className="bg-app-bg/50 border border-app-border/20 px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 hover:border-app-border transition-all min-w-[150px] justify-between"
               >
@@ -112,7 +82,7 @@ return (
                     <div className="p-2 border-b border-app-border bg-app-bg/30">
                       <div className="relative">
                         <Search className="absolute left-2 top-1/2 -translate-y-1/2 opacity-30" size={12} />
-                        <input 
+                        <input
                           autoFocus
                           type="text"
                           placeholder={t.search_customers}
@@ -157,9 +127,9 @@ return (
                 )}
               </AnimatePresence>
             </div>
-            
+
             {showCustomerDropdown === false && selectedStakeholder && stakeholders.find((s: any) => s.id === selectedStakeholder)?.type === 'customer' && stakeholders.find((s: any) => s.id === selectedStakeholder)?.balance < 0 && (
-              <button 
+              <button
                 onClick={() => setShowDebtModal(true)}
                 title={t.receive_payment}
                 className="ml-1 p-1.5 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white rounded-lg transition-colors border border-emerald-500/20"
@@ -167,7 +137,40 @@ return (
                 <Banknote size={14} />
               </button>
             )}
-            
+
+          </div>
+
+          <div className="relative" ref={headerMenuRef}>
+          <button
+            onClick={() => setShowHeaderMenu(v => !v)}
+            className="flex items-center gap-2 px-3 py-1.5 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
+          >
+            <Menu size={16} /> {currentUser?.name || t.cashier}
+          </button>
+
+          <AnimatePresence>
+            {showHeaderMenu && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="absolute right-0 top-full mt-2 w-[420px] max-w-[92vw] bg-app-surface border border-app-border shadow-2xl rounded-xl p-4 z-[70] flex flex-col gap-3"
+              >
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-xs font-bold uppercase opacity-50">{tenant.name}</span>
+              <button
+                onClick={handleLogout}
+                className="text-[10px] font-mono uppercase hover:text-red-500 transition-colors text-left"
+              >
+                {t.logout}
+              </button>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-mono">
+              <span className="opacity-50 italic">F1 {t.checkout_key}</span>
+              <span className="opacity-50 italic">F2 {t.scan_key}</span>
+              <span className="opacity-50 italic">F3 {t.cash_key}</span>
+            </div>
           </div>
           <div className="h-[1px] bg-app-border opacity-10"></div>
 
@@ -210,6 +213,7 @@ return (
               </motion.div>
             )}
           </AnimatePresence>
+          </div>
         </div>
       </header>
 );

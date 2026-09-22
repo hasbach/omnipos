@@ -35,7 +35,8 @@ import {
   Monitor,
   RefreshCw,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Eye
 } from 'lucide-react';
 
 import { motion, AnimatePresence } from 'motion/react';
@@ -96,6 +97,11 @@ export default function InvoiceManagement() {
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
 
+  // Read-only item breakdown for a clicked invoice — works for settled (archived) invoices too,
+  // which previously had no way at all to review their contents once settled.
+  const [viewingInvoice, setViewingInvoice] = useState<any>(null);
+  const [viewingInvoiceLoading, setViewingInvoiceLoading] = useState(false);
+
   useEffect(() => {
     fetchInvoices();
     fetch('/api/products').then(res => res.json()).then(setProducts);
@@ -123,6 +129,19 @@ export default function InvoiceManagement() {
       if (res.ok) fetchInvoices();
       else alert('Failed to delete transaction');
     } catch (err) { console.error(err); }
+  };
+
+  const handleViewInvoice = async (id: number) => {
+    setViewingInvoiceLoading(true);
+    try {
+      const res = await fetch(`/api/transactions/${id}`);
+      if (!res.ok) return alert('Failed to load invoice');
+      setViewingInvoice(await res.json());
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setViewingInvoiceLoading(false);
+    }
   };
 
   const handleEditInvoice = async (id: number) => {
@@ -393,7 +412,11 @@ export default function InvoiceManagement() {
           </thead>
           <tbody className="text-sm">
             {invoices.map(i => (
-              <tr key={i.id} className="hover:bg-app-bg/30 transition-colors group">
+              <tr
+                key={i.id}
+                onClick={() => handleViewInvoice(i.id)}
+                className={`hover:bg-app-bg/30 transition-colors group cursor-pointer ${viewingInvoice?.id === i.id ? 'bg-app-ink/5' : ''}`}
+              >
                 <td className="p-4 border-b border-app-border font-mono">#{i.id}</td>
                 <td className="p-4 border-b border-app-border">
                   <div className="flex items-center gap-1.5">
@@ -413,20 +436,88 @@ export default function InvoiceManagement() {
                 <td className="p-4 border-b border-app-border opacity-50">{new Date(i.created_at).toLocaleString()}</td>
                 <td className="p-4 border-b border-app-border text-right font-mono font-bold">${i.total_amount.toFixed(2)}</td>
                 <td className="p-4 border-b border-app-border text-right">
-                  {i.archived ? (
-                    <span className="text-[10px] uppercase tracking-widest opacity-40">Settled</span>
-                  ) : (
-                    <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => handleEditInvoice(i.id)} className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all" title="Edit"><Edit2 size={14} /></button>
-                      <button onClick={() => handleDeleteInvoice(i.id)} className="p-2 hover:bg-red-500 hover:text-white rounded-lg transition-all" title="Delete"><Trash2 size={14} /></button>
-                    </div>
-                  )}
+                  <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => { e.stopPropagation(); handleViewInvoice(i.id); }} className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all" title="View items"><Eye size={14} /></button>
+                    {!i.archived && (
+                      <>
+                        <button onClick={(e) => { e.stopPropagation(); handleEditInvoice(i.id); }} className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all" title="Edit"><Edit2 size={14} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); handleDeleteInvoice(i.id); }} className="p-2 hover:bg-red-500 hover:text-white rounded-lg transition-all" title="Delete"><Trash2 size={14} /></button>
+                      </>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {/* Read-only item breakdown for whichever invoice was clicked above — works for settled
+          (archived) invoices too, which previously had no way to review their contents at all. */}
+      {viewingInvoice && (
+        <div className="bg-app-surface border border-app-border rounded-2xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-app-border flex justify-between items-center bg-app-bg/30">
+            <div>
+              <h2 className="text-lg font-black uppercase tracking-tight">
+                Invoice #{viewingInvoice.id}
+                {viewingInvoice.archived && <span className="text-xs font-bold opacity-50 ml-2 normal-case">(Settled — read only)</span>}
+              </h2>
+              <p className="text-xs opacity-50">
+                {viewingInvoice.stakeholder_name} &bull; {new Date(viewingInvoice.created_at).toLocaleString()}
+              </p>
+            </div>
+            <button onClick={() => setViewingInvoice(null)} className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all" title="Close">
+              <X size={16} />
+            </button>
+          </div>
+          <table className="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr className="bg-app-bg/30 text-[10px] uppercase tracking-widest font-black opacity-50">
+                <th className="p-3 border-b border-app-border">Product</th>
+                <th className="p-3 border-b border-app-border text-right">Qty</th>
+                <th className="p-3 border-b border-app-border text-right">Unit Price</th>
+                <th className="p-3 border-b border-app-border text-right">Discount</th>
+                <th className="p-3 border-b border-app-border text-right">Line Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {viewingInvoice.items.map((item: any) => {
+                const lineBase = Number(item.price) * item.quantity;
+                const discountAmount = item.discount?.value
+                  ? (item.discount.type === 'percentage' ? lineBase * item.discount.value / 100 : item.discount.value)
+                  : 0;
+                return (
+                  <tr key={item.id} className="hover:bg-app-bg/20">
+                    <td className="p-3 border-b border-app-border/50 font-bold">{item.product_name}</td>
+                    <td className="p-3 border-b border-app-border/50 text-right font-mono">{item.quantity}</td>
+                    <td className="p-3 border-b border-app-border/50 text-right font-mono">${Number(item.price).toFixed(2)}</td>
+                    <td className="p-3 border-b border-app-border/50 text-right font-mono opacity-60">
+                      {item.discount?.value ? (item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`) : '—'}
+                    </td>
+                    <td className="p-3 border-b border-app-border/50 text-right font-mono font-bold">${(lineBase - discountAmount).toFixed(2)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="p-4 flex flex-col items-end gap-1 bg-app-bg/10">
+            {viewingInvoice.discount?.value > 0 && (
+              <div className="text-xs opacity-60">
+                Global Discount: {viewingInvoice.discount.type === 'percentage' ? `${viewingInvoice.discount.value}%` : `$${viewingInvoice.discount.value}`}
+              </div>
+            )}
+            <div className="text-lg font-black">Total: ${Number(viewingInvoice.total_amount).toFixed(2)}</div>
+            {viewingInvoice.payments?.length > 0 && (
+              <div className="text-xs opacity-60 space-y-0.5 text-right">
+                {viewingInvoice.payments.map((p: any) => (
+                  <div key={p.id}>{p.method.toUpperCase()}: {Number(p.amount).toFixed(2)} {p.currency}</div>
+                ))}
+              </div>
+            )}
+            <div className="text-xs opacity-50">Paid: ${Number(viewingInvoice.paid_amount).toFixed(2)}</div>
+          </div>
+        </div>
+      )}
 
       <AnimatePresence>
         {isAdding && (

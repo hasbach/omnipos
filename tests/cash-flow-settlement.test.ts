@@ -76,3 +76,28 @@ test("opening balance carries forward from yesterday's Cash Out, not just from C
     "opening balance must carry forward from the last Cash Out even without a Complete Settlement"
   );
 });
+
+test("the register stays open across a midnight rollover instead of silently resetting", async () => {
+  // Regression for a live bug: /api/cash-flow and /api/cash-flow/summary used to scope every sum
+  // to `date(created_at, 'localtime') = today`, so cash movements made before local midnight
+  // vanished from the register's view the instant the calendar day rolled over — even though
+  // nothing was ever actually closed/settled. The register must instead stay open until the owner
+  // explicitly closes it (Cash Out or Complete Settlement), no matter how many days that takes.
+  const freshTenantId = seedTenant(app.db, "Multi-Day Open Co", "multi-day-open-test@example.com");
+
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().replace("T", " ").slice(0, 19);
+  app.db
+    .prepare(
+      "INSERT INTO cash_flow (tenant_id, type, amount, currency, exchange_rate, reason, created_at) VALUES (?, 'in', 40, 'USD', 1, 'Owner float top-up', ?)"
+    )
+    .run(freshTenantId, threeDaysAgo);
+
+  const entries = await app.api("GET", "/api/cash-flow", { tenantId: freshTenantId });
+  assert.equal(entries.status, 200, JSON.stringify(entries.body));
+  assert.equal(entries.body.length, 1, "a 3-day-old, never-closed entry must still show in the register's movements list");
+
+  const summary = await app.api("GET", "/api/cash-flow/summary", { tenantId: freshTenantId });
+  assert.equal(summary.status, 200, JSON.stringify(summary.body));
+  assert.equal(summary.body.totalIn, 40, "a 3-day-old, never-closed entry must still count toward the register's totals");
+  assert.equal(summary.body.expectedBalance, 40, "expected balance must include cash from before the most recent midnight");
+});

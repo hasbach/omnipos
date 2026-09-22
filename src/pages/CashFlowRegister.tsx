@@ -273,7 +273,7 @@ export default function CashFlowRegister() {
 
           {summary && (
             <div className="bg-app-surface border border-app-border rounded-2xl p-6 shadow-sm space-y-4">
-              <h2 className="text-lg font-black uppercase tracking-tight">Daily Summary</h2>
+              <h2 className="text-lg font-black uppercase tracking-tight">Register Summary</h2>
               <div className="space-y-3">
                 <div className="flex justify-between items-center text-sm">
                   <span className="opacity-50">Opening Balance</span>
@@ -319,7 +319,7 @@ export default function CashFlowRegister() {
                 {loading ? (
                   <tr><td colSpan={4} className="p-12 text-center opacity-30 italic">Loading...</td></tr>
                 ) : entries.length === 0 ? (
-                  <tr><td colSpan={4} className="p-12 text-center opacity-30 italic">No movements recorded today.</td></tr>
+                  <tr><td colSpan={4} className="p-12 text-center opacity-30 italic">No movements recorded since the register was last closed.</td></tr>
                 ) : (
                   entries.map(entry => (
                     <tr key={entry.id} className="hover:bg-app-bg/30 transition-colors">
