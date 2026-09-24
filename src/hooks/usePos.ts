@@ -763,7 +763,8 @@ const [products, setProducts] = useState<Product[]>([]);
       return ' '.repeat(left) + t + ' '.repeat(pad - left);
     };
 
-    const stakeholder = stakeholders.find(s => s.id === transaction.stakeholder_id)?.name || 'Walk-in Customer';
+    const customer = stakeholders.find(s => s.id === transaction.stakeholder_id);
+    const stakeholder = customer?.name || 'Walk-in Customer';
     const lines = [
       "================================",
       center(settings.store_name || 'Unnamed Business'),
@@ -777,6 +778,7 @@ const [products, setProducts] = useState<Product[]>([]);
           : `#${transaction.id || 'N/A'}`
       }`,
       `Customer: ${stakeholder}`,
+      ...(customer?.address ? [`Address: ${customer.address}`] : []),
       "--------------------------------",
       "Item            Qty     Price   ",
     ];
@@ -805,7 +807,10 @@ const [products, setProducts] = useState<Product[]>([]);
                "================================");
 
     const receiptText = lines.join('\n');
-    const receiptHtml = `<pre style="font-family: monospace; font-size: 12px; margin: 0;">${receiptText}</pre>`;
+    // Names and addresses are free text, so escape them; `unicode-bidi: plaintext` gives each
+    // line its own direction, so an Arabic address prints right-to-left like on the thermal path.
+    const escaped = receiptText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const receiptHtml = `<pre style="font-family: monospace; font-size: 12px; margin: 0; unicode-bidi: plaintext; white-space: pre-wrap;">${escaped}</pre>`;
 
     // Print silently (no Windows dialog) to the OS default printer, same as the direct ESC/POS
     // path above — a print dialog here was the actual reported bug, not a missing architecture.

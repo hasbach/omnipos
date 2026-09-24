@@ -2209,7 +2209,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       if (!printer) return res.status(404).json({ error: "No enabled receipt printer configured" });
 
       const transaction = db.prepare(`
-        SELECT t.*, s.name as stakeholder_name
+        SELECT t.*, s.name as stakeholder_name, s.address as stakeholder_address
         FROM transactions t
         LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
         WHERE t.id = ? AND t.tenant_id = ?

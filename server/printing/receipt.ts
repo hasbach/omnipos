@@ -21,6 +21,7 @@ interface ReceiptTransaction {
   terminal_sequence?: number;
   created_at?: string;
   stakeholder_name?: string;
+  stakeholder_address?: string;
   items: ReceiptItem[];
   total_amount: number;
   discount?: { type: 'percentage' | 'fixed'; value: number };
@@ -56,7 +57,8 @@ export function buildReceiptBuffer(opts: {
   p.align('left');
   p.text(`Receipt: ${receiptNo}`).feed(1);
   p.text(`Date: ${tx.created_at ? new Date(tx.created_at).toLocaleString() : new Date().toLocaleString()}`).feed(1);
-  if (tx.stakeholder_name) p.text(`Customer: ${tx.stakeholder_name}`).feed(1);
+  if (tx.stakeholder_name) p.labeled('Customer:', tx.stakeholder_name);
+  if (tx.stakeholder_address) p.labeled('Address:', tx.stakeholder_address);
   p.hr();
 
   for (const item of tx.items || []) {

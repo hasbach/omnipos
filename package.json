@@ -1,7 +1,7 @@
 {
   "name": "omnipos-terminal",
   "private": true,
-  "version": "1.1.16",
+  "version": "1.1.17",
   "description": "OmniPOS Terminal Application",
   "author": "OmniPOS",
   "type": "module",
@@ -60,11 +60,13 @@
       "artifactName": "OmniPOS-Portable.${ext}"
     },
     "asarUnpack": [
-      "**/node_modules/better-sqlite3/**/*"
+      "**/node_modules/better-sqlite3/**/*",
+      "**/node_modules/@napi-rs/**/*"
     ]
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@napi-rs/canvas": "^1.0.9",
     "@supabase/supabase-js": "^2.105.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.4.1",
