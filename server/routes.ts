@@ -11,7 +11,7 @@ import {
   clearActiveSession,
 } from "./session.js";
 import { EscPos } from "./printing/escpos.js";
-import { buildReceiptBuffer, buildTestPrintBuffer } from "./printing/receipt.js";
+import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
 
 // The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
@@ -79,6 +79,16 @@ const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total
 // Same guard for stakeholder_id. The POS defaults the customer to id 1, which for any tenant
 // other than the seed tenant is a FOREIGN tenant's Walk-in — pushing that trips the cloud
 // stakeholders FK and blocks sync. Resolve to this tenant's Walk-in (or first customer), else null.
+// Printer Arabic settings: a code page is an ESC t table number (0-255); blank = images.
+function parseCodepage(v: any): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 && n <= 255 ? n : null;
+}
+function parseArabicEncoding(v: any): 'cp864' | 'cp1256' {
+  return v === 'cp1256' ? 'cp1256' : 'cp864';
+}
+
 function tenantStakeholderId(tenantId: number, requested: any): number | null {
   if (requested) {
     const s = db.prepare("SELECT id FROM stakeholders WHERE id = ? AND tenant_id = ?").get(requested, tenantId) as any;
@@ -2148,7 +2158,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/printers", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { name, type, connection, address, paper_width, is_default, enabled } = req.body;
+    const { name, type, connection, address, paper_width, is_default, enabled, arabic_codepage, arabic_encoding } = req.body;
 
     // If this is set as default for its type, unset others of same type
     if (is_default) {
@@ -2156,8 +2166,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
 
     const result = db.prepare(
-      "INSERT INTO printers (tenant_id, name, type, connection, address, paper_width, is_default, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(tenantId, name, type, connection, address || '', paper_width || 80, is_default ? 1 : 0, enabled !== undefined ? (enabled ? 1 : 0) : 1);
+      "INSERT INTO printers (tenant_id, name, type, connection, address, paper_width, is_default, enabled, arabic_codepage, arabic_encoding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(tenantId, name, type, connection, address || '', paper_width || 80, is_default ? 1 : 0, enabled !== undefined ? (enabled ? 1 : 0) : 1, parseCodepage(arabic_codepage), parseArabicEncoding(arabic_encoding));
 
     logAction(tenantId, 1, 'Printer Added', `Name: ${name}, Type: ${type}, Connection: ${connection}`);
     broadcast({ type: 'SETTINGS_UPDATED' }, tenantId);
@@ -2167,7 +2177,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.put("/api/printers/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { id } = req.params;
-    const { name, type, connection, address, paper_width, is_default, enabled } = req.body;
+    const { name, type, connection, address, paper_width, is_default, enabled, arabic_codepage, arabic_encoding } = req.body;
 
     // If this is set as default for its type, unset others of same type
     if (is_default) {
@@ -2175,8 +2185,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
 
     db.prepare(
-      "UPDATE printers SET name = ?, type = ?, connection = ?, address = ?, paper_width = ?, is_default = ?, enabled = ? WHERE id = ? AND tenant_id = ?"
-    ).run(name, type, connection, address || '', paper_width || 80, is_default ? 1 : 0, enabled ? 1 : 0, id, tenantId);
+      "UPDATE printers SET name = ?, type = ?, connection = ?, address = ?, paper_width = ?, is_default = ?, enabled = ?, arabic_codepage = ?, arabic_encoding = ? WHERE id = ? AND tenant_id = ?"
+    ).run(name, type, connection, address || '', paper_width || 80, is_default ? 1 : 0, enabled ? 1 : 0, parseCodepage(arabic_codepage), parseArabicEncoding(arabic_encoding), id, tenantId);
 
     logAction(tenantId, 1, 'Printer Updated', `ID: ${id}, Name: ${name}`);
     broadcast({ type: 'SETTINGS_UPDATED' }, tenantId);
@@ -2192,6 +2202,12 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   });
 
   // --- ESC/POS PRINTING & CASH DRAWER ---
+
+  // Arabic as printer text when a code page has been chosen for this printer, else images.
+  function printerArabicMode(printer: any) {
+    const codepage = parseCodepage(printer?.arabic_codepage);
+    return codepage === null ? null : { codepage, encoding: parseArabicEncoding(printer.arabic_encoding) };
+  }
 
   function resolveReceiptPrinter(tenantId: number, printerId?: number) {
     if (printerId) {
@@ -2235,7 +2251,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         receiptFooter: settings.receipt_footer,
         paperWidth: printer.paper_width,
         transaction,
-        openDrawer: !!openDrawer
+        openDrawer: !!openDrawer,
+        arabic: printerArabicMode(printer)
       });
 
       await sendToPrinter(printer, buffer);
@@ -2258,6 +2275,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     } catch (err: any) {
       console.error('Drawer kick error:', err.message);
       res.status(500).json({ error: err.message || 'Failed to open drawer' });
+    }
+  });
+
+  app.post("/api/print/arabic-test", authenticate, async (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    try {
+      const printer = db.prepare("SELECT * FROM printers WHERE id = ? AND tenant_id = ?").get(req.body.printerId, tenantId) as any;
+      if (!printer) return res.status(404).json({ error: "Printer not found" });
+      await sendToPrinter(printer, buildArabicTestBuffer({ paperWidth: printer.paper_width }));
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Arabic test print error:', err.message);
+      res.status(500).json({ error: err.message || 'Failed to print Arabic test page' });
     }
   });
 

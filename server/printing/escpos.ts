@@ -3,6 +3,7 @@
 // printers (Epson TM-T88 family and clones), which is what most receipt printers speak.
 
 import { createRequire } from "module";
+import { encodeArabicLine, printedLength, type ArabicEncoding } from "./arabic.js";
 
 const ESC = 0x1B;
 const GS = 0x1D;
@@ -43,6 +44,14 @@ function baseDirection(str: string): 'rtl' | 'ltr' {
 }
 
 type Align = 'left' | 'center' | 'right';
+
+// Set for a printer with a working built-in Arabic code page (found with the Arabic test print):
+// Arabic then goes out as printer text instead of images. Lines the code page can't hold
+// (e.g. Persian letters) still fall back to an image.
+export interface ArabicTextMode {
+  codepage: number;       // ESC t n table number on this printer
+  encoding: ArabicEncoding;
+}
 type Segment = { text: string; align: Align };
 type Positioned = Segment & { x: number };
 
@@ -55,7 +64,7 @@ export class EscPos {
   private swallowNewline = false;
 
   // width = printable characters per line, e.g. 32 for 58mm paper, 48 for 80mm.
-  constructor(private width: number = 48) {}
+  constructor(private width: number = 48, private arabic?: ArabicTextMode | null) {}
 
   private push(bytes: number[] | Buffer): this {
     this.chunks.push(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes));
@@ -89,7 +98,17 @@ export class EscPos {
   }
 
   text(str: string): this {
-    if (needsRaster(str) && this.rasterLines([{ text: str, align: this.alignment }], true)) return this;
+    if (needsRaster(str)) {
+      if (this.arabic) {
+        const rows = wrapText(str, this.width, t => this.cols(t)).map(line => this.textRow([line]));
+        if (rows.every(Boolean)) {
+          this.swallowNewline = false;
+          rows.forEach((row, i) => { if (i > 0) this.push(Buffer.from('\n', 'latin1')); this.push(row!); });
+          return this;
+        }
+      }
+      if (this.rasterLines([{ text: str, align: this.alignment }], true)) return this;
+    }
     this.swallowNewline = false;
     return this.push(Buffer.from(str, 'latin1'));
   }
@@ -106,8 +125,12 @@ export class EscPos {
 
   // Left-justified label, right-justified value, padded to fill the line width.
   kv(label: string, value: string): this {
-    if (needsRaster(label + value) && this.rasterLines([{ text: label, align: 'left' }, { text: value, align: 'right' }], false)) {
-      return this.feed(1);
+    if (needsRaster(label + value)) {
+      if (this.arabic) {
+        const row = this.textRow([label + ' '.repeat(Math.max(1, this.width - this.cols(label) - this.cols(value))), value]);
+        if (row) return this.pushLine(row);
+      }
+      if (this.rasterLines([{ text: label, align: 'left' }, { text: value, align: 'right' }], false)) return this.feed(1);
     }
     const space = Math.max(1, this.width - label.length - value.length);
     return this.text(label + ' '.repeat(space) + value).feed(1);
@@ -118,6 +141,7 @@ export class EscPos {
   // LTR line, where the bidi algorithm pushes punctuation at a line break to the wrong end.
   labeled(label: string, value: string): this {
     if (!needsRaster(value)) return this.text(`${label} ${value}`).feed(1);
+    if (this.arabic && this.labeledAsText(label, value)) return this;
     const width = this.measurer();
     if (!width) return this.text(`${label} ${value}`).feed(1);
     const rtl = baseDirection(value) === 'rtl';
@@ -136,6 +160,16 @@ export class EscPos {
   // Product/service name on the left, "qty x total" right-aligned; long names truncate.
   itemLine(name: string, qty: number, total: string): this {
     const rightPart = `${String(qty).padStart(3)} x ${total.padStart(8)}`;
+    if (needsRaster(name) && this.arabic) {
+      const nameWidth = Math.max(4, this.width - rightPart.length - 1);
+      let fitted = name;
+      if (this.cols(fitted) > nameWidth) {
+        while (fitted.length > 1 && this.cols(fitted + '...') > nameWidth) fitted = fitted.slice(0, -1);
+        fitted += '...';
+      }
+      const row = this.textRow([fitted, ' '.repeat(Math.max(1, nameWidth - this.cols(fitted) + 1)) + rightPart]);
+      if (row) return this.pushLine(row);
+    }
     if (needsRaster(name)) {
       // The "qty x total" keeps its usual columns; the name gets the rest of the line (in dots).
       const fitted = this.fitToDots(name, (this.width - rightPart.length - 1) * 12);
@@ -163,6 +197,45 @@ export class EscPos {
 
   toBuffer(): Buffer {
     return Buffer.concat(this.chunks);
+  }
+
+  // Printed width in columns of a logical string (Arabic measured after shaping).
+  private cols(text: string): number {
+    return needsRaster(text) && this.arabic ? printedLength(text, this.arabic.encoding) : text.length;
+  }
+
+  // One text row from logical parts; Arabic parts are switched into the Arabic code page and
+  // back (the Latin half of CP864 isn't quite ASCII — 0x25 is the Arabic percent sign).
+  // null if any part can't be encoded.
+  private textRow(parts: string[], rtlBase?: boolean): Buffer | null {
+    const out: Buffer[] = [];
+    for (const part of parts) {
+      if (!needsRaster(part)) { out.push(Buffer.from(part, 'latin1')); continue; }
+      const bytes = encodeArabicLine(part, this.arabic!.encoding, rtlBase);
+      if (!bytes) return null;
+      out.push(Buffer.from([ESC, 0x74, this.arabic!.codepage & 0xFF]), bytes, Buffer.from([ESC, 0x74, 0]));
+    }
+    return Buffer.concat(out);
+  }
+
+  private pushLine(row: Buffer): this {
+    this.swallowNewline = false;
+    return this.push(row).push(Buffer.from('\n', 'latin1'));
+  }
+
+  // Text-mode version of labeled(): an RTL value is right-aligned and wraps under itself.
+  private labeledAsText(label: string, value: string): boolean {
+    const rtl = baseDirection(value) === 'rtl';
+    const indent = this.cols(label) + 1;
+    const lines = wrapText(value, this.width - indent, t => this.cols(t));
+    const rows = lines.map((line, i) => {
+      const lead = i === 0 ? label : '';
+      const gap = rtl ? this.width - this.cols(lead) - this.cols(line) : indent - this.cols(lead);
+      return this.textRow([lead + ' '.repeat(Math.max(1, gap)), line]);
+    });
+    if (!rows.every(Boolean)) return false;
+    rows.forEach(row => this.pushLine(row!));
+    return true;
   }
 
   // 12-dot-wide Font A columns: 48 cols = 576 dots (80mm), 32 cols = 384 dots (58mm).

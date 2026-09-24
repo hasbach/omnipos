@@ -1,7 +1,7 @@
 {
   "name": "omnipos-terminal",
   "private": true,
-  "version": "1.1.17",
+  "version": "1.1.18",
   "description": "OmniPOS Terminal Application",
   "author": "OmniPOS",
   "type": "module",
@@ -78,6 +78,7 @@
     "express": "^4.21.2",
     "express-session": "^1.19.0",
     "fuse.js": "^7.1.0",
+    "iconv-lite": "^0.4.24",
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",
     "uuid": "^14.0.0",

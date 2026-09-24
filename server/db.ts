@@ -392,6 +392,9 @@ try { db.exec("ALTER TABLE transactions ADD COLUMN idempotency_key TEXT;"); } ca
 try { db.exec("ALTER TABLE transactions ADD COLUMN original_transaction_id INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE archived_transactions ADD COLUMN original_transaction_id INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE stakeholders ADD COLUMN address TEXT;"); } catch {}
+// Per-printer Arabic mode: NULL codepage = print Arabic as images (works on any printer).
+try { db.exec("ALTER TABLE printers ADD COLUMN arabic_codepage INTEGER;"); } catch {}
+try { db.exec("ALTER TABLE printers ADD COLUMN arabic_encoding TEXT DEFAULT 'cp864';"); } catch {}
 
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];

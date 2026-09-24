@@ -54,6 +54,8 @@ type Printer = {
   is_default: number;
   paper_width: number;
   enabled: number;
+  arabic_codepage?: number | null;   // ESC t table for Arabic text; null = print Arabic as images
+  arabic_encoding?: 'cp864' | 'cp1256';
 };
 
 import { Link, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
@@ -249,6 +251,26 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
       }
     } catch (err: any) {
       alert(`Test print failed: ${err.message}`);
+    } finally {
+      setPrinterActionId(null);
+    }
+  };
+
+  const handleArabicTest = async (printer: Printer) => {
+    if (!printer.id) return;
+    setPrinterActionId(printer.id);
+    try {
+      const res = await fetch('/api/print/arabic-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printerId: printer.id })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        alert(`Arabic test print failed: ${err.error}`);
+      }
+    } catch (err: any) {
+      alert(`Arabic test print failed: ${err.message}`);
     } finally {
       setPrinterActionId(null);
     }
@@ -589,6 +611,10 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
                         <span className="uppercase font-black opacity-70">Paper:</span>
                         <span>{p.paper_width}mm</span>
                       </div>
+                      <div className="flex items-center gap-2">
+                        <span className="uppercase font-black opacity-70">Arabic:</span>
+                        <span>{p.arabic_codepage != null ? `Text (code page ${p.arabic_codepage}, ${p.arabic_encoding === 'cp1256' ? '1256' : '864'})` : 'Image'}</span>
+                      </div>
                     </div>
 
                     <div className="flex gap-2">
@@ -598,6 +624,14 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
                         className="flex-1 py-2 text-[10px] font-black uppercase bg-app-surface hover:bg-app-ink hover:text-app-bg rounded-lg transition-colors flex items-center justify-center gap-1 disabled:opacity-40"
                       >
                         <Printer size={12} /> {printerActionId === p.id ? 'Printing...' : 'Test Print'}
+                      </button>
+                      <button
+                        onClick={() => handleArabicTest(p)}
+                        disabled={printerActionId === p.id}
+                        title="Prints a sample Arabic line in each likely code page, to find which one this printer uses"
+                        className="flex-1 py-2 text-[10px] font-black uppercase bg-app-surface hover:bg-app-ink hover:text-app-bg rounded-lg transition-colors flex items-center justify-center gap-1 disabled:opacity-40"
+                      >
+                        <Printer size={12} /> Arabic Test
                       </button>
                       {p.type === 'receipt' && (
                         <button
@@ -969,6 +1003,54 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
                       </button>
                     ))}
                   </div>
+                </div>
+
+                {/* Arabic printing */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase opacity-50">Arabic Printing</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {([['image', 'Image'], ['text', 'Printer Text']] as const).map(([mode, label]) => {
+                      const active = mode === 'text' ? editingPrinter.arabic_codepage != null : editingPrinter.arabic_codepage == null;
+                      return (
+                        <button
+                          key={mode}
+                          onClick={() => setEditingPrinter({ ...editingPrinter, arabic_codepage: mode === 'text' ? (editingPrinter.arabic_codepage ?? 22) : null })}
+                          className={`p-3 rounded-xl border-2 font-black text-sm transition-all ${
+                            active ? 'border-app-ink bg-app-ink text-app-bg' : 'border-app-border bg-app-bg hover:border-app-ink/40'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {editingPrinter.arabic_codepage == null ? (
+                    <p className="text-[10px] opacity-50">Works on every printer. Choose Printer Text only after the Arabic Test shows a line that prints correctly.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3 pt-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase opacity-50">Code Page No.</label>
+                        <input
+                          type="number" min={0} max={255}
+                          className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
+                          value={editingPrinter.arabic_codepage ?? ''}
+                          onChange={e => setEditingPrinter({ ...editingPrinter, arabic_codepage: e.target.value === '' ? 0 : Number(e.target.value) })}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase opacity-50">Encoding</label>
+                        <select
+                          className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
+                          value={editingPrinter.arabic_encoding || 'cp864'}
+                          onChange={e => setEditingPrinter({ ...editingPrinter, arabic_encoding: e.target.value as any })}
+                        >
+                          <option value="cp864">864</option>
+                          <option value="cp1256">1256</option>
+                        </select>
+                      </div>
+                      <p className="col-span-2 text-[10px] opacity-50">Use the number and encoding of the line that read correctly on the Arabic Test page.</p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Flags */}
