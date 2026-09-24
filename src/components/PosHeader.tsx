@@ -3,7 +3,7 @@ import {
   Search, ShoppingCart, User, CreditCard, Banknote, Package, History,
   Plus, Minus, Trash2, Barcode, ArrowRight, Settings, DollarSign, Sun,
   Moon, Percent, Tag, Printer, CheckCircle2, LayoutDashboard, BarChart3,
-  Calendar, X, RotateCcw, Shield, AlertTriangle, RefreshCw, Clock, Menu
+  Calendar, X, RotateCcw, Shield, AlertTriangle, RefreshCw, Clock, Menu, Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
@@ -30,7 +30,7 @@ export default function PosHeader() {
   handleSuggestionClick, updateQuantity, applyItemDiscount, calculateItemTotal, handleCreateCustomer, 
   handleCheckout, handleQuickCash, printReceipt, subtotalUSD, subtotalLBP, totalUSD, totalLBP, 
   totalSelected, categories, filteredProducts, totalPages, paginatedProducts, t, socketRef, 
-  barcodeRef, customerDropdownRef, localExpired, setShowDebtModal
+  barcodeRef, customerDropdownRef, localExpired, setShowDebtModal, openAddCustomer, openEditCustomer
   } = pos as any;
 
   const [showHeaderMenu, setShowHeaderMenu] = React.useState(false);
@@ -94,7 +94,7 @@ return (
                     </div>
                     <div className="max-h-60 overflow-y-auto">
                       <button
-                        onClick={() => setShowAddCustomerModal(true)}
+                        onClick={openAddCustomer}
                         className="w-full text-left px-4 py-3 text-xs font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all flex items-center gap-2 border-b border-app-border/10"
                       >
                         <Plus size={14} /> {t.add_new_customer}
@@ -102,22 +102,36 @@ return (
                       {stakeholders
                         .filter(s => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase()))
                         .map(s => (
-                          <button
-                            key={s.id}
-                            onClick={() => {
-                              setSelectedStakeholder(s.id);
-                              setShowCustomerDropdown(false);
-                              setCustomerSearchTerm('');
-                            }}
-                            className={`w-full text-left px-4 py-2.5 text-xs font-bold hover:bg-app-ink hover:text-app-bg transition-colors flex justify-between items-center ${selectedStakeholder === s.id ? 'bg-app-ink/5' : ''}`}
-                          >
-                            <span>{s.name}</span>
-                            {s.balance !== 0 && (
-                              <span className={`text-[10px] ${s.balance < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                                ${Math.abs(s.balance).toFixed(2)}
+                          <div key={s.id} className={`group flex items-stretch hover:bg-app-ink hover:text-app-bg transition-colors ${selectedStakeholder === s.id ? 'bg-app-ink/5' : ''}`}>
+                            <button
+                              onClick={() => {
+                                setSelectedStakeholder(s.id);
+                                setShowCustomerDropdown(false);
+                                setCustomerSearchTerm('');
+                              }}
+                              className="flex-1 min-w-0 text-left pl-4 pr-2 py-2.5 text-xs font-bold flex justify-between items-center gap-2"
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate">{s.name}</span>
+                                {s.address && <span className="block truncate text-[10px] font-medium opacity-50">{s.address}</span>}
                               </span>
+                              {s.balance !== 0 && (
+                                <span className={`text-[10px] flex-shrink-0 ${s.balance < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                                  ${Math.abs(s.balance).toFixed(2)}
+                                </span>
+                              )}
+                            </button>
+                            {/* Walk-in is looked up by name server-side, so it isn't editable here. */}
+                            {s.name !== 'Walk-in Customer' && (
+                              <button
+                                onClick={() => openEditCustomer(s)}
+                                title="Edit customer"
+                                className="px-3 opacity-40 hover:opacity-100 transition-opacity"
+                              >
+                                <Pencil size={12} />
+                              </button>
                             )}
-                          </button>
+                          </div>
                         ))}
                       {stakeholders.filter(s => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase())).length === 0 && (
                         <div className="p-4 text-center text-[10px] opacity-30 italic">{t.no_customers_found}</div>

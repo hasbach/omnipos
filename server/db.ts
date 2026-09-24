@@ -78,6 +78,7 @@ db.exec(`
     type TEXT CHECK(type IN ('customer', 'supplier')) NOT NULL,
     email TEXT,
     phone TEXT,
+    address TEXT,
     balance REAL DEFAULT 0,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
   );
@@ -390,6 +391,7 @@ try { db.exec("ALTER TABLE transactions ADD COLUMN idempotency_key TEXT;"); } ca
 // a refund's price/quantity against what was actually sold (see POST /api/transactions).
 try { db.exec("ALTER TABLE transactions ADD COLUMN original_transaction_id INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE archived_transactions ADD COLUMN original_transaction_id INTEGER;"); } catch {}
+try { db.exec("ALTER TABLE stakeholders ADD COLUMN address TEXT;"); } catch {}
 
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];

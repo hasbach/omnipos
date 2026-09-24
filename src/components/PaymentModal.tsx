@@ -32,7 +32,7 @@ export default function PaymentModal() {
   handleCheckout, handleQuickCash, printReceipt, subtotalUSD, subtotalLBP, totalUSD, totalLBP, 
   totalSelected, categories, filteredProducts, totalPages, paginatedProducts, t, socketRef, 
   barcodeRef, customerDropdownRef, localExpired, showDebtModal, setShowDebtModal, handleReceiveDebt,
-  terminalId
+  terminalId, editingCustomerId, closeCustomerModal
   } = pos as any;
 
   // Format a transaction display ID as e.g. 'POS1-0024', falling back to '#id' for legacy records
@@ -48,7 +48,7 @@ return (<>
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowAddCustomerModal(false)}
+              onClick={closeCustomerModal}
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             />
             <motion.div
@@ -58,7 +58,7 @@ return (<>
               className="relative bg-app-surface w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl border border-app-border"
             >
               <div className="p-6 border-b border-app-border bg-app-bg/30">
-                <h2 className="text-xl font-black tracking-tighter uppercase">Quick Add Customer</h2>
+                <h2 className="text-xl font-black tracking-tighter uppercase">{editingCustomerId !== null ? 'Edit Customer' : 'Quick Add Customer'}</h2>
               </div>
               <form onSubmit={handleCreateCustomer} className="p-6 space-y-4">
                 <div className="space-y-1.5">
@@ -90,10 +90,19 @@ return (<>
                     onChange={e => setNewCustomerForm({ ...newCustomerForm, email: e.target.value })}
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase opacity-50 ml-1">Address (Optional)</label>
+                  <textarea
+                    rows={2}
+                    className="w-full px-4 py-3 bg-app-bg border border-app-border rounded-xl outline-none focus:border-app-ink transition-all resize-none"
+                    value={newCustomerForm.address || ''}
+                    onChange={e => setNewCustomerForm({ ...newCustomerForm, address: e.target.value })}
+                  />
+                </div>
                 <div className="flex gap-3 pt-2">
                   <button 
                     type="button"
-                    onClick={() => setShowAddCustomerModal(false)}
+                    onClick={closeCustomerModal}
                     className="flex-1 py-3 border-2 border-app-border rounded-xl font-bold uppercase tracking-widest text-[10px] hover:bg-app-bg transition-all"
                   >
                     Cancel

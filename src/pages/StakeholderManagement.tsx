@@ -103,7 +103,10 @@ export default function StakeholderManagement() {
               <tr key={s.id} className="hover:bg-app-bg/30 transition-colors group">
                 <td className="p-4 border-b border-app-border font-bold">{s.name}</td>
                 <td className="p-4 border-b border-app-border uppercase text-[10px] font-black opacity-50">{s.type}</td>
-                <td className="p-4 border-b border-app-border opacity-50">{s.email || s.phone || 'N/A'}</td>
+                <td className="p-4 border-b border-app-border opacity-50">
+                  <div>{s.email || s.phone || 'N/A'}</div>
+                  {s.address && <div className="text-xs">{s.address}</div>}
+                </td>
                 <td className="p-4 border-b border-app-border text-right font-mono font-bold">${s.balance.toFixed(2)}</td>
                 <td className="p-4 border-b border-app-border text-right">
                   <button onClick={() => setEditing(s)} className="p-2 hover:bg-app-bg rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"><Edit2 size={16} /></button>
@@ -135,6 +138,18 @@ export default function StakeholderManagement() {
                 <div className="space-y-1">
                   <label className="text-[10px] font-black uppercase opacity-50">Balance ($)</label>
                   <input type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none" value={editing.balance} onChange={e => setEditing({...editing, balance: parseFloat(e.target.value)})} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase opacity-50">Phone</label>
+                  <input type="text" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none" value={editing.phone || ''} onChange={e => setEditing({...editing, phone: e.target.value})} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase opacity-50">Email</label>
+                  <input type="email" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none" value={editing.email || ''} onChange={e => setEditing({...editing, email: e.target.value})} />
+                </div>
+                <div className="space-y-1 col-span-2">
+                  <label className="text-[10px] font-black uppercase opacity-50">Address</label>
+                  <textarea rows={2} className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none resize-none" value={editing.address || ''} onChange={e => setEditing({...editing, address: e.target.value})} />
                 </div>
               </div>
               <div className="flex gap-4 pt-4">

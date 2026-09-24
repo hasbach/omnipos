@@ -43,6 +43,7 @@ export interface Stakeholder {
   type: 'customer' | 'supplier';
   email?: string;
   phone?: string;
+  address?: string;
   balance: number;
 }
 

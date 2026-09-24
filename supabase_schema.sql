@@ -69,11 +69,14 @@ CREATE TABLE public.stakeholders (
     type TEXT NOT NULL,
     email TEXT,
     phone TEXT,
+    address TEXT,
     balance NUMERIC DEFAULT 0,
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now(),
     deleted_at TIMESTAMP
 );
+-- For cloud projects created before stakeholders had an address column:
+ALTER TABLE public.stakeholders ADD COLUMN IF NOT EXISTS address TEXT;
 
 CREATE TABLE public.users (
     global_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

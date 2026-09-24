@@ -10,6 +10,8 @@ export const CURRENCIES = [
   { code: 'LBP', symbol: 'LL', rate: 89500 },
 ];
 
+const EMPTY_CUSTOMER_FORM = { name: '', phone: '', email: '', address: '' };
+
 export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrentUser: any, users: any, setUsers: any, handleLogout?: any) {
   // Read terminal identity from URL (?terminalId=POS+1) injected by Electron on launch
   const terminalId = new URLSearchParams(window.location.search).get('terminalId') || 'MAIN';
@@ -32,7 +34,8 @@ const [products, setProducts] = useState<Product[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit'>('cash');
   const [paymentCurrency, setPaymentCurrency] = useState(CURRENCIES[0]);
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
-  const [newCustomerForm, setNewCustomerForm] = useState({ name: '', phone: '', email: '' });
+  const [newCustomerForm, setNewCustomerForm] = useState(EMPTY_CUSTOMER_FORM);
+  const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
   const [isPriceChecker, setIsPriceChecker] = useState(false);
   const [isDarkMode] = useTheme();
   const [globalDiscount, setGlobalDiscount] = useState<Discount>({ type: 'percentage', value: 0 });
@@ -538,10 +541,47 @@ const [products, setProducts] = useState<Product[]>([]);
     }
   }, [showCheckout, totalUSD, lastTransaction, payments, paymentCurrency, cart.length]);
 
+  const openAddCustomer = () => {
+    setEditingCustomerId(null);
+    setNewCustomerForm(EMPTY_CUSTOMER_FORM);
+    setShowAddCustomerModal(true);
+  };
+
+  const openEditCustomer = (s: Stakeholder) => {
+    setEditingCustomerId(s.id);
+    setNewCustomerForm({ name: s.name || '', phone: s.phone || '', email: s.email || '', address: s.address || '' });
+    setShowAddCustomerModal(true);
+  };
+
+  const closeCustomerModal = () => {
+    setShowAddCustomerModal(false);
+    setEditingCustomerId(null);
+    setNewCustomerForm(EMPTY_CUSTOMER_FORM);
+  };
+
+  // One form for both adding and editing a customer (editingCustomerId set = edit).
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsProcessing(true);
     try {
+      if (editingCustomerId !== null) {
+        const existing = stakeholders.find(s => s.id === editingCustomerId);
+        // No `balance` in the body: the PUT treats a sent balance as a manual override of the
+        // derived balance, and this form only edits contact details.
+        const res = await fetch(`/api/stakeholders/${editingCustomerId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...newCustomerForm, type: existing?.type || 'customer' })
+        });
+        if (res.ok) {
+          setStakeholders(prev => prev.map(s => s.id === editingCustomerId ? { ...s, ...newCustomerForm } : s));
+          closeCustomerModal();
+        } else {
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          alert(`Error saving customer: ${err.error || 'Unknown error'}`);
+        }
+        return;
+      }
       const res = await fetch('/api/stakeholders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -552,8 +592,7 @@ const [products, setProducts] = useState<Product[]>([]);
         const newCustomer = { ...newCustomerForm, id: data.id, type: 'customer' as const, balance: 0 };
         setStakeholders(prev => [...prev, newCustomer]);
         setSelectedStakeholder(data.id);
-        setShowAddCustomerModal(false);
-        setNewCustomerForm({ name: '', phone: '', email: '' });
+        closeCustomerModal();
         setShowCustomerDropdown(false);
       } else {
         const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -923,6 +962,10 @@ const [products, setProducts] = useState<Product[]>([]);
     handleReceiveDebt,
     handleBarcodeSubmit,
     handleCreateCustomer,
+    editingCustomerId,
+    openAddCustomer,
+    openEditCustomer,
+    closeCustomerModal,
     addToCart,
     handleSuggestionClick,
     updateQuantity,

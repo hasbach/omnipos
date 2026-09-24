@@ -980,10 +980,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/stakeholders", authenticate, (req: any, res) => {
     try {
       const tenantId = req.session.tenantId;
-      const { name, type, email, phone, balance } = req.body;
+      const { name, type, email, phone, address, balance } = req.body;
       // balance is derived (baseline + tx effects). A brand-new stakeholder has no transactions,
       // so any starting balance is stored as the baseline.
-      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, balance, balance_baseline) VALUES (?, ?, ?, ?, ?, ?, ?)").run(tenantId, name, type, email, phone, balance || 0, balance || 0);
+      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0);
       logAction(tenantId, 1, 'Stakeholder Created', `Name: ${name}, Type: ${type}`);
       res.json({ id: result.lastInsertRowid });
     } catch (err: any) {
@@ -994,8 +994,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.put("/api/stakeholders/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { name, type, email, phone, balance } = req.body;
-    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ? WHERE id = ? AND tenant_id = ?").run(name, type, email, phone, req.params.id, tenantId);
+    const { name, type, email, phone, address, balance } = req.body;
+    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, address = ? WHERE id = ? AND tenant_id = ?").run(name, type, email || null, phone || null, address || null, req.params.id, tenantId);
     // A manually-entered balance is treated as an override: set the baseline so the DERIVED
     // balance equals what was typed (baseline = entered − transaction effect), then recompute.
     if (balance !== undefined && balance !== null) {

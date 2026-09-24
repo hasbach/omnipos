@@ -41,6 +41,26 @@ function getLocalId(tableName: string, globalId: string) {
 
 const SYNC_INTERVAL_MS = 10000; // 10 seconds
 
+// Local columns the cloud table doesn't have yet (e.g. a new column like stakeholders.address
+// before its Supabase migration has been run). PostgREST rejects the WHOLE upsert with PGRST204
+// for one unknown column, so rather than blocking all sync for that table we learn the column
+// here, strip it from the payload, and retry. Reset on restart, so it's re-probed after migrating.
+const cloudMissingColumns: Record<string, Set<string>> = {};
+
+async function upsertToCloud(client: SupabaseClient, tableName: string, payload: any) {
+  const rows: any[] = Array.isArray(payload) ? payload : [payload];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const missing = cloudMissingColumns[tableName];
+    if (missing) for (const r of rows) for (const col of missing) delete r[col];
+    const { error } = await client.from(tableName).upsert(Array.isArray(payload) ? rows : rows[0], { onConflict: 'global_id' });
+    const col = error?.code === 'PGRST204' ? /'([^']+)' column/.exec(error.message || '')?.[1] : undefined;
+    if (!col || missing?.has(col)) return { error };
+    console.warn(`⚠️ [SYNC] Cloud ${tableName} has no '${col}' column — pushing without it until the cloud schema is migrated.`);
+    (cloudMissingColumns[tableName] ||= new Set()).add(col);
+  }
+  return { error: { message: `Too many unknown columns for ${tableName}` } };
+}
+
 // The tenants row is authoritative in the cloud (created at registration, license edited by the
 // super-admin) — the desktop only ever PULLS it, never pushes, so it can't stomp a freshly
 // activated license with a stale local copy.
@@ -96,7 +116,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
 
       const markSynced = db.prepare(`UPDATE ${tableName} SET last_synced_at = CURRENT_TIMESTAMP WHERE global_id = ?`);
 
-      const { error } = await client.from(tableName).upsert(payload, { onConflict: 'global_id' });
+      const { error } = await upsertToCloud(client, tableName, payload);
       if (!error) {
         const tx = db.transaction((records: any[]) => {
           for (const record of records) markSynced.run(record.global_id);
@@ -109,7 +129,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
         console.error(`❌ [SYNC] Batch push failed for ${tableName}, retrying row-by-row:`, JSON.stringify(error));
         let pushed = 0;
         for (let i = 0; i < payload.length; i++) {
-          const { error: rowErr } = await client.from(tableName).upsert(payload[i], { onConflict: 'global_id' });
+          const { error: rowErr } = await upsertToCloud(client, tableName, payload[i]);
           if (rowErr) {
             console.error(`❌ [SYNC] Skipping ${tableName} global_id=${unsyncedRecords[i].global_id}:`, JSON.stringify(rowErr));
           } else {
