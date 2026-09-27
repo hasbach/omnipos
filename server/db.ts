@@ -396,6 +396,61 @@ try { db.exec("ALTER TABLE stakeholders ADD COLUMN address TEXT;"); } catch {}
 try { db.exec("ALTER TABLE printers ADD COLUMN arabic_codepage INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE printers ADD COLUMN arabic_encoding TEXT DEFAULT 'cp864';"); } catch {}
 
+// 1.2.0 — price tiers, costing snapshots, invoice editing, stock adjustments.
+// Tier prices (retail = `price`; wholesale = جملة; super wholesale = جملة الجملة). NULL/0 = not set.
+for (const col of ['price_wholesale', 'price_wholesale_lbp', 'price_super_wholesale', 'price_super_wholesale_lbp', 'min_price']) {
+  try { db.exec(`ALTER TABLE products ADD COLUMN ${col} REAL;`); } catch {}
+}
+try { db.exec("ALTER TABLE stakeholders ADD COLUMN price_level TEXT DEFAULT 'retail';"); } catch {}
+try { db.exec("ALTER TABLE stakeholders ADD COLUMN credit_limit REAL;"); } catch {}
+// Every column added to a live transactional table must also exist on its archived twin and be
+// copied by /api/tenant/settlement — settlement moves rows between them.
+for (const t of ['transactions', 'archived_transactions']) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN price_level TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN notes TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN reference TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN edited_at DATETIME;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN edit_count INTEGER DEFAULT 0;`); } catch {}
+}
+// USD cost of one unit at the time the line was recorded — the basis of COGS / gross profit.
+try { db.exec("ALTER TABLE transaction_items ADD COLUMN unit_cost REAL;"); } catch {}
+try { db.exec("ALTER TABLE archived_transaction_items ADD COLUMN unit_cost REAL;"); } catch {}
+
+// Local-only audit/inventory tables (not in the sync PUSH/PULL lists).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transaction_edits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    transaction_id INTEGER NOT NULL,
+    archived INTEGER DEFAULT 0,
+    user_id INTEGER,
+    reason TEXT,
+    before_json TEXT,
+    after_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS stock_adjustments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    user_id INTEGER,
+    qty_before REAL,
+    qty_after REAL,
+    delta REAL,
+    reason TEXT,
+    unit_cost REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_tx_tenant_created ON transactions(tenant_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_atx_tenant_created ON archived_transactions(tenant_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_ti_tx ON transaction_items(transaction_id);
+  CREATE INDEX IF NOT EXISTS idx_ati_tx ON archived_transaction_items(transaction_id);
+  CREATE INDEX IF NOT EXISTS idx_pay_tx ON payments(transaction_id);
+  CREATE INDEX IF NOT EXISTS idx_apay_tx ON archived_payments(transaction_id);
+  CREATE INDEX IF NOT EXISTS idx_tx_stakeholder ON transactions(stakeholder_id);
+  CREATE INDEX IF NOT EXISTS idx_atx_stakeholder ON archived_transactions(stakeholder_id);
+`);
+
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
 for (const table of allTables) {
@@ -544,6 +599,19 @@ if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'archived_balance_recove
     console.log(`Archived-balance recovery: restored carried-over debt for ${restored} stakeholders (of ${sts.length}).`);
   } catch (e) {
     console.error('archived_balance_recovery_v1 error:', e);
+  }
+}
+
+// Historical lines predate the unit_cost snapshot; the product's current cost is the best available
+// estimate. Done ONCE so later cost changes never rewrite history.
+if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'unit_cost_backfill_v1'").get()) {
+  try {
+    for (const t of ['transaction_items', 'archived_transaction_items']) {
+      db.exec(`UPDATE ${t} SET unit_cost = (SELECT p.cost FROM products p WHERE p.id = ${t}.product_id) WHERE unit_cost IS NULL`);
+    }
+    db.prepare("INSERT INTO _migrations (name) VALUES ('unit_cost_backfill_v1')").run();
+  } catch (e) {
+    console.error('unit_cost_backfill_v1 error:', e);
   }
 }
 

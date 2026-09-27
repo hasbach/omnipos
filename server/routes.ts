@@ -13,6 +13,7 @@ import {
 import { EscPos } from "./printing/escpos.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
+import { setupReportRoutes } from "./reports.js";
 
 // The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
 // can't use it directly — translate it to the real address backing that Auth user (kept in
@@ -73,8 +74,8 @@ function lastRegisterClose(tenantId: number): { actualBalance: number; since: st
 // column lists keep that UNION consistent across every query that needs it. `archived_transactions`
 // has no `idempotency_key` column (that check only matters for still-live inserts), so the
 // archived side selects NULL in its place to keep the column count/order aligned.
-const TX_LIVE_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, idempotency_key, original_transaction_id, created_at";
-const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, NULL as idempotency_key, original_transaction_id, created_at";
+export const TX_LIVE_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at";
+export const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, NULL as idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at";
 
 // Same guard for stakeholder_id. The POS defaults the customer to id 1, which for any tenant
 // other than the seed tenant is a FOREIGN tenant's Walk-in — pushing that trips the cloud
@@ -308,6 +309,7 @@ async function establishLogin(
 }
 
 export function setupRoutes(app: any, wss: any, broadcast: Function, authenticate: any) {
+  setupReportRoutes(app, authenticate);
   // API Routes
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
@@ -560,15 +562,15 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       // Move transaction items
       db.prepare(`
-      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value)
-      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value 
+      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost)
+      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost
       FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
       // Move transactions
       db.prepare(`
-      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, created_at)
-      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, created_at
+      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at)
+      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
