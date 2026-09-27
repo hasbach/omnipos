@@ -50,7 +50,10 @@ test("a sale still appears in reports after End-of-Day settlement", async () => 
   const afterTotal = afterSales.body.reduce((sum: number, row: any) => sum + row.total, 0);
   assert.equal(afterTotal, 50, "settled sale disappeared from /api/reports/sales");
 
-  const today = new Date().toISOString().split("T")[0];
+  // Local calendar day, not UTC (server/routes.ts's localToday()) — daily-sales compares against
+  // date(created_at, 'localtime'), so near local midnight a UTC-derived date can be a day off.
+  const now = new Date();
+  const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().split("T")[0];
   const dailySales = await app.api("GET", `/api/reports/daily-sales?date=${today}`, { tenantId });
   assert.equal(dailySales.status, 200);
   assert.equal(dailySales.body.length, 1, "settled sale disappeared from /api/reports/daily-sales");

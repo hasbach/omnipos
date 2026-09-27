@@ -14,6 +14,10 @@ import { EscPos } from "./printing/escpos.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
+import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, type PriceLevel } from "./pricing.js";
+import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
+import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
+import { ValidationError } from "./errors.js";
 
 // The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
 // can't use it directly — translate it to the real address backing that Auth user (kept in
@@ -114,7 +118,7 @@ function findOriginalSale(tenantId: number, originalTransactionId: number): { tx
   }
   if (!tx) return null;
   const items = db.prepare(
-    `SELECT product_id, quantity, unit_price, discount_type, discount_value FROM ${itemsTable} WHERE transaction_id = ?`
+    `SELECT product_id, quantity, unit_price, discount_type, discount_value, unit_cost FROM ${itemsTable} WHERE transaction_id = ?`
   ).all(originalTransactionId) as any[];
   return { tx, items };
 }
@@ -761,8 +765,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
     const insertProduct = db.prepare(`
     INSERT INTO products (
-      tenant_id, barcode, name, price, package_price, units_per_package, stock, reorder_point, track_inventory, category, currency, unit
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      tenant_id, barcode, name, price, package_price, units_per_package, stock, reorder_point, track_inventory, category, currency, unit,
+      price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
     const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
@@ -784,7 +789,12 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           p.track_inventory === 0 ? 0 : 1,
           p.category || 'General',
           p.currency || 'USD',
-          p.unit || 'pcs'
+          p.unit || 'pcs',
+          p.price_wholesale || null,
+          p.price_wholesale_lbp || null,
+          p.price_super_wholesale || null,
+          p.price_super_wholesale_lbp || null,
+          p.min_price || null
         );
 
         const productId = result.lastInsertRowid;
@@ -829,11 +839,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/products", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes } = req.body;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
     const primaryBarcode = barcodes && barcodes.length > 0 ? barcodes[0] : null;
 
-    const result = db.prepare("INSERT INTO products (tenant_id, barcode, name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(tenantId, primaryBarcode, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, stock, reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit);
+    const result = db.prepare("INSERT INTO products (tenant_id, barcode, name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(tenantId, primaryBarcode, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, stock, reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null);
 
     const productId = result.lastInsertRowid;
     logAction(tenantId, 1, 'Product Created', `Name: ${name}, Price: ${price}, Stock: ${stock}`);
@@ -852,11 +862,14 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.put("/api/products/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { id } = req.params;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes } = req.body;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
     const primaryBarcode = barcodes && barcodes.length > 0 ? barcodes[0] : null;
 
-    db.prepare("UPDATE products SET barcode = ?, name = ?, price = ?, price_lbp = ?, package_price = ?, package_price_lbp = ?, cost = ?, cost_lbp = ?, units_per_package = ?, stock = ?, reorder_point = ?, track_inventory = ?, category = ?, currency = ?, unit = ? WHERE id = ? AND tenant_id = ?")
-      .run(primaryBarcode, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, stock, reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, id, tenantId);
+    // `stock` is optional: the product editor no longer sends it (stock changes go through audited
+    // POST /api/stock/adjust), because a form holding a stale stock value would otherwise silently
+    // undo every sale made while it was open. COALESCE keeps the current value when it's omitted.
+    db.prepare("UPDATE products SET barcode = ?, name = ?, price = ?, price_lbp = ?, package_price = ?, package_price_lbp = ?, cost = ?, cost_lbp = ?, units_per_package = ?, stock = COALESCE(?, stock), reorder_point = ?, track_inventory = ?, category = ?, currency = ?, unit = ?, price_wholesale = ?, price_wholesale_lbp = ?, price_super_wholesale = ?, price_super_wholesale_lbp = ?, min_price = ? WHERE id = ? AND tenant_id = ?")
+      .run(primaryBarcode, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, (stock === undefined || stock === null || stock === '') ? null : Number(stock), reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null, id, tenantId);
 
     logAction(tenantId, 1, 'Product Updated', `ID: ${id}, Name: ${name}, Price: ${price}, Stock: ${stock}`);
 
@@ -880,6 +893,73 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     logAction(tenantId, 1, 'Product Deleted', `ID: ${req.params.id}`);
     res.json({ success: true });
     broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+  });
+
+  // Bulk-updates one price tier's USD value across a set of products (by explicit ids, by
+  // category, or the whole catalog when neither is given). Only ever touches the USD column —
+  // the *_lbp twin is left for the owner to adjust separately (LBP tends to move with the
+  // exchange rate, not with a markup policy).
+  app.post("/api/products/bulk-price", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const { product_ids, category, tier, mode, value, round_to } = req.body;
+
+    if (!['retail', 'wholesale', 'super_wholesale'].includes(tier)) {
+      return res.status(400).json({ error: "Invalid tier." });
+    }
+    if (!['percent_change', 'markup_on_cost', 'set'].includes(mode)) {
+      return res.status(400).json({ error: "Invalid mode." });
+    }
+    if (!Number.isFinite(value)) {
+      return res.status(400).json({ error: "Invalid value." });
+    }
+
+    const column = tier === 'retail' ? 'price' : tier === 'wholesale' ? 'price_wholesale' : 'price_super_wholesale';
+
+    let query = "SELECT id, price, price_wholesale, price_super_wholesale, cost FROM products WHERE tenant_id = ?";
+    const params: any[] = [tenantId];
+    if (Array.isArray(product_ids) && product_ids.length) {
+      query += ` AND id IN (${product_ids.map(() => '?').join(',')})`;
+      params.push(...product_ids);
+    } else if (category) {
+      query += " AND category = ?";
+      params.push(category);
+    }
+
+    const products = db.prepare(query).all(...params) as any[];
+    const update = db.prepare(`UPDATE products SET ${column} = ? WHERE id = ? AND tenant_id = ?`);
+    const round = (n: number) => (round_to && round_to > 0) ? Math.round(n / round_to) * round_to : n;
+
+    let updated = 0;
+    const txn = db.transaction(() => {
+      for (const p of products) {
+        // markup_on_cost needs a real cost basis to work from — skip products without one.
+        if (mode === 'markup_on_cost' && !(p.cost && p.cost > 0)) continue;
+
+        let newPrice: number;
+        if (mode === 'set') {
+          newPrice = value;
+        } else if (mode === 'markup_on_cost') {
+          newPrice = p.cost * (1 + value / 100);
+        } else {
+          // percent_change adjusts the tier's OWN current value — falling back to retail when a
+          // wholesale/super-wholesale tier isn't configured yet on this product.
+          const base = tier === 'retail' ? p.price : ((p as any)[column] || p.price);
+          newPrice = base * (1 + value / 100);
+        }
+        newPrice = round(Math.max(0, newPrice));
+        update.run(newPrice, p.id, tenantId);
+        updated++;
+      }
+    });
+
+    try {
+      txn();
+      logAction(tenantId, 1, 'Bulk Price Update', `Tier: ${tier}, Mode: ${mode}, Value: ${value}, Updated: ${updated}`);
+      broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+      res.json({ updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
   });
 
   app.get("/api/products/:query", authenticate, (req: any, res) => {
@@ -992,10 +1072,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/stakeholders", authenticate, (req: any, res) => {
     try {
       const tenantId = req.session.tenantId;
-      const { name, type, email, phone, address, balance } = req.body;
+      const { name, type, email, phone, address, balance, price_level, credit_limit } = req.body;
       // balance is derived (baseline + tx effects). A brand-new stakeholder has no transactions,
       // so any starting balance is stored as the baseline.
-      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0);
+      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0, normalizeLevel(price_level), credit_limit || null);
       logAction(tenantId, 1, 'Stakeholder Created', `Name: ${name}, Type: ${type}`);
       res.json({ id: result.lastInsertRowid });
     } catch (err: any) {
@@ -1006,8 +1087,14 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.put("/api/stakeholders/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { name, type, email, phone, address, balance } = req.body;
-    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, address = ? WHERE id = ? AND tenant_id = ?").run(name, type, email || null, phone || null, address || null, req.params.id, tenantId);
+    const { name, type, email, phone, address, balance, price_level, credit_limit } = req.body;
+    // price_level/credit_limit are optional on this endpoint (older/other callers may not send
+    // them at all) — leave them untouched rather than silently resetting to 'retail'/unlimited.
+    const current = db.prepare("SELECT price_level, credit_limit FROM stakeholders WHERE id = ? AND tenant_id = ?").get(req.params.id, tenantId) as any;
+    const resolvedPriceLevel = price_level !== undefined ? normalizeLevel(price_level) : (current?.price_level || 'retail');
+    const resolvedCreditLimit = credit_limit !== undefined ? (credit_limit || null) : (current?.credit_limit ?? null);
+    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, address = ?, price_level = ?, credit_limit = ? WHERE id = ? AND tenant_id = ?")
+      .run(name, type, email || null, phone || null, address || null, resolvedPriceLevel, resolvedCreditLimit, req.params.id, tenantId);
     // A manually-entered balance is treated as an override: set the baseline so the DERIVED
     // balance equals what was typed (baseline = entered − transaction effect), then recompute.
     if (balance !== undefined && balance !== null) {
@@ -1063,17 +1150,26 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/transactions", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { stakeholder_id, user_id, type, items, currency, exchange_rate, payments, discount, tax, terminalId, original_transaction_id } = req.body;
+    const { stakeholder_id, user_id, type, items, currency, exchange_rate, payments, discount, tax, terminalId, original_transaction_id, price_level, notes, reference } = req.body;
     // Always store user_id AND stakeholder_id that belong to THIS tenant (never the old hard-coded
     // 1 defaults, which point at a seed tenant's rows and break the cloud FKs, blocking sync).
     const resolvedUserId = tenantUserId(tenantId, user_id);
     const resolvedStakeholderId = tenantStakeholderId(tenantId, stakeholder_id);
+    const settings = getSettingsMap(tenantId);
+    const stakeholderRow = resolvedStakeholderId
+      ? db.prepare("SELECT price_level, credit_limit, balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
+      : null;
+    // price_level: explicit request value, else the stakeholder's own level, else the tenant's
+    // configured default, else retail (normalizeLevel handles any garbled/missing value).
+    const resolvedPriceLevel: PriceLevel = normalizeLevel(
+      price_level ?? stakeholderRow?.price_level ?? settings.default_price_level
+    );
 
     // A refund's price and discount must come from the sale it's refunding — never from the
     // client — or a modified client could submit an arbitrary refund amount. A purchase's price
     // is legitimately negotiated per order (there's no catalog price to check it against), but it
     // still has to be a real, non-negative number rather than whatever the client happened to send.
-    let refundLines: Record<number, { unitPrice: number; discountType: string | null; discountValue: number | null; originalQuantity: number; remaining: number }> | null = null;
+    let refundLines: Record<number, { unitPrice: number; discountType: string | null; discountValue: number | null; originalQuantity: number; remaining: number; unitCost: number | null }> | null = null;
     if (type === 'refund') {
       if (!original_transaction_id) {
         return res.status(400).json({ error: "A refund must reference the sale it's refunding." });
@@ -1091,6 +1187,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           discountValue: oi.discount_value,
           originalQuantity: oi.quantity,
           remaining: oi.quantity - (alreadyRefunded[oi.product_id] || 0),
+          unitCost: oi.unit_cost ?? null,
         };
       }
       for (const item of items) {
@@ -1136,35 +1233,48 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     if (taxError) return res.status(400).json({ error: taxError });
 
     const transaction = db.transaction(() => {
+      // Cache products fetched for this request — a purchase's WAC blend must see the running
+      // cost/stock left by an EARLIER line for the same product in the same invoice, not the
+      // stale value from the initial (pre-request) row.
+      const productCache: Record<number, any> = {};
+      const getProduct = (id: number) => {
+        if (!(id in productCache)) {
+          productCache[id] = db.prepare(
+            "SELECT price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock FROM products WHERE id = ? AND tenant_id = ?"
+          ).get(id, tenantId) as any;
+        }
+        return productCache[id];
+      };
+
       let calculatedTotal = 0;
       const processedItems = items.map((item: any) => {
-        const product = db.prepare("SELECT price, package_price, units_per_package, track_inventory FROM products WHERE id = ? AND tenant_id = ?").get(item.id, tenantId) as any;
+        const product = getProduct(item.id);
 
         let unitPrice = item.price; // Fallback to provided price (purchases — validated above)
         let itemTotal: number;
         let discountType: string | null = item.discount?.type || null;
         let discountValue: number | null = item.discount?.value ?? null;
+        let unitCost: number | null = null;
 
         if (type === 'sale' && product) {
-          if (product.package_price && product.units_per_package > 1) {
-            const numPackages = Math.floor(item.quantity / product.units_per_package);
-            const remainder = item.quantity % product.units_per_package;
-            const packagedTotal = (numPackages * product.package_price) + (remainder * product.price);
-            unitPrice = packagedTotal / item.quantity;
-          } else {
-            unitPrice = product.price;
+          unitPrice = saleLineUnitPrice(product, resolvedPriceLevel, item.quantity);
+
+          // A manual price override (cashier types a different price on the line) is only
+          // honored when the tenant explicitly turned it on, and only for a real, non-negative
+          // number — never trust a garbled/absent client value.
+          if (settings.allow_price_override === '1' && Number.isFinite(item.unit_price) && item.unit_price >= 0) {
+            unitPrice = item.unit_price;
+          }
+          if (product.min_price && product.min_price > 0 && unitPrice < product.min_price && settings.enforce_min_price === '1') {
+            throw new ValidationError(`Price for product ${item.id} is below its minimum price of ${product.min_price}.`);
           }
 
           // Apply the per-item discount (the cart's "DISC" control) the same way the client does
           // when computing what the cashier actually charges — otherwise total_amount ends up
           // higher than the payments actually collected on any discounted line item, which
           // silently overstates recorded revenue in every report and end-of-day reconciliation.
-          itemTotal = unitPrice * item.quantity;
-          if (discountValue) {
-            itemTotal = discountType === 'percentage'
-              ? itemTotal * (1 - discountValue / 100)
-              : Math.max(0, itemTotal - discountValue); // fixed discounts are entered in USD, matching this total's basis
-          }
+          itemTotal = lineTotal(unitPrice, item.quantity, { type: discountType as any, value: discountValue });
+          unitCost = product.cost ?? null; // USD cost snapshot for COGS
         } else if (type === 'refund' && refundLines) {
           // Re-derive price AND discount from the original sale (validated above) — never trust
           // the client's for a refund. A fixed discount is prorated to how much of that original
@@ -1181,41 +1291,40 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
             itemTotal -= (discountValue || 0) * (item.quantity / line.originalQuantity);
           }
           itemTotal = Math.max(0, itemTotal);
+          unitCost = line.unitCost; // a refund copies the ORIGINAL sale line's cost snapshot
         } else {
           // Purchase (price/quantity validated above): the cost is legitimately entered per
           // order, but the discount, if any, is applied the same way as a sale.
-          itemTotal = unitPrice * item.quantity;
-          if (discountValue) {
-            itemTotal = discountType === 'percentage'
-              ? itemTotal * (1 - discountValue / 100)
-              : Math.max(0, itemTotal - discountValue);
+          itemTotal = lineTotal(unitPrice, item.quantity, { type: discountType as any, value: discountValue });
+          unitCost = unitPrice; // the purchase price paid IS this line's unit cost
+
+          // Blend this line into the product's weighted-average cost BEFORE the stock increment
+          // (below, once the transaction row exists) — using the running cache so multiple lines
+          // for the same product within one invoice blend in the order they were entered.
+          if (type === 'purchase' && product) {
+            const newCost = applyPurchaseCost(product.stock || 0, product.cost, item.quantity, unitPrice);
+            product.cost = newCost;
+            product.stock = (product.stock || 0) + item.quantity;
+            db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, item.id, tenantId);
           }
         }
 
         calculatedTotal += itemTotal;
 
-        return { ...item, unitPrice, discountType, discountValue, trackInventory: product ? product.track_inventory : 1 };
+        return { ...item, unitPrice, discountType, discountValue, unitCost, trackInventory: product ? product.track_inventory : 1 };
       });
 
-      // Apply global discount/tax if any (bounds validated above). A fixed discount is additionally
-      // clamped to the subtotal here, since that bound depends on calculatedTotal — otherwise a
-      // fixed discount larger than the sale would leave a negative total.
-      let finalTotal = calculatedTotal;
-      if (discount?.type === 'percentage') finalTotal -= (calculatedTotal * (discount.value / 100));
-      else if (discount?.type === 'fixed') finalTotal -= Math.min(discount.value, calculatedTotal);
-
-      if (tax?.type === 'percentage') finalTotal += (finalTotal * (tax.value / 100));
-      else if (tax?.type === 'fixed') finalTotal += tax.value;
-
-      finalTotal = Math.max(0, finalTotal); // defensive floor — should already hold given the bounds above
+      // Apply global discount/tax if any (bounds validated above) — exactly the same math as
+      // before, now shared with PUT /api/transactions/:id via server/pricing.ts.
+      const finalTotal = computeTotals([calculatedTotal], discount, tax);
 
       const termId = terminalId || 'MAIN';
       const sequenceRow = db.prepare(`SELECT IFNULL(MAX(terminal_sequence), 0) + 1 as next_seq FROM transactions WHERE terminal_id = ? AND tenant_id = ?`).get(termId, tenantId) as any;
       const termSeq = sequenceRow.next_seq;
 
       const info = db.prepare(`
-      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         tenantId,
         resolvedStakeholderId,
@@ -1231,14 +1340,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         'completed',
         termId,
         termSeq,
-        type === 'refund' ? original_transaction_id : null
+        type === 'refund' ? original_transaction_id : null,
+        resolvedPriceLevel,
+        notes || null,
+        reference || null
       );
 
       const transactionId = info.lastInsertRowid;
 
       const insertItem = db.prepare(`
-      INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
       let stockChange = '-';
@@ -1258,7 +1370,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           item.discountType,
           item.discountValue,
           item.tax?.type || null,
-          item.tax?.value || null
+          item.tax?.value || null,
+          item.unitCost ?? null
         );
         if (item.trackInventory !== 0) {
           updateStock.run(item.quantity, item.id, tenantId);
@@ -1279,6 +1392,23 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         }
       }
 
+      // Credit limit: would this transaction push the stakeholder further past their limit?
+      // `stakeholderRow.balance` is this stakeholder's balance BEFORE this transaction, so add
+      // just this transaction's own effect (same sign convention as server/balance.ts).
+      if (stakeholderRow && stakeholderRow.credit_limit && stakeholderRow.credit_limit > 0 && settings.enforce_credit_limit === '1') {
+        let effect = 0;
+        if (type === 'sale' || type === 'purchase') effect = -(finalTotal - totalPaid);
+        else if (type === 'refund') effect = (finalTotal - totalPaid);
+        const prospectiveBalance = (stakeholderRow.balance || 0) + effect;
+        if (prospectiveBalance < -stakeholderRow.credit_limit) {
+          throw new ValidationError(
+            `This would exceed the credit limit (${stakeholderRow.credit_limit}).`,
+            400,
+            'CREDIT_LIMIT'
+          );
+        }
+      }
+
       // Balance is derived, not nudged: recompute it from this stakeholder's transactions +
       // baseline now that the new transaction and its payments are in place.
       if (resolvedStakeholderId) {
@@ -1292,8 +1422,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const id = transaction();
       const fullTransaction = db.prepare(`
       SELECT t.*, s.name as stakeholder_name, u.name as user_name
-      FROM transactions t 
-      LEFT JOIN stakeholders s ON t.stakeholder_id = s.id 
+      FROM transactions t
+      LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
       LEFT JOIN users u ON t.user_id = u.id
       WHERE t.id = ?
     `).get(id);
@@ -1303,6 +1433,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       broadcast({ type: 'TRANSACTIONS_UPDATED', transaction: fullTransaction, terminalId }, tenantId);
       broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
     } catch (error: any) {
+      if (error instanceof ValidationError) {
+        return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      }
       res.status(500).json({ error: error.message });
     }
   });
@@ -1317,11 +1450,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const deleteTx = db.transaction(() => {
       // Restore stock
       const items = db.prepare(`
-        SELECT ti.*, p.track_inventory FROM transaction_items ti
+        SELECT ti.*, p.track_inventory, p.stock as current_stock, p.cost as current_cost FROM transaction_items ti
         JOIN products p ON p.id = ti.product_id
         WHERE ti.transaction_id = ?
       `).all(id) as any[];
       for (const item of items) {
+        // A purchase's cost was blended into the WAC on receipt — reverse it BEFORE the stock
+        // decrement below, using the stock as it stands right now (i.e. still including this line).
+        if (tx.type === 'purchase') {
+          const newCost = reversePurchaseCost(item.current_stock || 0, item.current_cost, item.quantity, item.unit_cost ?? item.unit_price);
+          db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, item.product_id, tenantId);
+        }
         if (item.track_inventory === 0) continue;
         if (tx.type === 'sale') {
           db.prepare("UPDATE products SET stock = stock + ? WHERE id = ? AND tenant_id = ?").run(item.quantity, item.product_id, tenantId);
@@ -1376,16 +1515,18 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.get("/api/reports/daily-sales", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { date } = req.query;
-    const targetDate = date ? String(date) : new Date().toISOString().split('T')[0];
+    // Was comparing date(created_at) (UTC) to a UTC-derived default — both need to be the store's
+    // LOCAL calendar day, or a sale near midnight lands on the wrong day's report.
+    const targetDate = date ? String(date) : localToday();
 
     const transactions = db.prepare(`
     SELECT t.*, s.name as stakeholder_name, u.name as user_name
     FROM (
       SELECT ${TX_LIVE_COLUMNS} FROM transactions
-      WHERE date(created_at) = date(?) AND tenant_id = ? AND type != 'purchase'
+      WHERE date(created_at, 'localtime') = date(?) AND tenant_id = ? AND type != 'purchase'
       UNION ALL
       SELECT ${TX_ARCHIVED_COLUMNS} FROM archived_transactions
-      WHERE date(created_at) = date(?) AND tenant_id = ? AND type != 'purchase'
+      WHERE date(created_at, 'localtime') = date(?) AND tenant_id = ? AND type != 'purchase'
     ) t
     LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
     LEFT JOIN users u ON t.user_id = u.id
@@ -1437,21 +1578,21 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     res.json(transactions);
   });
 
-  app.get("/api/transactions/:id", authenticate, (req: any, res) => {
-    const tenantId = req.session.tenantId;
-
+  // Shared by GET /api/transactions/:id and PUT /api/transactions/:id (which re-renders the same
+  // shape after editing) — looks in the live table first, then archived_transactions so a
+  // settled invoice can still be opened/viewed.
+  function buildTransactionDetail(tenantId: number, id: any): any | null {
     let transaction = db.prepare(`
     SELECT t.*, s.name as stakeholder_name, u.name as user_name, 0 as archived
     FROM transactions t
     LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
     LEFT JOIN users u ON t.user_id = u.id
     WHERE t.id = ? AND t.tenant_id = ?
-  `).get(req.params.id, tenantId) as any;
+  `).get(id, tenantId) as any;
 
     // Not found live — it may have gone through End-of-Day settlement, which moves it to
     // archived_transactions. Fall back there so an old invoice can still be opened/viewed
-    // (the frontend treats `archived: true` as read-only — settlement's edit/delete endpoints
-    // only ever touch the live tables, by design).
+    // (the frontend treats `archived: true` as read-only for delete, but PUT now supports it too).
     let itemsTable = "transaction_items";
     let paymentsTable = "payments";
     if (!transaction) {
@@ -1461,23 +1602,27 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
       LEFT JOIN users u ON t.user_id = u.id
       WHERE t.id = ? AND t.tenant_id = ?
-    `).get(req.params.id, tenantId) as any;
+    `).get(id, tenantId) as any;
       itemsTable = "archived_transaction_items";
       paymentsTable = "archived_payments";
     }
 
-    if (!transaction) return res.status(404).json({ error: "Transaction not found" });
+    if (!transaction) return null;
 
     const items = db.prepare(`
     SELECT ti.*, p.name as product_name, p.barcode, p.cost
     FROM ${itemsTable} ti
     JOIN products p ON ti.product_id = p.id
     WHERE ti.transaction_id = ?
-  `).all(req.params.id);
+  `).all(id);
 
     transaction.items = items.map((item: any) => ({
       ...item,
       price: item.unit_price,
+      // A line recorded before the unit_cost snapshot existed (or whose backfill missed it) falls
+      // back to the product's current cost — the same best-available estimate the one-time
+      // unit_cost_backfill_v1 migration used.
+      unit_cost: item.unit_cost ?? item.cost ?? null,
       discount: item.discount_type ? { type: item.discount_type, value: item.discount_value } : undefined
     }));
 
@@ -1486,12 +1631,46 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     // Include payments and paid_amount for edit support. Credit ("on account") payments are NOT
     // real money received, so they don't count toward paid_amount — mirroring how POST computes
     // the unpaid remainder that goes to the customer's balance.
-    const payments = db.prepare(`SELECT * FROM ${paymentsTable} WHERE transaction_id = ? ORDER BY created_at ASC`).all(req.params.id) as any[];
+    const payments = db.prepare(`SELECT * FROM ${paymentsTable} WHERE transaction_id = ? ORDER BY created_at ASC`).all(id) as any[];
     const paidAmount = payments.reduce((sum: number, p: any) => p.method === 'credit' ? sum : sum + (p.amount / (p.exchange_rate || 1)), 0);
     transaction.payments = payments;
     transaction.paid_amount = paidAmount;
 
+    return transaction;
+  }
+
+  app.get("/api/transactions/:id", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const transaction = buildTransactionDetail(tenantId, req.params.id);
+    if (!transaction) return res.status(404).json({ error: "Transaction not found" });
     res.json(transaction);
+  });
+
+  app.get("/api/transactions/:id/edits", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const edits = getTransactionEdits(tenantId, Number(req.params.id));
+    res.json(edits);
+  });
+
+  // Edits a live OR settled (archived) sale/purchase invoice in place — lines, prices, discounts,
+  // customer, notes/reference, and payments (add/remove). See server/invoiceEdit.ts for the full
+  // stock/WAC/balance/audit-trail logic; this route just calls it and re-renders the same shape
+  // GET /api/transactions/:id returns.
+  app.put("/api/transactions/:id", authenticate, async (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    try {
+      const { id } = await editTransaction(tenantId, Number(req.params.id), req.body || {});
+      const transaction = buildTransactionDetail(tenantId, id);
+      broadcast({ type: 'TRANSACTIONS_UPDATED' }, tenantId);
+      broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+      broadcast({ type: 'STAKEHOLDERS_UPDATED' }, tenantId);
+      res.json(transaction);
+    } catch (error: any) {
+      if (error instanceof ValidationError) {
+        return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      }
+      res.status(500).json({ error: error.message });
+    }
   });
 
   app.get("/api/logs", authenticate, (req: any, res) => {
@@ -1511,7 +1690,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const sales = db.prepare(`
     SELECT
-      DATE(created_at) as date,
+      DATE(created_at, 'localtime') as date,
       SUM(CASE WHEN type = 'refund' THEN -total_amount ELSE total_amount END) as total,
       COUNT(id) as count
     FROM (
@@ -1519,7 +1698,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       UNION ALL
       SELECT id, type, total_amount, created_at FROM archived_transactions WHERE tenant_id = ? AND type != 'purchase'
     )
-    GROUP BY DATE(created_at)
+    GROUP BY DATE(created_at, 'localtime')
     ORDER BY date DESC
     LIMIT 30
   `).all(tenantId, tenantId);
@@ -1528,16 +1707,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.get("/api/reports/daily-sales-by-payment", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const date = req.query.date || new Date().toISOString().split('T')[0];
+    const date = req.query.date || localToday();
+    // total_usd: payments are stored in their own currency (payments.amount), so a per-method
+    // breakdown that just SUMs amount silently mixes currencies — add the USD-converted total too
+    // (amount / exchange_rate) so callers can reconcile against total_amount-based reports.
     const sales = db.prepare(`
-    SELECT method, SUM(amount) as total FROM (
-      SELECT p.method, p.amount, p.created_at
+    SELECT method, SUM(amount) as total, SUM(amount / exchange_rate) as total_usd FROM (
+      SELECT p.method, p.amount, p.exchange_rate, p.created_at
       FROM payments p JOIN transactions t ON p.transaction_id = t.id
-      WHERE t.tenant_id = ? AND t.type = 'sale' AND date(p.created_at) = ?
+      WHERE t.tenant_id = ? AND t.type = 'sale' AND date(p.created_at, 'localtime') = ?
       UNION ALL
-      SELECT p.method, p.amount, p.created_at
+      SELECT p.method, p.amount, p.exchange_rate, p.created_at
       FROM archived_payments p JOIN archived_transactions t ON p.transaction_id = t.id
-      WHERE t.tenant_id = ? AND t.type = 'sale' AND date(p.created_at) = ?
+      WHERE t.tenant_id = ? AND t.type = 'sale' AND date(p.created_at, 'localtime') = ?
     )
     GROUP BY method
   `).all(tenantId, date, tenantId, date);
@@ -1546,13 +1728,13 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.get("/api/reports/daily-sales-by-customer", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const date = req.query.date || new Date().toISOString().split('T')[0];
+    const date = req.query.date || localToday();
     const sales = db.prepare(`
     SELECT s.name as customer, SUM(t.total_amount) as total
     FROM (
-      SELECT stakeholder_id, total_amount FROM transactions WHERE tenant_id = ? AND type = 'sale' AND date(created_at) = ?
+      SELECT stakeholder_id, total_amount FROM transactions WHERE tenant_id = ? AND type = 'sale' AND date(created_at, 'localtime') = ?
       UNION ALL
-      SELECT stakeholder_id, total_amount FROM archived_transactions WHERE tenant_id = ? AND type = 'sale' AND date(created_at) = ?
+      SELECT stakeholder_id, total_amount FROM archived_transactions WHERE tenant_id = ? AND type = 'sale' AND date(created_at, 'localtime') = ?
     ) t
     JOIN stakeholders s ON t.stakeholder_id = s.id
     GROUP BY s.id
@@ -1567,15 +1749,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   // anymore, so listing its stale "unpaid" amount here would just be misleading, not actionable.
   app.get("/api/reports/unpaid-sales", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
+    // payments.amount is in the PAYMENT's own currency, not the transaction's USD basis — must
+    // divide by exchange_rate before comparing to total_amount (USD), and a 'credit' entry isn't
+    // real money received, so it can't count toward "paid" either (both bugs the balance/costing
+    // work surfaced — this mirrors server/balance.ts's unpaidNonCredit).
     const unpaid = db.prepare(`
     SELECT * FROM (
-        SELECT t.id, s.name as customer, t.total_amount, 
-               (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM payments WHERE transaction_id = t.id)) as balance,
+        SELECT t.id, s.name as customer, t.total_amount,
+               (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM payments WHERE transaction_id = t.id AND method != 'credit')) as balance,
                t.created_at
         FROM transactions t
         JOIN stakeholders s ON t.stakeholder_id = s.id
         WHERE t.tenant_id = ? AND t.type = 'sale'
-    ) WHERE balance > 0
+    ) WHERE balance > 0.01
     ORDER BY created_at DESC
   `).all(tenantId);
     res.json(unpaid);
@@ -1585,13 +1771,13 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const unpaid = db.prepare(`
     SELECT * FROM (
-        SELECT t.id, s.name as supplier, t.total_amount, 
-               (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM payments WHERE transaction_id = t.id)) as balance,
+        SELECT t.id, s.name as supplier, t.total_amount,
+               (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM payments WHERE transaction_id = t.id AND method != 'credit')) as balance,
                t.created_at
         FROM transactions t
         JOIN stakeholders s ON t.stakeholder_id = s.id
         WHERE t.tenant_id = ? AND t.type = 'purchase'
-    ) WHERE balance > 0
+    ) WHERE balance > 0.01
     ORDER BY created_at DESC
   `).all(tenantId);
     res.json(unpaid);
@@ -1619,8 +1805,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const params: any[] = [];
       if (stakeholderId) { sql += " AND t.stakeholder_id = ?"; params.push(stakeholderId); }
       if (type) { sql += " AND t.type = ?"; params.push(type); }
-      if (fromDate) { sql += " AND date(t.created_at) >= date(?)"; params.push(fromDate); }
-      if (toDate) { sql += " AND date(t.created_at) <= date(?)"; params.push(toDate); }
+      if (fromDate) { sql += " AND date(t.created_at, 'localtime') >= date(?)"; params.push(fromDate); }
+      if (toDate) { sql += " AND date(t.created_at, 'localtime') <= date(?)"; params.push(toDate); }
       if (invoiceNumber) { sql += " AND t.id = ?"; params.push(invoiceNumber); }
       if (productId) {
         sql += ` AND t.id IN (SELECT transaction_id FROM ${itemsTable} WHERE product_id = ?)`;
@@ -1643,17 +1829,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         s.name as stakeholder,
         t.total_amount,
         t.currency,
-        (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id) as paid_amount,
-        (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id)) as balance,
+        (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit') as paid_amount,
+        (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit')) as balance,
         u.name as processed_by
       FROM ${txTable} t
       LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
       LEFT JOIN users u ON t.user_id = u.id
       WHERE t.tenant_id = ?${filter.sql}`;
       if (status === 'paid') {
-        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id)) <= 0.01`;
+        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit')) <= 0.01`;
       } else if (status === 'unpaid') {
-        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount), 0) FROM ${paymentsTable} WHERE transaction_id = t.id)) > 0.01`;
+        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit')) > 0.01`;
       }
       return { sql, params: [tenantId, ...filter.params] };
     };
@@ -1930,13 +2116,20 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const { year, notes } = req.body;
 
     // Calculate totals for the year
+    // Ignored archived_transactions entirely, so any year containing an End-of-Day settlement
+    // (which moves rows out of `transactions`) silently undercounted — and never subtracted
+    // refunds, so a refunded sale still counted at its full original amount.
     const totals = db.prepare(`
-    SELECT 
-      SUM(CASE WHEN type = 'sale' THEN total_amount ELSE 0 END) as sales,
+    SELECT
+      SUM(CASE WHEN type = 'sale' THEN total_amount WHEN type = 'refund' THEN -total_amount ELSE 0 END) as sales,
       SUM(CASE WHEN type = 'purchase' THEN total_amount ELSE 0 END) as purchases
-    FROM transactions
-    WHERE tenant_id = ? AND strftime('%Y', created_at) = ?
-  `).get(tenantId, String(year)) as any;
+    FROM (
+      SELECT type, total_amount, created_at FROM transactions WHERE tenant_id = ?
+      UNION ALL
+      SELECT type, total_amount, created_at FROM archived_transactions WHERE tenant_id = ?
+    )
+    WHERE strftime('%Y', created_at, 'localtime') = ?
+  `).get(tenantId, tenantId, String(year)) as any;
 
     const totalSales = totals?.sales || 0;
     const totalPurchases = totals?.purchases || 0;
@@ -2073,6 +2266,127 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     logAction(tenantId, 1, 'Purchase Received', `PO #${id} marked as received`);
     broadcast({ type: 'PURCHASES_UPDATED' }, tenantId);
     res.json({ success: true });
+  });
+
+  // --- INVENTORY / STOCK ADJUSTMENTS ---
+
+  // Manually correct a product's stock count (stock take, damage, shrinkage, etc.), keeping an
+  // audit trail in stock_adjustments — either the new absolute quantity or a +/- delta.
+  app.post("/api/stock/adjust", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const { product_id, new_qty, delta, reason } = req.body;
+
+    const product = db.prepare("SELECT id, stock, cost FROM products WHERE id = ? AND tenant_id = ?").get(product_id, tenantId) as any;
+    if (!product) return res.status(404).json({ error: "Product not found." });
+
+    const qtyBefore = product.stock || 0;
+    let qtyAfter: number;
+    if (new_qty !== undefined && new_qty !== null) {
+      if (!Number.isFinite(new_qty)) return res.status(400).json({ error: "Invalid new_qty." });
+      qtyAfter = new_qty;
+    } else if (delta !== undefined && delta !== null) {
+      if (!Number.isFinite(delta)) return res.status(400).json({ error: "Invalid delta." });
+      qtyAfter = qtyBefore + delta;
+    } else {
+      return res.status(400).json({ error: "Provide either new_qty or delta." });
+    }
+    const appliedDelta = qtyAfter - qtyBefore;
+    const userId = tenantUserId(tenantId, req.body.user_id);
+
+    const run = db.transaction(() => {
+      db.prepare("UPDATE products SET stock = ? WHERE id = ? AND tenant_id = ?").run(qtyAfter, product_id, tenantId);
+      return db.prepare(
+        "INSERT INTO stock_adjustments (tenant_id, product_id, user_id, qty_before, qty_after, delta, reason, unit_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(tenantId, product_id, userId, qtyBefore, qtyAfter, appliedDelta, reason || null, product.cost ?? null);
+    });
+
+    try {
+      const info = run();
+      logAction(tenantId, userId, 'Stock Adjusted', `Product: ${product_id}, ${qtyBefore} -> ${qtyAfter} (${reason || 'no reason given'})`);
+      broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+      res.json({ id: info.lastInsertRowid, product_id, qty_before: qtyBefore, qty_after: qtyAfter, delta: appliedDelta });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/stock/adjustments", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const { product_id, from, to } = req.query;
+
+    let query = `
+      SELECT sa.*, p.name as product_name, u.name as user_name
+      FROM stock_adjustments sa
+      LEFT JOIN products p ON sa.product_id = p.id
+      LEFT JOIN users u ON sa.user_id = u.id
+      WHERE sa.tenant_id = ?`;
+    const params: any[] = [tenantId];
+    if (product_id) { query += " AND sa.product_id = ?"; params.push(product_id); }
+    if (from) { query += " AND date(sa.created_at) >= date(?)"; params.push(from); }
+    if (to) { query += " AND date(sa.created_at) <= date(?)"; params.push(to); }
+    query += " ORDER BY sa.created_at DESC";
+
+    res.json(db.prepare(query).all(...params));
+  });
+
+  // Unified stock ledger for one product: sales/refunds/purchases (live + archived) and manual
+  // adjustments, oldest first, each carrying the running quantity on hand AFTER that event. The
+  // running total is computed BACKWARDS from the product's current stock (rather than forwards
+  // from an assumed starting point) so it's always consistent with what's actually on the shelf,
+  // even if some history predates this ledger.
+  app.get("/api/stock/movements/:productId", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const productId = req.params.productId;
+
+    const product = db.prepare("SELECT stock FROM products WHERE id = ? AND tenant_id = ?").get(productId, tenantId) as any;
+    if (!product) return res.status(404).json({ error: "Product not found." });
+
+    const txRows = db.prepare(`
+      SELECT * FROM (
+        SELECT t.id as transaction_id, t.created_at as date, t.type,
+               CASE WHEN t.type = 'sale' THEN -ti.quantity ELSE ti.quantity END as quantity_change,
+               ti.quantity as quantity, 0 as archived
+        FROM transaction_items ti JOIN transactions t ON ti.transaction_id = t.id
+        WHERE t.tenant_id = ? AND ti.product_id = ? AND t.type IN ('sale', 'purchase', 'refund')
+        UNION ALL
+        SELECT t.id as transaction_id, t.created_at as date, t.type,
+               CASE WHEN t.type = 'sale' THEN -ti.quantity ELSE ti.quantity END as quantity_change,
+               ti.quantity as quantity, 1 as archived
+        FROM archived_transaction_items ti JOIN archived_transactions t ON ti.transaction_id = t.id
+        WHERE t.tenant_id = ? AND ti.product_id = ? AND t.type IN ('sale', 'purchase', 'refund')
+      )
+    `).all(tenantId, productId, tenantId, productId) as any[];
+
+    const adjustmentRows = db.prepare(
+      "SELECT id, created_at as date, delta as quantity_change, qty_before, qty_after, reason FROM stock_adjustments WHERE tenant_id = ? AND product_id = ?"
+    ).all(tenantId, productId) as any[];
+
+    const events = [
+      ...txRows.map((r) => ({
+        date: r.date,
+        type: r.type,
+        transaction_id: r.transaction_id,
+        archived: !!r.archived,
+        quantity: r.quantity,
+        quantity_change: r.quantity_change,
+      })),
+      ...adjustmentRows.map((a) => ({
+        date: a.date,
+        type: 'adjustment',
+        adjustment_id: a.id,
+        reason: a.reason,
+        quantity_change: a.quantity_change,
+      })),
+    ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    const totalChange = events.reduce((sum, e) => sum + (e.quantity_change || 0), 0);
+    let running = (product.stock || 0) - totalChange;
+    for (const e of events) {
+      running += e.quantity_change || 0;
+      (e as any).balance_after = running;
+    }
+
+    res.json(events);
   });
 
   // --- PRINTER MANAGEMENT ---
