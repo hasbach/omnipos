@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Lock, User, ChevronRight, CheckCircle2, X } from 'lucide-react';
+import { Lock, User, CheckCircle2, X, Delete } from 'lucide-react';
 import { Tenant } from '../types';
+import { useI18n } from '../intl/index';
 
 interface LockScreenProps {
   tenant: Tenant;
@@ -12,6 +13,7 @@ interface LockScreenProps {
 }
 
 export default function LockScreen({ tenant, users, isLoading = false, onUnlock, onLogout }: LockScreenProps) {
+  const { t } = useI18n();
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -31,7 +33,7 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
 
   const handleUnlock = async () => {
     if (pin.length !== 4 || !selectedUser) return;
-    
+
     setLoading(true);
     setError('');
 
@@ -51,7 +53,7 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
         setPin(''); // Reset PIN on error
       }
     } catch (err) {
-      setError('Connection error');
+      setError(t('pos_connection_error', 'Connection error'));
       setPin('');
     } finally {
       setLoading(false);
@@ -87,45 +89,45 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
   }, [selectedUser, loading]);
 
   return (
-    <div className="fixed inset-0 z-[100] bg-app-bg flex flex-col font-sans">
+    <div className="fixed inset-0 z-[100] bg-bg flex flex-col">
       {/* Header */}
-      <header className="p-6 flex justify-between items-center bg-app-surface border-b border-app-border">
+      <header className="p-6 flex justify-between items-center bg-surface border-b border-border">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-app-ink text-app-bg rounded-xl flex items-center justify-center">
+          <div className="w-10 h-10 bg-primary text-on-primary rounded-xl flex items-center justify-center">
             <Lock size={20} />
           </div>
           <div>
-            <h1 className="font-black uppercase tracking-widest text-sm">{tenant.name}</h1>
-            <p className="text-[10px] uppercase font-bold opacity-50">Terminal Locked</p>
+            <h1 className="font-bold text-sm text-text">{tenant.name}</h1>
+            <p className="text-[10px] uppercase font-semibold tracking-wide text-text-3">{t('pos_terminal_locked', 'Terminal Locked')}</p>
           </div>
         </div>
-        <button 
+        <button
           onClick={onLogout}
-          className="px-4 py-2 text-xs font-black uppercase tracking-widest opacity-50 hover:opacity-100 hover:text-red-500 transition-all"
+          className="px-4 py-2.5 text-sm font-medium text-text-3 hover:text-danger transition-all cursor-pointer rounded-[var(--radius-input)] hover:bg-danger-soft"
         >
-          Logout Tenant
+          {t('pos_logout_tenant', 'Logout Tenant')}
         </button>
       </header>
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
         {/* User Selection */}
-        <div className="flex-1 p-12 overflow-y-auto border-r border-app-border bg-app-surface">
-          <h2 className="text-3xl font-black uppercase tracking-tighter mb-8">Select User</h2>
+        <div className="flex-1 p-8 overflow-y-auto border-e border-border bg-surface">
+          <h2 className="text-2xl font-bold text-text mb-6">{t('pos_select_user', 'Select User')}</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {isLoading ? (
               [1, 2, 3].map(i => (
-                <div key={i} className="animate-pulse bg-app-surface border border-app-border rounded-3xl p-6 flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-full bg-app-border" />
+                <div key={i} className="animate-pulse bg-surface border border-border rounded-2xl p-6 flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-surface-2" />
                   <div className="space-y-2">
-                    <div className="h-4 w-24 bg-app-border rounded" />
-                    <div className="h-3 w-16 bg-app-border rounded" />
+                    <div className="h-4 w-24 bg-surface-2 rounded" />
+                    <div className="h-3 w-16 bg-surface-2 rounded" />
                   </div>
                 </div>
               ))
             ) : users.length === 0 ? (
-              <div className="col-span-full py-12 text-center text-sm font-bold uppercase tracking-widest opacity-50">
-                No users found. Please contact an administrator.
+              <div className="col-span-full py-12 text-center text-sm font-medium text-text-3">
+                {t('pos_no_users_found', 'No users found. Please contact an administrator.')}
               </div>
             ) : (
               users.map(u => (
@@ -136,21 +138,21 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
                     setPin('');
                     setError('');
                   }}
-                  className={`p-6 rounded-3xl text-left transition-all border-2 ${
-                    selectedUser?.id === u.id 
-                      ? 'border-app-ink bg-app-ink text-app-bg shadow-xl scale-105' 
-                      : 'border-transparent bg-app-bg hover:border-app-border hover:shadow-md'
+                  className={`p-6 rounded-2xl text-start transition-all border-2 cursor-pointer min-h-[88px] ${
+                    selectedUser?.id === u.id
+                      ? 'border-primary bg-primary text-on-primary shadow-lg scale-[1.02]'
+                      : 'border-transparent bg-bg hover:border-border-strong hover:shadow-md'
                   }`}
                 >
                   <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center font-black text-xl ${
-                      selectedUser?.id === u.id ? 'bg-app-bg text-app-ink' : 'bg-app-surface text-app-ink'
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-xl shrink-0 ${
+                      selectedUser?.id === u.id ? 'bg-on-primary text-primary' : 'bg-surface-2 text-text'
                     }`}>
                       {u.name.charAt(0).toUpperCase()}
                     </div>
-                    <div>
-                      <p className="font-black text-lg">{u.name}</p>
-                      <p className={`text-[10px] font-bold uppercase tracking-widest ${selectedUser?.id === u.id ? 'opacity-80' : 'opacity-40'}`}>
+                    <div className="min-w-0">
+                      <p className="font-bold text-lg truncate">{u.name}</p>
+                      <p className={`text-[10px] font-bold uppercase tracking-wide ${selectedUser?.id === u.id ? 'opacity-90' : 'text-text-3'}`}>
                         {u.role}
                       </p>
                     </div>
@@ -162,82 +164,82 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
         </div>
 
         {/* PIN Pad */}
-        <div className="w-[450px] bg-app-bg p-12 flex flex-col items-center justify-center relative">
+        <div className="w-[420px] bg-bg p-10 flex flex-col items-center justify-center relative">
           <AnimatePresence mode="wait">
             {!selectedUser ? (
-              <motion.div 
+              <motion.div
                 key="empty"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="text-center opacity-30 flex flex-col items-center gap-4"
+                className="text-center text-text-3 flex flex-col items-center gap-4"
               >
-                <User size={64} />
-                <p className="font-black uppercase tracking-widest text-sm">Select a user to continue</p>
+                <User size={56} />
+                <p className="font-semibold text-sm">{t('pos_select_user_prompt', 'Select a user to continue')}</p>
               </motion.div>
             ) : (
-              <motion.div 
+              <motion.div
                 key="pinpad"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
                 className="w-full max-w-[320px] flex flex-col items-center"
               >
-                <div className="mb-8 text-center space-y-2">
-                  <p className="text-[10px] font-black uppercase tracking-widest opacity-50">Enter PIN for</p>
-                  <h3 className="text-2xl font-black">{selectedUser.name}</h3>
+                <div className="mb-8 text-center space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-text-3">{t('pos_enter_pin_for', 'Enter PIN for')}</p>
+                  <h3 className="text-xl font-bold text-text">{selectedUser.name}</h3>
                 </div>
 
                 {/* PIN Dots */}
-                <div className="flex gap-4 mb-8">
+                <div className="flex gap-4 mb-6">
                   {[0, 1, 2, 3].map(i => (
-                    <div 
-                      key={i} 
-                      className={`w-4 h-4 rounded-full transition-all duration-300 ${
-                        i < pin.length ? 'bg-app-ink scale-125' : 'bg-app-border'
+                    <div
+                      key={i}
+                      className={`w-4 h-4 rounded-full transition-all duration-200 ${
+                        i < pin.length ? 'bg-primary scale-125' : 'bg-border-strong'
                       }`}
                     />
                   ))}
                 </div>
 
                 {error && (
-                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 p-3 bg-red-500/10 text-red-500 rounded-xl text-xs font-bold uppercase tracking-widest w-full text-center">
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 p-3 bg-danger-soft text-danger rounded-xl text-xs font-semibold w-full text-center">
                     {error}
                   </motion.div>
                 )}
 
                 {loading ? (
                   <div className="py-12">
-                    <div className="w-8 h-8 border-4 border-app-border border-t-app-ink rounded-full animate-spin" />
+                    <div className="w-8 h-8 border-4 border-border border-t-primary rounded-full animate-spin" />
                   </div>
                 ) : (
-                  <div className="grid grid-cols-3 gap-4 w-full">
+                  <div className="grid grid-cols-3 gap-3 w-full">
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
                       <button
                         key={num}
                         onClick={() => handleNumber(num.toString())}
-                        className="aspect-square bg-app-surface rounded-2xl text-2xl font-black hover:bg-app-ink hover:text-app-bg transition-colors active:scale-95 shadow-sm border border-app-border"
+                        className="aspect-square min-h-[56px] bg-surface rounded-xl text-2xl font-bold text-text hover:bg-primary hover:text-on-primary transition-colors active:scale-95 shadow-sm border border-border cursor-pointer"
                       >
                         {num}
                       </button>
                     ))}
                     <button
                       onClick={() => { setSelectedUser(null); setPin(''); setError(''); }}
-                      className="aspect-square flex items-center justify-center bg-app-surface rounded-2xl hover:bg-rose-500 hover:text-white transition-colors active:scale-95 shadow-sm border border-app-border"
+                      className="aspect-square min-h-[56px] flex items-center justify-center bg-surface rounded-xl hover:bg-danger hover:text-white transition-colors active:scale-95 shadow-sm border border-border cursor-pointer text-text"
                     >
-                      <X size={24} />
+                      <X size={22} />
                     </button>
                     <button
                       onClick={() => handleNumber('0')}
-                      className="aspect-square bg-app-surface rounded-2xl text-2xl font-black hover:bg-app-ink hover:text-app-bg transition-colors active:scale-95 shadow-sm border border-app-border"
+                      className="aspect-square min-h-[56px] bg-surface rounded-xl text-2xl font-bold text-text hover:bg-primary hover:text-on-primary transition-colors active:scale-95 shadow-sm border border-border cursor-pointer"
                     >
                       0
                     </button>
                     <button
                       onClick={handleDelete}
-                      className="aspect-square flex items-center justify-center bg-app-surface rounded-2xl text-lg font-black uppercase hover:bg-app-ink hover:text-app-bg transition-colors active:scale-95 shadow-sm border border-app-border"
+                      className="aspect-square min-h-[56px] flex items-center justify-center bg-surface rounded-xl hover:bg-primary hover:text-on-primary transition-colors active:scale-95 shadow-sm border border-border cursor-pointer text-text"
                     >
-                      DEL
+                      <Delete size={20} />
                     </button>
                   </div>
                 )}

@@ -1,203 +1,283 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Search, ShoppingCart, Eye, X } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Download, Plus, Truck } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import {
+  PageHeader, Toolbar, DateRangePicker, SearchInput, Select, Badge, DataTable, Button, IconButton,
+  type DataTableColumn, useToast,
+} from '../components/ui';
+import { useI18n } from '../intl/index';
+import { api } from '../lib/api';
+import { formatMoney, formatDateTime, resolveDateRangePreset, type DateRange } from '../lib/format';
+import type { Product, Stakeholder } from '../types';
+import InvoiceDetailDrawer from './invoices/InvoiceDetailDrawer';
+import InvoiceEditor from './invoices/InvoiceEditor';
+import UpdateSellingPricesModal, { type PriceSuggestionRow } from './invoices/UpdateSellingPricesModal';
+import { payStatus, type CurrencyRow, type PurchaseListRow } from './invoices/types';
+
+const USD: CurrencyRow = { code: 'USD', symbol: '$', rate: 1 };
 
 export default function PurchaseManagement() {
-  const [purchases, setPurchases] = useState<any[]>([]);
+  const { t, lang } = useI18n();
+  const toast = useToast();
+
+  const [rows, setRows] = useState<PurchaseListRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewPO, setViewPO] = useState<any>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [products, setProducts] = useState<Product[]>([]);
+  const [suppliers, setSuppliers] = useState<Stakeholder[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyRow[]>([USD]);
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  const fetchPurchases = useCallback(async () => {
+  const [dateRange, setDateRange] = useState<DateRange>(() => resolveDateRangePreset('this_month'));
+  const [supplierFilter, setSupplierFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all'); // all | paid | unpaid
+  const [settledOnly, setSettledOnly] = useState(false);
+  const [editedOnly, setEditedOnly] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const [detailId, setDetailId] = useState<number | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorId, setEditorId] = useState<number | null>(null);
+
+  const [priceRows, setPriceRows] = useState<PriceSuggestionRow[]>([]);
+  const [priceModalOpen, setPriceModalOpen] = useState(false);
+
+  const fetchRows = () => {
     setLoading(true);
+    api.get<PurchaseListRow[]>('/api/purchases', {
+      supplier_id: supplierFilter !== 'all' ? supplierFilter : undefined,
+      status: statusFilter !== 'all' ? statusFilter : undefined,
+      from: dateRange.from,
+      to: dateRange.to,
+      search: search || undefined,
+    })
+      .then(setRows)
+      .catch((err) => toast.error(err.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    api.get<Product[]>('/api/products').then(setProducts).catch(() => {});
+    api.get<Stakeholder[]>('/api/stakeholders').then((all) => setSuppliers(all.filter((s) => s.type === 'supplier'))).catch(() => {});
+    api.get<CurrencyRow[]>('/api/currencies').then((rows) => { if (rows?.length) setCurrencies(rows); }).catch(() => {});
+    api.get<any[]>('/api/users').then((users) => {
+      const raw = sessionStorage.getItem('currentCashierId');
+      const id = raw ? parseInt(raw, 10) : NaN;
+      const me = users.find((u) => u.id === id);
+      setIsAdmin(me ? me.role === 'admin' : true);
+    }).catch(() => setIsAdmin(true));
+  }, []);
+
+  useEffect(fetchRows, [supplierFilter, statusFilter, dateRange.from, dateRange.to, search]);
+
+  const filteredRows = useMemo(() => rows.filter((r) => {
+    if (settledOnly && !r.archived) return false;
+    if (editedOnly && !(r.edit_count && r.edit_count > 0)) return false;
+    return true;
+  }), [rows, settledOnly, editedOnly]);
+
+  const totalSpent = filteredRows.reduce((s, r) => s + r.total_amount, 0);
+  const totalPaid = filteredRows.reduce((s, r) => s + r.paid_amount, 0);
+  const totalOutstanding = Math.max(0, totalSpent - totalPaid);
+
+  const openDetail = (id: number) => { setDetailId(id); setDetailOpen(true); };
+  const openEditor = (id: number | null) => { setEditorId(id); setEditorOpen(true); setDetailOpen(false); };
+
+  const handleMarkReceived = async (id: number) => {
     try {
-      const params = new URLSearchParams();
-      if (statusFilter !== 'all') params.set('status', statusFilter);
-      if (searchTerm) params.set('search', searchTerm);
-      const res = await fetch(`/api/purchases?${params}`);
-      if (res.ok) setPurchases(await res.json());
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
-  }, [statusFilter, searchTerm]);
+      await api.put(`/api/purchases/${id}/receive`);
+      toast.success(t('pur_marked_received', 'Purchase order marked as received.'));
+      fetchRows();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
 
-  useEffect(() => { fetchPurchases(); }, [fetchPurchases]);
+  const handleExport = () => {
+    const sheet = filteredRows.map((r) => ({
+      'PO #': r.id,
+      Supplier: r.supplier_name || '',
+      Date: new Date(r.created_at).toLocaleString(),
+      Items: r.item_count,
+      Total: r.total_amount,
+      Paid: r.paid_amount,
+      Balance: Math.max(0, r.total_amount - r.paid_amount),
+      Status: payStatus(r.total_amount, r.paid_amount),
+      Settled: r.archived ? 'Yes' : 'No',
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet), 'Purchases');
+    XLSX.writeFile(wb, `purchases_${dateRange.from}_${dateRange.to}.xlsx`);
+  };
 
-  const totalSpent = purchases.reduce((s, p) => s + p.total_amount, 0);
-  const totalPaid = purchases.reduce((s, p) => s + p.paid_amount, 0);
-  const totalOutstanding = totalSpent - totalPaid;
+  const afterPurchaseSaved = async (id: number) => {
+    setEditorOpen(false);
+    fetchRows();
 
-  const openDetail = async (id: number) => {
+    // Offer to update selling prices for every product this purchase touched, keeping current
+    // markup, per the brief. `products` (fetched before this save) is the pre-purchase snapshot;
+    // re-fetch the catalog to see each touched product's post-purchase (WAC-blended) cost.
     try {
-      const res = await fetch(`/api/purchases/${id}`);
-      if (res.ok) setViewPO(await res.json());
-    } catch (err) { console.error(err); }
+      const tx = await api.get<any>(`/api/transactions/${id}`);
+      const freshProducts = await api.get<Product[]>('/api/products');
+      setProducts(freshProducts);
+      const rows: PriceSuggestionRow[] = (tx.items || [])
+        .map((it: any) => {
+          const before = products.find((p) => p.id === it.product_id);
+          const after = freshProducts.find((p) => p.id === it.product_id);
+          if (!before || !after) return null;
+          return { product: before, newCost: after.cost ?? before.cost ?? 0 } as PriceSuggestionRow;
+        })
+        .filter(Boolean) as PriceSuggestionRow[];
+      if (rows.length > 0) {
+        setPriceRows(rows);
+        setPriceModalOpen(true);
+      }
+    } catch {
+      /* best-effort — the purchase itself already saved fine */
+    }
+
+    setDetailId(id);
+    setDetailOpen(true);
+  };
+
+  const columns: DataTableColumn<PurchaseListRow>[] = [
+    { key: 'id', header: t('inv_col_number', '#'), sortable: true, render: (r) => <span className="num font-medium">#{r.id}</span> },
+    { key: 'supplier_name', header: t('inv_col_supplier', 'Supplier'), sortable: true, render: (r) => r.supplier_name || '—' },
+    { key: 'created_at', header: t('inv_col_date', 'Date'), sortable: true, sortValue: (r) => new Date(r.created_at).getTime(), render: (r) => <span className="num text-text-2">{formatDateTime(r.created_at, lang)}</span> },
+    { key: 'item_count', header: t('inv_col_items', 'Items'), align: 'center', sortable: true },
+    { key: 'total_amount', header: t('inv_col_total', 'Total'), align: 'end', sortable: true, render: (r) => formatMoney(r.total_amount, USD) },
+    { key: 'paid_amount', header: t('inv_col_paid', 'Paid'), align: 'end', sortable: true, render: (r) => formatMoney(r.paid_amount, USD) },
+    { key: 'due', header: t('inv_col_due', 'Due'), align: 'end', sortValue: (r) => Math.max(0, r.total_amount - r.paid_amount), render: (r) => formatMoney(Math.max(0, r.total_amount - r.paid_amount), USD) },
+    {
+      key: 'status', header: t('inv_col_status', 'Status'), align: 'center',
+      render: (r) => { const s = payStatus(r.total_amount, r.paid_amount) === 'partial' ? 'partial' : (r.total_amount - r.paid_amount <= 0.01 ? 'paid' : 'unpaid'); return <Badge variant={s === 'paid' ? 'success' : s === 'partial' ? 'warning' : 'danger'}>{t(`inv_status_${s}`, s)}</Badge>; },
+    },
+    {
+      key: 'flags', header: t('inv_col_flags', 'Flags'),
+      render: (r) => (
+        <div className="flex flex-wrap gap-1">
+          {r.archived ? <Badge variant="neutral">{t('inv_flag_settled', 'Settled')}</Badge> : null}
+          {r.edit_count ? <Badge variant="warning">{r.edit_count > 1 ? t('inv_flag_edited_many', 'Edited ×{n}').replace('{n}', String(r.edit_count)) : t('inv_flag_edited_one', 'Edited')}</Badge> : null}
+          {r.status === 'received' ? <Badge variant="info">{t('pur_mark_received', 'Received')}</Badge> : null}
+        </div>
+      ),
+    },
+    {
+      key: 'actions', header: t('inv_col_actions', 'Actions'), align: 'end',
+      render: (r) => (
+        !r.archived && r.status !== 'received' ? (
+          <IconButton aria-label={t('pur_mark_received', 'Mark received')} title={t('pur_mark_received', 'Mark received')} onClick={(e) => { e.stopPropagation(); handleMarkReceived(r.id); }}>
+            <Truck size={15} />
+          </IconButton>
+        ) : null
+      ),
+    },
+  ];
+
+  const footerTotals = {
+    total_amount: <span className="num">{formatMoney(totalSpent, USD)}</span>,
+    paid_amount: <span className="num">{formatMoney(totalPaid, USD)}</span>,
+    due: <span className="num">{formatMoney(totalOutstanding, USD)}</span>,
   };
 
   return (
-    <div className="h-full flex flex-col space-y-6">
-      <header className="flex justify-between items-end flex-shrink-0">
-        <div>
-          <h1 className="text-4xl font-black tracking-tighter uppercase">Purchases</h1>
-          <p className="opacity-50 font-medium">View supplier purchase orders created from Invoices.</p>
+    <div className="space-y-4">
+      <PageHeader
+        title={t('pur_page_title', 'Purchases')}
+        subtitle={t('pur_page_subtitle')}
+        actions={
+          <>
+            <Button variant="secondary" onClick={handleExport}><Download size={15} /> {t('inv_export', 'Export')}</Button>
+            <Button variant="primary" onClick={() => openEditor(null)}><Plus size={15} /> {t('pur_new_purchase', 'New purchase invoice')}</Button>
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-[var(--radius-card)] border border-border bg-surface p-4">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-text-3">{t('inv_footer_totals', 'Totals')}</p>
+          <p className="num text-2xl font-bold text-text">{filteredRows.length}</p>
         </div>
-      </header>
-
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4 flex-shrink-0">
-        {[
-          { label: 'Total Orders', value: purchases.length, color: 'text-blue-500' },
-          { label: 'Total Spent (USD)', value: `$${totalSpent.toFixed(2)}`, color: 'text-emerald-500' },
-          { label: 'Outstanding', value: `$${totalOutstanding.toFixed(2)}`, color: totalOutstanding > 0 ? 'text-rose-500' : 'text-emerald-500' },
-        ].map(s => (
-          <div key={s.label} className="bg-app-surface border border-app-border rounded-2xl p-4 shadow-sm">
-            <p className="text-[10px] font-black uppercase tracking-widest opacity-50">{s.label}</p>
-            <p className={`text-2xl font-black font-mono ${s.color}`}>{s.value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Filters */}
-      <div className="flex gap-3 flex-shrink-0">
-        <div className="relative flex-1">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
-          <input type="text" placeholder="Search by supplier name..."
-            className="w-full pl-12 pr-4 py-3 bg-app-surface border border-app-border rounded-xl outline-none focus:border-app-ink transition-all"
-            value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+        <div className="rounded-[var(--radius-card)] border border-border bg-surface p-4">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-text-3">{t('inv_col_total', 'Total')}</p>
+          <p className="num text-2xl font-bold text-text">{formatMoney(totalSpent, USD)}</p>
         </div>
-        {['all', 'paid', 'unpaid'].map(f => (
-          <button key={f} onClick={() => setStatusFilter(f)}
-            className={`px-5 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${statusFilter === f ? 'bg-app-ink text-app-bg shadow-lg' : 'bg-app-surface border border-app-border opacity-50 hover:opacity-100'}`}>
-            {f}
-          </button>
-        ))}
-      </div>
-
-      {/* Table */}
-      <div className="flex-1 min-h-0 bg-app-surface border border-app-border rounded-2xl overflow-hidden shadow-sm flex flex-col">
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-left border-collapse">
-            <thead className="sticky top-0 z-10 bg-app-bg">
-              <tr className="text-[10px] uppercase tracking-widest font-black opacity-50">
-                <th className="p-4 border-b border-app-border">PO #</th>
-                <th className="p-4 border-b border-app-border">Supplier</th>
-                <th className="p-4 border-b border-app-border">Date</th>
-                <th className="p-4 border-b border-app-border text-center">Items</th>
-                <th className="p-4 border-b border-app-border text-right">Total</th>
-                <th className="p-4 border-b border-app-border text-right">Paid</th>
-                <th className="p-4 border-b border-app-border text-right">Balance</th>
-                <th className="p-4 border-b border-app-border text-center">Status</th>
-                <th className="p-4 border-b border-app-border text-center">View</th>
-              </tr>
-            </thead>
-            <tbody className="text-sm">
-              {loading ? (
-                <tr><td colSpan={9} className="p-12 text-center opacity-30 italic">Loading...</td></tr>
-              ) : purchases.length === 0 ? (
-                <tr><td colSpan={9} className="p-12 text-center opacity-30">
-                  <div className="flex flex-col items-center gap-3">
-                    <ShoppingCart size={40} strokeWidth={1} />
-                    <p className="font-black uppercase tracking-widest text-xs">No purchase orders found</p>
-                    <p className="text-xs opacity-60">Create purchase invoices from the Invoices page.</p>
-                  </div>
-                </td></tr>
-              ) : purchases.map(po => {
-                const balance = po.total_amount - po.paid_amount;
-                const isPaid = balance <= 0.01;
-                return (
-                  <tr key={po.id} className="hover:bg-app-bg/30 transition-colors group cursor-pointer" onClick={() => openDetail(po.id)}>
-                    <td className="p-4 border-b border-app-border font-mono font-bold">#{po.id}</td>
-                    <td className="p-4 border-b border-app-border font-bold">{po.supplier_name || 'Unknown'}</td>
-                    <td className="p-4 border-b border-app-border opacity-50">{new Date(po.created_at).toLocaleDateString()}</td>
-                    <td className="p-4 border-b border-app-border text-center">
-                      <span className="bg-app-bg px-2 py-1 rounded-lg text-xs font-bold">{po.item_count}</span>
-                    </td>
-                    <td className="p-4 border-b border-app-border text-right font-mono font-bold">${po.total_amount.toFixed(2)}</td>
-                    <td className="p-4 border-b border-app-border text-right font-mono text-emerald-500">${po.paid_amount.toFixed(2)}</td>
-                    <td className={`p-4 border-b border-app-border text-right font-mono font-bold ${isPaid ? 'opacity-30' : 'text-rose-500'}`}>
-                      ${balance.toFixed(2)}
-                    </td>
-                    <td className="p-4 border-b border-app-border text-center">
-                      <span className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-widest ${isPaid ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'}`}>
-                        {isPaid ? 'Paid' : 'Unpaid'}
-                      </span>
-                    </td>
-                    <td className="p-4 border-b border-app-border text-center">
-                      <button className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all opacity-50 group-hover:opacity-100">
-                        <Eye size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="rounded-[var(--radius-card)] border border-border bg-surface p-4">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-text-3">{t('inv_col_due', 'Due')}</p>
+          <p className={['num text-2xl font-bold', totalOutstanding > 0 ? 'text-danger' : 'text-success'].join(' ')}>{formatMoney(totalOutstanding, USD)}</p>
         </div>
       </div>
 
-      {/* View PO Detail Modal */}
-      <AnimatePresence>
-        {viewPO && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setViewPO(null)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-            <motion.div initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-app-surface w-full max-w-3xl rounded-2xl overflow-hidden shadow-2xl border border-app-border flex flex-col max-h-[85vh]">
-              <div className="p-6 border-b border-app-border bg-app-bg/30 flex justify-between items-center flex-shrink-0">
-                <div>
-                  <h2 className="text-2xl font-black tracking-tighter uppercase">Purchase Order #{viewPO.id}</h2>
-                  <p className="text-sm opacity-50">{viewPO.supplier_name} · {new Date(viewPO.created_at).toLocaleString()}</p>
-                </div>
-                <button onClick={() => setViewPO(null)} className="p-3 hover:bg-app-ink hover:text-app-bg rounded-full transition-all"><X size={20} /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                <div>
-                  <h3 className="text-xs font-black uppercase tracking-widest opacity-50 mb-3">Items</h3>
-                  <div className="space-y-2">
-                    {viewPO.items?.map((item: any) => (
-                      <div key={item.id} className="flex justify-between items-center p-3 bg-app-bg/30 rounded-xl border border-app-border/10">
-                        <div>
-                          <p className="font-bold">{item.product_name || item.name}</p>
-                          <p className="text-xs opacity-50 font-mono">{item.barcode}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-mono font-bold">{item.quantity} × ${item.unit_price.toFixed(2)}</p>
-                          <p className="text-xs font-mono opacity-50">${(item.quantity * item.unit_price).toFixed(2)}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                {viewPO.payments?.length > 0 && (
-                  <div>
-                    <h3 className="text-xs font-black uppercase tracking-widest opacity-50 mb-3">Payments</h3>
-                    <div className="space-y-2">
-                      {viewPO.payments.map((p: any) => (
-                        <div key={p.id} className="flex justify-between items-center p-3 bg-app-bg/30 rounded-xl border border-app-border/10">
-                          <span className="text-xs font-black uppercase">{p.method} ({p.currency})</span>
-                          <span className="font-mono font-bold">{p.amount.toLocaleString()} {p.currency}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="p-6 border-t border-app-border bg-app-bg/30 flex justify-between items-center flex-shrink-0">
-                <div className="flex gap-6">
-                  <div><p className="text-[10px] font-black uppercase opacity-50">Total</p><p className="text-xl font-black font-mono">${viewPO.total_amount.toFixed(2)}</p></div>
-                  <div><p className="text-[10px] font-black uppercase opacity-50">Paid</p><p className="text-xl font-black font-mono text-emerald-500">${viewPO.paid_amount.toFixed(2)}</p></div>
-                  <div><p className="text-[10px] font-black uppercase opacity-50">Balance</p>
-                    <p className={`text-xl font-black font-mono ${viewPO.balance > 0.01 ? 'text-rose-500' : 'text-emerald-500'}`}>${viewPO.balance.toFixed(2)}</p>
-                  </div>
-                </div>
-                <span className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase ${viewPO.balance <= 0.01 ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'}`}>
-                  {viewPO.balance <= 0.01 ? 'Fully Paid' : 'Outstanding'}
-                </span>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Toolbar
+        actions={
+          <>
+            <button type="button" onClick={() => setSettledOnly((v) => !v)} className={['cursor-pointer', settledOnly ? '' : 'opacity-60'].join(' ')}>
+              <Badge variant={settledOnly ? 'primary' : 'neutral'}>{t('inv_chip_settled', 'Settled only')}</Badge>
+            </button>
+            <button type="button" onClick={() => setEditedOnly((v) => !v)} className={['cursor-pointer', editedOnly ? '' : 'opacity-60'].join(' ')}>
+              <Badge variant={editedOnly ? 'primary' : 'neutral'}>{t('inv_chip_edited', 'Edited only')}</Badge>
+            </button>
+            {(supplierFilter !== 'all' || statusFilter !== 'all' || settledOnly || editedOnly || search) && (
+              <Button variant="ghost" size="sm" onClick={() => { setSupplierFilter('all'); setStatusFilter('all'); setSettledOnly(false); setEditedOnly(false); setSearch(''); }}>
+                {t('inv_clear_filters', 'Clear filters')}
+              </Button>
+            )}
+          </>
+        }
+      >
+        <DateRangePicker value={dateRange} onChange={(r) => setDateRange(r)} />
+        <Select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} className="w-48" options={[
+          { value: 'all', label: t('pur_filter_supplier_all', 'All suppliers') },
+          ...suppliers.map((s) => ({ value: String(s.id), label: s.name })),
+        ]} />
+        <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40" options={[
+          { value: 'all', label: t('inv_filter_status_all', 'Any status') },
+          { value: 'paid', label: t('inv_filter_status_paid', 'Paid') },
+          { value: 'unpaid', label: t('inv_filter_status_unpaid', 'Unpaid') },
+        ]} />
+        <SearchInput value={search} onChange={setSearch} placeholder={t('inv_search_placeholder')} className="max-w-xs" />
+      </Toolbar>
+
+      <DataTable
+        columns={columns}
+        data={filteredRows}
+        rowKey={(r) => r.id}
+        loading={loading}
+        onRowClick={(r) => openDetail(r.id)}
+        emptyTitle={t('inv_empty_title', 'No invoices found')}
+        emptyDescription={t('inv_empty_description')}
+        footerTotals={footerTotals}
+        defaultPageSize={50}
+      />
+
+      <InvoiceDetailDrawer
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        invoiceId={detailId}
+        currencies={currencies}
+        isAdmin={isAdmin}
+        onEdit={(id) => openEditor(id)}
+        onDeleted={fetchRows}
+      />
+
+      <InvoiceEditor
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        txType="purchase"
+        editingId={editorId}
+        products={products}
+        stakeholders={suppliers}
+        currencies={currencies}
+        onSaved={afterPurchaseSaved}
+      />
+
+      <UpdateSellingPricesModal
+        open={priceModalOpen}
+        onClose={() => setPriceModalOpen(false)}
+        rows={priceRows}
+        onApplied={() => { setPriceModalOpen(false); }}
+      />
     </div>
   );
 }

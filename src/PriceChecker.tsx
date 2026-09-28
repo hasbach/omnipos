@@ -1,21 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Barcode, Search, X, ArrowLeft } from 'lucide-react';
+import { Barcode, X, ArrowLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
 import { Product } from './types';
-import { translations, Language } from './i18n';
-
+import { I18nProvider, useI18n } from './intl/index';
 import WindowFrame from './components/WindowFrame';
 
-export default function PriceChecker() {
+function PriceCheckerBody() {
+  const { t, setLang } = useI18n();
   const [barcode, setBarcode] = useState('');
   const [product, setProduct] = useState<Product | null>(null);
   const productRef = useRef<Product | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [language, setLanguage] = useState<Language>('en');
   const [businessName, setBusinessName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
-  const t = translations[language];
 
   useEffect(() => {
     productRef.current = product;
@@ -25,14 +23,14 @@ export default function PriceChecker() {
     fetch('/api/settings')
       .then(res => res.json())
       .then(settings => {
-        if (settings.language) setLanguage(settings.language as Language);
+        if (settings.language) setLang(settings.language);
         if (settings.store_name) setBusinessName(settings.store_name);
       });
 
     // Real-time Sync
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(`${protocol}//${window.location.host}`);
-    
+
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
       const currentProduct = productRef.current;
@@ -45,12 +43,12 @@ export default function PriceChecker() {
       }
       if (data.type === 'SETTINGS_UPDATED') {
         fetch('/api/settings').then(res => res.json()).then(settings => {
-          if (settings.language) setLanguage(settings.language as Language);
+          if (settings.language) setLang(settings.language);
           if (settings.store_name) setBusinessName(settings.store_name);
         });
       }
     };
-    
+
     // Keep input focused
     const focusInput = () => inputRef.current?.focus();
     document.addEventListener('click', focusInput);
@@ -74,7 +72,7 @@ export default function PriceChecker() {
         setError(null);
       } else {
         setProduct(null);
-        setError(t.product_not_found);
+        setError(t('product_not_found', 'Product Not Found'));
       }
     } catch (err) {
       setError('Error fetching product');
@@ -84,30 +82,30 @@ export default function PriceChecker() {
   };
 
   return (
-    <WindowFrame title={t.price_checker_title} icon={<Barcode size={14} />}>
-      <div className="h-full bg-app-bg text-app-ink flex flex-col p-8 transition-colors duration-300 overflow-y-auto">
-        <header className="flex justify-between items-center mb-12">
+    <WindowFrame title={t('price_checker_title', 'Price Checker')} icon={<Barcode size={14} />}>
+      <div className="h-full bg-bg text-text flex flex-col p-8 overflow-y-auto">
+        <header className="flex justify-between items-center mb-10 flex-wrap gap-4">
           <div className="flex items-center gap-4">
-            <Link to="/" className="p-3 bg-app-surface border border-app-border rounded-xl hover:bg-app-ink hover:text-app-bg transition-all">
-              <ArrowLeft size={24} />
+            <Link to="/" className="p-3 bg-surface border border-border rounded-xl hover:bg-primary hover:text-on-primary transition-all">
+              <ArrowLeft size={22} className="rtl:rotate-180" />
             </Link>
-            <h1 className="text-4xl font-black tracking-tighter uppercase">{t.price_checker_title}</h1>
+            <h1 className="text-3xl font-black tracking-tight">{t('price_checker_title', 'Price Checker')}</h1>
           </div>
-          <div className="text-right">
-            <p className="text-xs font-black uppercase opacity-50 tracking-widest">{businessName || 'Price Checker'}</p>
-            <p className="text-lg font-bold">Price Checker Terminal</p>
+          <div className="text-end">
+            <p className="text-xs font-black uppercase text-text-3 tracking-wide">{businessName || 'Price Checker'}</p>
+            <p className="text-lg font-bold">{t('pos_price_checker_subtitle', 'Price Checker Terminal')}</p>
           </div>
         </header>
 
         <main className="flex-1 flex flex-col items-center justify-center max-w-4xl mx-auto w-full">
-          <form onSubmit={handleScan} className="w-full mb-12">
+          <form onSubmit={handleScan} className="w-full mb-10">
             <div className="relative">
-              <Barcode className="absolute left-6 top-1/2 -translate-y-1/2 opacity-30" size={48} />
+              <Barcode className="absolute start-6 top-1/2 -translate-y-1/2 text-text-3" size={40} />
               <input
                 ref={inputRef}
                 type="text"
-                placeholder={t.scan_barcode}
-                className="w-full pl-24 pr-8 py-10 bg-app-surface border-4 border-app-border rounded-3xl outline-none focus:border-emerald-500 transition-all text-4xl font-mono"
+                placeholder={t('scan_barcode', 'Scan Barcode')}
+                className="w-full ps-20 pe-8 py-8 bg-surface border-4 border-border rounded-3xl outline-none focus:border-primary transition-all text-3xl font-mono text-text"
                 value={barcode}
                 onChange={e => setBarcode(e.target.value)}
                 autoFocus
@@ -115,7 +113,7 @@ export default function PriceChecker() {
             </div>
           </form>
 
-          <div className="w-full h-[400px] flex items-center justify-center">
+          <div className="w-full min-h-[400px] flex items-center justify-center">
             <AnimatePresence mode="wait">
               {product ? (
                 <motion.div
@@ -123,24 +121,40 @@ export default function PriceChecker() {
                   initial={{ opacity: 0, scale: 0.9, y: 20 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.9, y: -20 }}
-                  className="w-full bg-app-surface border-4 border-app-border rounded-3xl p-12 shadow-2xl flex flex-col items-center text-center space-y-6"
+                  className="w-full bg-surface border-4 border-border rounded-3xl p-10 shadow-2xl flex flex-col items-center text-center space-y-6"
                 >
-                  <div className="px-6 py-2 bg-emerald-500 text-white rounded-full text-sm font-black uppercase tracking-widest">
-                    {t.product_found}
+                  <div className="px-5 py-1.5 bg-success text-white rounded-full text-sm font-black uppercase tracking-wide">
+                    {t('product_found', 'Product Found')}
                   </div>
-                  <h2 className="text-6xl font-black uppercase tracking-tight">{product.name}</h2>
-                  <div className="flex items-baseline gap-4">
-                    <span className="text-8xl font-black font-mono">${product.price.toFixed(2)}</span>
-                    <span className="text-2xl opacity-50 font-bold uppercase">/ {product.unit}</span>
+                  <h2 className="text-5xl font-black uppercase tracking-tight">{product.name}</h2>
+
+                  <div className="grid grid-cols-3 gap-6 w-full">
+                    <div className="p-4 bg-bg rounded-2xl border border-border">
+                      <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_retail', 'Retail')}</p>
+                      <p className="text-3xl font-black num">${(product.price || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="p-4 bg-bg rounded-2xl border border-border">
+                      <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_wholesale', 'Wholesale')}</p>
+                      <p className="text-3xl font-black num">${((product as any).price_wholesale || product.price || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="p-4 bg-bg rounded-2xl border border-border">
+                      <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_super_wholesale', 'Super Wholesale')}</p>
+                      <p className="text-3xl font-black num">${((product as any).price_super_wholesale || (product as any).price_wholesale || product.price || 0).toFixed(2)}</p>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-8 w-full pt-8 border-t border-app-border/10">
+
+                  <div className="text-4xl font-black text-success tracking-tight num">
+                    {((product as any).price_lbp || Math.round((product.price || 0) * 89500)).toLocaleString()} LL
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-8 w-full pt-6 border-t border-border">
                     <div>
-                      <p className="text-xs font-black uppercase opacity-50 tracking-widest mb-1">{t.category}</p>
-                      <p className="text-2xl font-bold uppercase">{product.category}</p>
+                      <p className="text-xs font-black uppercase text-text-3 tracking-wide mb-1">{t('category', 'Category')}</p>
+                      <p className="text-xl font-bold uppercase">{product.category}</p>
                     </div>
                     <div>
-                      <p className="text-xs font-black uppercase opacity-50 tracking-widest mb-1">{t.stock}</p>
-                      <p className={`text-2xl font-bold ${product.stock < 10 ? 'text-red-500' : ''}`}>
+                      <p className="text-xs font-black uppercase text-text-3 tracking-wide mb-1">{t('stock', 'Stock')}</p>
+                      <p className={`text-xl font-bold ${product.stock < 10 ? 'text-danger' : ''}`}>
                         {product.stock} {product.unit}
                       </p>
                     </div>
@@ -154,31 +168,39 @@ export default function PriceChecker() {
                   exit={{ opacity: 0, scale: 0.9 }}
                   className="flex flex-col items-center text-center space-y-4"
                 >
-                  <div className="p-8 bg-red-500/10 text-red-500 rounded-full">
-                    <X size={64} />
+                  <div className="p-8 bg-danger-soft text-danger rounded-full">
+                    <X size={56} />
                   </div>
-                  <h2 className="text-4xl font-black uppercase tracking-tight text-red-500">{error}</h2>
-                  <p className="text-xl opacity-50 font-medium">Please try scanning again</p>
+                  <h2 className="text-3xl font-black uppercase tracking-tight text-danger">{error}</h2>
+                  <p className="text-lg text-text-3 font-medium">Please try scanning again</p>
                 </motion.div>
               ) : (
                 <motion.div
                   key="idle"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="flex flex-col items-center text-center space-y-6 opacity-20"
+                  className="flex flex-col items-center text-center space-y-6 text-text-3"
                 >
-                  <Barcode size={120} strokeWidth={1} />
-                  <p className="text-2xl font-black uppercase tracking-widest">{t.scan_barcode}</p>
+                  <Barcode size={100} strokeWidth={1} />
+                  <p className="text-xl font-black uppercase tracking-wide">{t('scan_barcode', 'Scan Barcode')}</p>
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
         </main>
 
-        <footer className="mt-12 text-center opacity-30">
-          <p className="text-xs font-black uppercase tracking-[0.2em]">Ready for next scan</p>
+        <footer className="mt-10 text-center text-text-3">
+          <p className="text-xs font-black uppercase tracking-[0.2em]">{t('pos_ready_for_next_scan', 'Ready for next scan')}</p>
         </footer>
       </div>
     </WindowFrame>
+  );
+}
+
+export default function PriceChecker() {
+  return (
+    <I18nProvider>
+      <PriceCheckerBody />
+    </I18nProvider>
   );
 }

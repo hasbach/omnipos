@@ -129,7 +129,8 @@ export function lineTotal(unitPrice: number, qty: number, discount?: LineDiscoun
 export interface TotalsInput {
   lines: Array<{ unitPrice: number; qty: number; discount?: LineDiscount | null }>;
   discount?: LineDiscount | null;
-  tax?: number; // percent
+  /** A bare number is a percentage (legacy form); an object matches the server's {type, value} tax. */
+  tax?: number | LineDiscount | null;
 }
 
 export interface TotalsResult {
@@ -151,7 +152,10 @@ export function computeTotals({ lines, discount, tax }: TotalsInput): TotalsResu
   }
 
   const afterDiscount = Math.max(0, subtotal - discountAmount);
-  const taxAmount = tax ? afterDiscount * (tax / 100) : 0;
+  // Same as server/pricing.ts computeTotals: percentage of the discounted subtotal, or a flat amount.
+  const taxAdj: LineDiscount | null = typeof tax === 'number' ? { type: 'percentage', value: tax } : (tax || null);
+  const taxAmount = !taxAdj || !taxAdj.value ? 0
+    : taxAdj.type === 'percentage' ? afterDiscount * (taxAdj.value / 100) : taxAdj.value;
   const total = Math.max(0, afterDiscount + taxAmount);
 
   return { subtotal, discountAmount, taxAmount, total };

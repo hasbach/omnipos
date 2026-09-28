@@ -1,57 +1,114 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Wallet, ArrowDownLeft, ArrowUpRight, Users } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowDownLeft, ArrowUpRight, Banknote, PiggyBank, Receipt, ShoppingBag, Users, Wallet } from 'lucide-react';
+import {
+  Badge,
+  Button,
+  DataTable,
+  type DataTableColumn,
+  Field,
+  Modal,
+  MoneyInput,
+  PageHeader,
+  Select,
+  StatCard,
+  Textarea,
+  useToast,
+} from '../components/ui';
+import { useI18n } from '../intl/index';
+import { formatDateTime, formatMoney } from '../lib/format';
+import { api } from '../lib/api';
+
+interface Currency {
+  id?: number;
+  code: string;
+  symbol: string;
+  rate: number;
+}
+
+interface CashFlowEntry {
+  id: number;
+  type: 'in' | 'out';
+  amount: number;
+  currency: string;
+  exchange_rate: number;
+  reason: string;
+  created_at: string;
+}
+
+interface Summary {
+  openingBalance: number;
+  totalSales: number;
+  totalRefunds: number;
+  totalPurchases: number;
+  totalIn: number;
+  totalOut: number;
+  expectedBalance: number;
+}
+
+interface Stakeholder {
+  id: number;
+  name: string;
+  balance: number;
+}
+
+// Only USD (rate 1) is safe as a hardcoded fallback — anything else must come from the tenant's
+// own configured rate (GET /api/currencies), or an entry recorded before that fetch resolves would
+// silently use a stale guessed exchange rate instead of the real one.
+const DEFAULT_CURRENCIES: Currency[] = [{ code: 'USD', symbol: '$', rate: 1 }];
 
 export default function CashFlowRegister() {
-  const [entries, setEntries] = useState<any[]>([]);
-  const [summary, setSummary] = useState<any>(null);
+  const { t } = useI18n();
+  const toast = useToast();
+
+  const [entries, setEntries] = useState<CashFlowEntry[]>([]);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
+  const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
   const [loading, setLoading] = useState(true);
-  const [amount, setAmount] = useState('');
+
+  // Cash movement modal
+  const [movementOpen, setMovementOpen] = useState(false);
+  const [movementType, setMovementType] = useState<'in' | 'out'>('in');
+  const [amount, setAmount] = useState<number | ''>('');
   const [reason, setReason] = useState('');
-  const [type, setType] = useState<'in' | 'out'>('in');
-  const [selectedCurrencyCode, setSelectedCurrencyCode] = useState('USD');
+  const [currencyCode, setCurrencyCode] = useState('USD');
+  const [submittingMovement, setSubmittingMovement] = useState(false);
 
-  // Balance payment state
-  const [activeTab, setActiveTab] = useState<'manual' | 'balance'>('manual');
-  const [stakeholders, setStakeholders] = useState<any[]>([]);
-  const [balStakeholderId, setBalStakeholderId] = useState('');
-  const [balAmount, setBalAmount] = useState('');
+  // Balance payment modal
+  const [balanceOpen, setBalanceOpen] = useState(false);
   const [balDirection, setBalDirection] = useState<'collect' | 'pay'>('collect');
+  const [balStakeholderId, setBalStakeholderId] = useState('');
+  const [balAmount, setBalAmount] = useState<number | ''>('');
   const [balCurrencyCode, setBalCurrencyCode] = useState('USD');
+  const [submittingBalance, setSubmittingBalance] = useState(false);
 
-  // Only USD (rate 1) is safe as a hardcoded fallback — anything else must come from the
-  // tenant's own configured rate, fetched below, or every entry recorded before that fetch
-  // resolves would silently use a stale guessed exchange rate instead of the real one.
-  const [currencies, setCurrencies] = useState<any[]>([{ code: 'USD', symbol: '$', rate: 1 }]);
-  const currentCurrency = currencies.find(c => c.code === selectedCurrencyCode) || currencies[0];
-  const balCurrency = currencies.find(c => c.code === balCurrencyCode) || currencies[0];
+  const currentCurrency = currencies.find((c) => c.code === currencyCode) || currencies[0];
+  const balCurrency = currencies.find((c) => c.code === balCurrencyCode) || currencies[0];
 
   const fetchData = useCallback(async () => {
     try {
       const [entriesRes, summaryRes, stakeholdersRes, currenciesRes] = await Promise.all([
-        fetch('/api/cash-flow'),
-        fetch('/api/cash-flow/summary'),
-        fetch('/api/stakeholders'),
-        fetch('/api/currencies'),
+        api.get<CashFlowEntry[]>('/api/cash-flow'),
+        api.get<Summary>('/api/cash-flow/summary'),
+        api.get<Stakeholder[]>('/api/stakeholders'),
+        api.get<Currency[]>('/api/currencies'),
       ]);
-      if (entriesRes.ok) setEntries(await entriesRes.json());
-      if (summaryRes.ok) setSummary(await summaryRes.json());
-      if (stakeholdersRes.ok) setStakeholders(await stakeholdersRes.json());
-      if (currenciesRes.ok) {
-        const rows = await currenciesRes.json();
-        if (Array.isArray(rows) && rows.length > 0) setCurrencies(rows);
-      }
-    } catch (err) {
-      console.error(err);
+      setEntries(entriesRes || []);
+      setSummary(summaryRes || null);
+      setStakeholders(stakeholdersRes || []);
+      if (Array.isArray(currenciesRes) && currenciesRes.length > 0) setCurrencies(currenciesRes);
+    } catch (err: any) {
+      toast.error(err.message || String(err));
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     fetchData();
     const handleSync = (e: any) => {
-      if (e.detail.type === 'CASH_FLOW_UPDATED' || e.detail.type === 'STAKEHOLDERS_UPDATED' || e.detail.type === 'SETTINGS_UPDATED') {
+      if (['CASH_FLOW_UPDATED', 'STAKEHOLDERS_UPDATED', 'SETTINGS_UPDATED'].includes(e.detail?.type)) {
         fetchData();
       }
     };
@@ -59,299 +116,315 @@ export default function CashFlowRegister() {
     return () => window.removeEventListener('pos-sync', handleSync);
   }, [fetchData]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const numAmount = parseFloat(amount);
-    if (!amount || numAmount <= 0) return;
+  const openMovementModal = (type: 'in' | 'out') => {
+    setMovementType(type);
+    setAmount('');
+    setReason('');
+    setCurrencyCode('USD');
+    setMovementOpen(true);
+  };
 
+  const quickReasons = useMemo(() => {
+    const raw = movementType === 'in' ? t('fin_cfr_quick_reasons_in', '') : t('fin_cfr_quick_reasons_out', '');
+    return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  }, [movementType, t]);
+
+  const handleSubmitMovement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const numAmount = typeof amount === 'number' ? amount : parseFloat(String(amount));
+    if (!numAmount || numAmount <= 0) return;
+
+    setSubmittingMovement(true);
     try {
-      const res = await fetch('/api/cash-flow', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          type, 
-          amount: numAmount, 
-          currency: currentCurrency.code,
-          exchange_rate: currentCurrency.rate,
-          reason 
-        })
+      await api.post('/api/cash-flow', {
+        type: movementType,
+        amount: numAmount,
+        currency: currentCurrency.code,
+        exchange_rate: currentCurrency.rate,
+        reason,
       });
-      if (res.ok) {
-        setAmount('');
-        setReason('');
-        fetchData();
-      }
-    } catch (err) {
-      console.error(err);
+      setMovementOpen(false);
+      toast.success(t('fin_cfr_movement_recorded', 'Movement recorded.'));
+      fetchData();
+    } catch (err: any) {
+      toast.error(err.message || String(err));
+    } finally {
+      setSubmittingMovement(false);
     }
   };
 
-  const handleBalancePayment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const numAmount = parseFloat(balAmount);
-    if (!balStakeholderId || !balAmount || numAmount <= 0) return;
+  const selectedStakeholder = stakeholders.find((s) => s.id === parseInt(balStakeholderId));
+  const customersWithBalance = stakeholders.filter((s) => s.balance > 0.01);
+  const suppliersWithBalance = stakeholders.filter((s) => s.balance < -0.01);
 
+  const openBalanceModal = (direction: 'collect' | 'pay') => {
+    setBalDirection(direction);
+    setBalStakeholderId('');
+    setBalAmount('');
+    setBalCurrencyCode('USD');
+    setBalanceOpen(true);
+  };
+
+  const handleSubmitBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const numAmount = typeof balAmount === 'number' ? balAmount : parseFloat(String(balAmount));
+    if (!balStakeholderId || !numAmount || numAmount <= 0) return;
+
+    setSubmittingBalance(true);
     try {
-      const res = await fetch('/api/balance-payment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stakeholder_id: parseInt(balStakeholderId),
-          amount: numAmount,
-          currency: balCurrency.code,
-          exchange_rate: balCurrency.rate,
-          direction: balDirection,
-        })
+      await api.post('/api/balance-payment', {
+        stakeholder_id: parseInt(balStakeholderId),
+        amount: numAmount,
+        currency: balCurrency.code,
+        exchange_rate: balCurrency.rate,
+        direction: balDirection,
       });
-      if (res.ok) {
-        setBalAmount('');
-        setBalStakeholderId('');
-        fetchData();
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to process payment');
-      }
-    } catch (err) {
-      console.error(err);
+      setBalanceOpen(false);
+      toast.success(t('fin_cfr_payment_recorded', 'Payment recorded.'));
+      fetchData();
+    } catch (err: any) {
+      toast.error(err.message || t('fin_cfr_balance_payment_failed', 'Failed to process payment'));
+    } finally {
+      setSubmittingBalance(false);
     }
   };
 
-  const selectedStakeholder = stakeholders.find(s => s.id === parseInt(balStakeholderId));
-  const customersWithBalance = stakeholders.filter(s => s.balance > 0.01);
-  const suppliersWithBalance = stakeholders.filter(s => s.balance < -0.01);
+  const columns: DataTableColumn<CashFlowEntry>[] = [
+    {
+      key: 'created_at',
+      header: t('fin_time', 'Time'),
+      sortable: true,
+      render: (row) => <span className="num text-xs text-text-3">{formatDateTime(row.created_at)}</span>,
+    },
+    {
+      key: 'type',
+      header: t('fin_cfr_movement_type', 'Movement Type'),
+      render: (row) => (
+        <Badge variant={row.type === 'in' ? 'success' : 'danger'}>
+          {row.type === 'in' ? t('fin_cfr_cash_in', 'Cash In') : t('fin_cfr_cash_out', 'Cash Out')}
+        </Badge>
+      ),
+    },
+    {
+      key: 'amount',
+      header: t('fin_amount', 'Amount'),
+      align: 'end',
+      sortable: true,
+      render: (row) => {
+        const cur = currencies.find((c) => c.code === row.currency) || { code: row.currency, symbol: row.currency, rate: row.exchange_rate };
+        return (
+          <div className="flex flex-col items-end">
+            <span className={['num font-semibold', row.type === 'in' ? 'text-success' : 'text-danger'].join(' ')}>
+              {row.type === 'in' ? '+' : '-'}
+              {formatMoney(row.amount, cur)}
+            </span>
+            {row.currency !== 'USD' && (
+              <span className="num text-xs text-text-3">
+                ≈ {formatMoney(row.amount / row.exchange_rate, { code: 'USD', symbol: '$' })}
+              </span>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'reason',
+      header: t('fin_reason', 'Reason'),
+      render: (row) => <span className="text-text-2">{row.reason || '—'}</span>,
+    },
+  ];
 
   return (
-    <div className="space-y-6">
-      <header className="flex justify-between items-end">
-        <div>
-          <h1 className="text-4xl font-black tracking-tighter uppercase">Cash Flow Register</h1>
-          <p className="opacity-50 font-medium">Track cash movements, collect balances, and pay suppliers.</p>
-        </div>
-        {summary && (
-          <div className="bg-app-ink text-app-bg p-4 rounded-2xl shadow-xl flex flex-col items-end">
-            <span className="text-[10px] uppercase tracking-widest font-black opacity-50">Expected Drawer Balance</span>
-            <span className="text-3xl font-black font-mono">${summary.expectedBalance.toFixed(2)}</span>
-          </div>
-        )}
-      </header>
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title={t('fin_cfr_title', 'Cash Flow Register')}
+        subtitle={t('fin_cfr_subtitle', 'Track cash movements, collect balances, and pay suppliers.')}
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => openBalanceModal('collect')}>
+              <Users size={15} /> {t('fin_cfr_balance_payment', 'Balance Payment')}
+            </Button>
+            <Button variant="success" onClick={() => openMovementModal('in')}>
+              <ArrowDownLeft size={15} /> {t('fin_cfr_cash_in', 'Cash In')}
+            </Button>
+            <Button variant="danger" onClick={() => openMovementModal('out')}>
+              <ArrowUpRight size={15} /> {t('fin_cfr_cash_out', 'Cash Out')}
+            </Button>
+          </>
+        }
+      />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 space-y-6">
-          {/* Tab Switcher */}
-          <div className="flex gap-1 p-1 bg-app-bg border border-app-border rounded-xl">
-            <button onClick={() => setActiveTab('manual')}
-              className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${activeTab === 'manual' ? 'bg-app-ink text-app-bg shadow-lg' : 'opacity-50 hover:opacity-100'}`}>
-              <Wallet size={14} /> Cash Movement
-            </button>
-            <button onClick={() => setActiveTab('balance')}
-              className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${activeTab === 'balance' ? 'bg-app-ink text-app-bg shadow-lg' : 'opacity-50 hover:opacity-100'}`}>
-              <Users size={14} /> Balance Payment
-            </button>
-          </div>
-
-          <AnimatePresence mode="wait">
-            {activeTab === 'manual' ? (
-              <motion.form key="manual" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
-                onSubmit={handleSubmit} className="bg-app-surface border border-app-border rounded-2xl p-6 shadow-sm space-y-4">
-                <h2 className="text-lg font-black uppercase tracking-tight">Add Movement</h2>
-                
-                <div className="flex gap-2 p-1 bg-app-bg rounded-xl">
-                  <button type="button" onClick={() => setType('in')}
-                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${type === 'in' ? 'bg-emerald-500 text-white shadow-lg' : 'opacity-50 hover:opacity-100'}`}>
-                    Cash In
-                  </button>
-                  <button type="button" onClick={() => setType('out')}
-                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${type === 'out' ? 'bg-rose-500 text-white shadow-lg' : 'opacity-50 hover:opacity-100'}`}>
-                    Cash Out
-                  </button>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Currency</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {currencies.map(c => (
-                      <button key={c.code} type="button" onClick={() => setSelectedCurrencyCode(c.code)}
-                        className={`py-2 rounded-xl text-[10px] font-black border transition-all ${selectedCurrencyCode === c.code ? 'bg-app-ink text-app-bg border-app-ink' : 'bg-app-bg border-app-border opacity-50 hover:opacity-100'}`}>
-                        {c.code}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Amount ({currentCurrency.symbol})</label>
-                  <input type="number" step="0.01" required
-                    className="w-full p-3 bg-app-bg border border-app-border rounded-xl font-mono text-lg outline-none focus:border-app-ink transition-all"
-                    value={amount} onChange={(e) => setAmount(e.target.value)} />
-                  {currentCurrency.code !== 'USD' && amount && (
-                    <p className="text-[10px] opacity-50 font-mono mt-1">≈ ${(parseFloat(amount) / currentCurrency.rate).toFixed(2)} USD</p>
-                  )}
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Reason / Note</label>
-                  <textarea className="w-full p-3 bg-app-bg border border-app-border rounded-xl text-sm outline-none focus:border-app-ink transition-all min-h-[80px]"
-                    value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g., Petty cash for cleaning supplies" />
-                </div>
-
-                <button type="submit"
-                  className="w-full py-4 bg-app-ink text-app-bg rounded-xl font-black uppercase tracking-widest shadow-lg hover:opacity-90 transition-all active:scale-95">
-                  Record Movement
-                </button>
-              </motion.form>
-            ) : (
-              <motion.form key="balance" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
-                onSubmit={handleBalancePayment} className="bg-app-surface border border-app-border rounded-2xl p-6 shadow-sm space-y-4">
-                <h2 className="text-lg font-black uppercase tracking-tight">Balance Payment</h2>
-
-                <div className="flex gap-2 p-1 bg-app-bg rounded-xl">
-                  <button type="button" onClick={() => { setBalDirection('collect'); setBalStakeholderId(''); }}
-                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center justify-center gap-1 ${balDirection === 'collect' ? 'bg-emerald-500 text-white shadow-lg' : 'opacity-50 hover:opacity-100'}`}>
-                    <ArrowDownLeft size={14} /> Collect
-                  </button>
-                  <button type="button" onClick={() => { setBalDirection('pay'); setBalStakeholderId(''); }}
-                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center justify-center gap-1 ${balDirection === 'pay' ? 'bg-rose-500 text-white shadow-lg' : 'opacity-50 hover:opacity-100'}`}>
-                    <ArrowUpRight size={14} /> Pay Supplier
-                  </button>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">
-                    {balDirection === 'collect' ? 'Customer' : 'Supplier'}
-                  </label>
-                  <select required value={balStakeholderId} onChange={e => setBalStakeholderId(e.target.value)}
-                    className="w-full p-3 bg-app-bg border border-app-border rounded-xl text-sm font-bold outline-none focus:border-app-ink">
-                    <option value="">Select {balDirection === 'collect' ? 'customer' : 'supplier'}...</option>
-                    {(balDirection === 'collect' ? customersWithBalance : suppliersWithBalance).map(s => (
-                      <option key={s.id} value={s.id}>{s.name} — ${Math.abs(s.balance).toFixed(2)} {s.balance > 0 ? 'owed' : 'outstanding'}</option>
-                    ))}
-                    {/* Also show all stakeholders in case of partial or zero balance */}
-                    <optgroup label="All Stakeholders">
-                      {stakeholders.map(s => (
-                        <option key={`all-${s.id}`} value={s.id}>{s.name} (Balance: ${s.balance.toFixed(2)})</option>
-                      ))}
-                    </optgroup>
-                  </select>
-                  {selectedStakeholder && (
-                    <p className="text-[10px] opacity-70 font-mono mt-1">
-                      Current balance: <span className={selectedStakeholder.balance > 0 ? 'text-amber-500 font-bold' : selectedStakeholder.balance < 0 ? 'text-rose-500 font-bold' : 'text-emerald-500'}>
-                        ${selectedStakeholder.balance.toFixed(2)}
-                      </span>
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Currency</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {currencies.map(c => (
-                      <button key={c.code} type="button" onClick={() => setBalCurrencyCode(c.code)}
-                        className={`py-2 rounded-xl text-[10px] font-black border transition-all ${balCurrencyCode === c.code ? 'bg-app-ink text-app-bg border-app-ink' : 'bg-app-bg border-app-border opacity-50 hover:opacity-100'}`}>
-                        {c.code}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Amount ({balCurrency.symbol})</label>
-                  <input type="number" step="0.01" required
-                    className="w-full p-3 bg-app-bg border border-app-border rounded-xl font-mono text-lg outline-none focus:border-app-ink transition-all"
-                    value={balAmount} onChange={(e) => setBalAmount(e.target.value)} />
-                  {balCurrency.code !== 'USD' && balAmount && (
-                    <p className="text-[10px] opacity-50 font-mono mt-1">≈ ${(parseFloat(balAmount) / balCurrency.rate).toFixed(2)} USD</p>
-                  )}
-                </div>
-
-                <button type="submit"
-                  className={`w-full py-4 rounded-xl font-black uppercase tracking-widest shadow-lg hover:opacity-90 transition-all active:scale-95 ${balDirection === 'collect' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'}`}>
-                  {balDirection === 'collect' ? 'Record Collection' : 'Record Payment'}
-                </button>
-              </motion.form>
-            )}
-          </AnimatePresence>
-
-          {summary && (
-            <div className="bg-app-surface border border-app-border rounded-2xl p-6 shadow-sm space-y-4">
-              <h2 className="text-lg font-black uppercase tracking-tight">Register Summary</h2>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="opacity-50">Opening Balance</span>
-                  <span className="font-mono font-bold">${summary.openingBalance.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="opacity-50">Cash Sales</span>
-                  <span className="font-mono font-bold text-emerald-500">+${summary.totalSales.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="opacity-50">Cash Purchases</span>
-                  <span className="font-mono font-bold text-rose-500">-${summary.totalPurchases.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="opacity-50">Manual Cash In</span>
-                  <span className="font-mono font-bold text-emerald-500">+${summary.totalIn.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="opacity-50">Manual Cash Out</span>
-                  <span className="font-mono font-bold text-rose-500">-${summary.totalOut.toFixed(2)}</span>
-                </div>
-                <div className="pt-3 border-t border-app-border flex justify-between items-center">
-                  <span className="font-black uppercase text-[10px] tracking-widest">Expected Total</span>
-                  <span className="font-mono font-black text-lg">${summary.expectedBalance.toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="lg:col-span-2">
-          <div className="bg-app-surface border border-app-border rounded-2xl overflow-hidden shadow-sm">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-app-bg/50 text-[10px] uppercase tracking-widest font-black opacity-50">
-                  <th className="p-4 border-b border-app-border">Time</th>
-                  <th className="p-4 border-b border-app-border">Type</th>
-                  <th className="p-4 border-b border-app-border">Amount</th>
-                  <th className="p-4 border-b border-app-border">Reason</th>
-                </tr>
-              </thead>
-              <tbody className="text-sm">
-                {loading ? (
-                  <tr><td colSpan={4} className="p-12 text-center opacity-30 italic">Loading...</td></tr>
-                ) : entries.length === 0 ? (
-                  <tr><td colSpan={4} className="p-12 text-center opacity-30 italic">No movements recorded since the register was last closed.</td></tr>
-                ) : (
-                  entries.map(entry => (
-                    <tr key={entry.id} className="hover:bg-app-bg/30 transition-colors">
-                      <td className="p-4 border-b border-app-border font-mono text-[10px] opacity-50">
-                        {new Date(entry.created_at).toLocaleTimeString()}
-                      </td>
-                      <td className="p-4 border-b border-app-border">
-                        <span className={`px-2 py-1 text-[10px] font-black uppercase rounded ${entry.type === 'in' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                          {entry.type === 'in' ? 'In' : 'Out'}
-                        </span>
-                      </td>
-                      <td className={`p-4 border-b border-app-border font-mono font-bold ${entry.type === 'in' ? 'text-emerald-500' : 'text-rose-500'}`}>
-                        <div className="flex flex-col">
-                          <span>{entry.type === 'in' ? '+' : '-'}{entry.amount.toLocaleString()} {entry.currency}</span>
-                          {entry.currency !== 'USD' && (
-                            <span className="text-[10px] opacity-50 font-normal">
-                              ≈ ${(entry.amount / entry.exchange_rate).toFixed(2)}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-4 border-b border-app-border opacity-70">
-                        {entry.reason || '-'}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+        <StatCard label={t('fin_cfr_opening_balance', 'Opening Balance')} icon={Wallet} value={summary ? formatMoney(summary.openingBalance, { code: 'USD', symbol: '$' }) : '—'} />
+        <StatCard label={t('fin_cfr_cash_sales', 'Cash Sales')} icon={Banknote} value={summary ? `+${formatMoney(summary.totalSales, { code: 'USD', symbol: '$' })}` : '—'} />
+        <StatCard label={t('fin_cfr_refunds', 'Refunds')} icon={Receipt} value={summary ? `-${formatMoney(summary.totalRefunds, { code: 'USD', symbol: '$' })}` : '—'} />
+        <StatCard label={t('fin_cfr_purchases', 'Purchases')} icon={ShoppingBag} value={summary ? `-${formatMoney(summary.totalPurchases, { code: 'USD', symbol: '$' })}` : '—'} />
+        <StatCard label={t('fin_cfr_manual_in', 'Manual Cash In')} icon={ArrowDownLeft} value={summary ? `+${formatMoney(summary.totalIn, { code: 'USD', symbol: '$' })}` : '—'} />
+        <StatCard label={t('fin_cfr_manual_out', 'Manual Cash Out')} icon={ArrowUpRight} value={summary ? `-${formatMoney(summary.totalOut, { code: 'USD', symbol: '$' })}` : '—'} />
+        <StatCard label={t('fin_cfr_expected', 'Expected in Drawer')} icon={PiggyBank} value={summary ? formatMoney(summary.expectedBalance, { code: 'USD', symbol: '$' }) : '—'} className="border-primary/40" />
       </div>
+
+      <p className="rounded-[var(--radius-card)] border border-border-strong border-dashed bg-surface-2 px-4 py-2 text-center text-xs font-medium text-text-3">
+        {t('fin_cfr_formula', 'Opening + Sales − Refunds − Purchases + In − Out = Expected')}
+      </p>
+
+      <div>
+        <h2 className="mb-2 text-sm font-semibold text-text">{t('fin_cfr_movements', 'Movements')}</h2>
+        <DataTable
+          columns={columns}
+          data={entries}
+          rowKey={(r) => r.id}
+          loading={loading}
+          searchable
+          emptyTitle={t('fin_cfr_movements_empty', 'No movements recorded')}
+          emptyDescription={t('fin_cfr_movements_empty_desc', 'Nothing has been recorded since the register was last closed.')}
+        />
+      </div>
+
+      {/* Cash In / Cash Out modal */}
+      <Modal
+        open={movementOpen}
+        onClose={() => setMovementOpen(false)}
+        title={movementType === 'in' ? t('fin_cfr_cash_in', 'Cash In') : t('fin_cfr_cash_out', 'Cash Out')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setMovementOpen(false)}>{t('fin_cancel', 'Cancel')}</Button>
+            <Button
+              type="submit"
+              form="cfr-movement-form"
+              variant={movementType === 'in' ? 'success' : 'danger'}
+              loading={submittingMovement}
+            >
+              {t('fin_cfr_record_movement', 'Record Movement')}
+            </Button>
+          </>
+        }
+      >
+        <form id="cfr-movement-form" className="flex flex-col gap-4" onSubmit={handleSubmitMovement}>
+          <Field label={t('fin_currency', 'Currency')}>
+            <Select
+              value={currencyCode}
+              onChange={(e) => setCurrencyCode(e.target.value)}
+              options={currencies.map((c) => ({ value: c.code, label: `${c.code} (rate ${c.rate})` }))}
+            />
+          </Field>
+          <Field label={`${t('fin_amount', 'Amount')} (${currentCurrency.symbol})`}
+            helper={
+              currentCurrency.code !== 'USD' && amount
+                ? `${t('fin_approx_usd', 'Approx. USD')}: ${formatMoney((typeof amount === 'number' ? amount : 0) / currentCurrency.rate, { code: 'USD', symbol: '$' })}`
+                : undefined
+            }
+          >
+            <MoneyInput value={amount} onChange={setAmount} currencySymbol={currentCurrency.symbol} autoFocus />
+          </Field>
+          <Field label={t('fin_reason', 'Reason')}>
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {quickReasons.map((q) => (
+                <button
+                  type="button"
+                  key={q}
+                  onClick={() => setReason(q)}
+                  className="cursor-pointer rounded-[var(--radius-chip)] border border-border bg-surface-2 px-2 py-1 text-xs text-text-2 hover:border-primary hover:text-primary"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+            <Textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={t('fin_cfr_reason_placeholder', 'e.g. Petty cash for cleaning supplies')}
+              rows={3}
+            />
+          </Field>
+        </form>
+      </Modal>
+
+      {/* Balance payment modal */}
+      <Modal
+        open={balanceOpen}
+        onClose={() => setBalanceOpen(false)}
+        title={balDirection === 'collect' ? t('fin_cfr_collect', 'Collect from Customer') : t('fin_cfr_pay', 'Pay Supplier')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setBalanceOpen(false)}>{t('fin_cancel', 'Cancel')}</Button>
+            <Button
+              type="submit"
+              form="cfr-balance-form"
+              variant={balDirection === 'collect' ? 'success' : 'danger'}
+              loading={submittingBalance}
+            >
+              {balDirection === 'collect' ? t('fin_cfr_record_collection', 'Record Collection') : t('fin_cfr_record_payment', 'Record Payment')}
+            </Button>
+          </>
+        }
+      >
+        <form id="cfr-balance-form" className="flex flex-col gap-4" onSubmit={handleSubmitBalance}>
+          <div className="flex gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 p-1">
+            <button
+              type="button"
+              onClick={() => openBalanceModal('collect')}
+              className={[
+                'flex-1 cursor-pointer rounded-md py-1.5 text-xs font-semibold uppercase tracking-[0.04em]',
+                balDirection === 'collect' ? 'bg-success text-white' : 'text-text-3',
+              ].join(' ')}
+            >
+              {t('fin_cfr_collect', 'Collect from Customer')}
+            </button>
+            <button
+              type="button"
+              onClick={() => openBalanceModal('pay')}
+              className={[
+                'flex-1 cursor-pointer rounded-md py-1.5 text-xs font-semibold uppercase tracking-[0.04em]',
+                balDirection === 'pay' ? 'bg-danger text-white' : 'text-text-3',
+              ].join(' ')}
+            >
+              {t('fin_cfr_pay', 'Pay Supplier')}
+            </button>
+          </div>
+
+          <Field label={balDirection === 'collect' ? t('fin_cfr_customer', 'Customer') : t('fin_cfr_supplier', 'Supplier')}>
+            <Select
+              value={balStakeholderId}
+              onChange={(e) => setBalStakeholderId(e.target.value)}
+              placeholder={balDirection === 'collect' ? t('fin_cfr_select_customer', 'Select customer…') : t('fin_cfr_select_supplier', 'Select supplier…')}
+              options={[
+                ...(balDirection === 'collect' ? customersWithBalance : suppliersWithBalance).map((s) => ({
+                  value: String(s.id),
+                  label: `${s.name} — ${formatMoney(Math.abs(s.balance), { code: 'USD', symbol: '$' })} ${s.balance > 0 ? t('fin_cfr_owed', 'owed to you') : t('fin_cfr_outstanding', 'you owe')}`,
+                })),
+                ...stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${formatMoney(s.balance, { code: 'USD', symbol: '$' })})` })),
+              ]}
+            />
+            {selectedStakeholder && (
+              <p className="mt-1 text-xs text-text-3">
+                {t('fin_cfr_current_balance', 'Current balance')}:{' '}
+                <span className={selectedStakeholder.balance > 0 ? 'font-semibold text-accent' : selectedStakeholder.balance < 0 ? 'font-semibold text-danger' : 'text-success'}>
+                  {formatMoney(selectedStakeholder.balance, { code: 'USD', symbol: '$' })}
+                </span>
+              </p>
+            )}
+          </Field>
+
+          <Field label={t('fin_currency', 'Currency')}>
+            <Select
+              value={balCurrencyCode}
+              onChange={(e) => setBalCurrencyCode(e.target.value)}
+              options={currencies.map((c) => ({ value: c.code, label: `${c.code} (rate ${c.rate})` }))}
+            />
+          </Field>
+
+          <Field label={`${t('fin_amount', 'Amount')} (${balCurrency.symbol})`}
+            helper={
+              balCurrency.code !== 'USD' && balAmount
+                ? `${t('fin_approx_usd', 'Approx. USD')}: ${formatMoney((typeof balAmount === 'number' ? balAmount : 0) / balCurrency.rate, { code: 'USD', symbol: '$' })}`
+                : undefined
+            }
+          >
+            <MoneyInput value={balAmount} onChange={setBalAmount} currencySymbol={balCurrency.symbol} />
+          </Field>
+        </form>
+      </Modal>
     </div>
   );
 }

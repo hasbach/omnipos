@@ -1,36 +1,25 @@
 import React from 'react';
 import {
-  Search, ShoppingCart, User, CreditCard, Banknote, Package, History,
-  Plus, Minus, Trash2, Barcode, ArrowRight, Settings, DollarSign, Sun,
-  Moon, Percent, Tag, Printer, CheckCircle2, LayoutDashboard, BarChart3,
-  Calendar, X, RotateCcw, Shield, AlertTriangle, RefreshCw, Clock, Menu, Pencil
+  Search, ShoppingCart, User, Banknote, Menu, Pencil, Plus,
+  BarChart3, LayoutDashboard, Shield, Sun, Moon, Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
+import { Badge, IconButton, Kbd } from './ui';
+import { formatMoney } from '../lib/format';
+import type { PriceLevel } from '../lib/pricing';
 
 export default function PosHeader() {
   const pos = usePosContext();
-  const { 
-  products, setProducts, cart, setCart, stakeholders, setStakeholders, selectedStakeholder, setSelectedStakeholder, 
-  barcodeInput, setBarcodeInput, isProcessing, setIsProcessing, recentTransactions, setRecentTransactions, 
-  selectedCurrency, setSelectedCurrency, showCheckout, setShowCheckout, payments, setPayments, 
-  paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency, 
-  showAddCustomerModal, setShowAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, 
-  setIsPriceChecker, globalDiscount, setGlobalDiscount, lastTransaction, setLastTransaction, searchTerm, 
-  setSearchTerm, selectedCategory, setSelectedCategory, suggestions, setSuggestions, currentPage, 
-  setCurrentPage, language, setLanguage, customerSearchTerm, setCustomerSearchTerm, showCustomerDropdown, 
-  setShowCustomerDropdown, showDailyHistory, setShowDailyHistory, dailyTransactions, setDailyTransactions, 
-  historyDate, setHistoryDate, loadingHistory, setLoadingHistory, selectedHistoryTransaction, 
-  setSelectedHistoryTransaction, showRefundModal, setShowRefundModal, refundQuantities, setRefundQuantities, 
-  tenant, showUpdateModal, setShowUpdateModal, updateVersion, setUpdateVersion, isUpdating, setIsUpdating, 
-  users, currentUser, setCurrentUser, handleLogout, handleInstallUpdate, scheduleForm, setScheduleForm, handleScheduleUpdate, 
-  fetchSettings, fetchDailyHistory, handleRefund, fetchData, addToCart, handleBarcodeSubmit, 
-  handleSuggestionClick, updateQuantity, applyItemDiscount, calculateItemTotal, handleCreateCustomer, 
-  handleCheckout, handleQuickCash, printReceipt, subtotalUSD, subtotalLBP, totalUSD, totalLBP, 
-  totalSelected, categories, filteredProducts, totalPages, paginatedProducts, t, socketRef, 
-  barcodeRef, customerDropdownRef, localExpired, setShowDebtModal, openAddCustomer, openEditCustomer
+  const {
+    stakeholders, selectedStakeholder, setSelectedStakeholder,
+    selectedStakeholderObj, creditLimit, availableCredit,
+    customerSearchTerm, setCustomerSearchTerm, showCustomerDropdown, setShowCustomerDropdown,
+    tenant, currentUser, setCurrentUser, handleLogout, setShowDailyHistory, setShowDebtModal,
+    openAddCustomer, openEditCustomer, priceLevel, setPriceLevel, t, dir, isDarkMode, setIsDarkMode,
+    customerDropdownRef,
   } = pos as any;
 
   const [showHeaderMenu, setShowHeaderMenu] = React.useState(false);
@@ -46,120 +35,160 @@ export default function PosHeader() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-return (
-<header className="border-b border-app-border px-4 py-2 flex justify-between items-center bg-app-surface transition-colors duration-300">
-        <div className="flex items-center gap-3 flex-shrink-0">
-          <div className="bg-app-ink text-app-bg p-1.5 rounded transition-colors duration-300">
-            <ShoppingCart size={20} />
-          </div>
-          <h1 className="text-base font-bold tracking-tight uppercase">OmniPOS <span className="text-xs font-normal opacity-50">v1.0</span></h1>
+  const priceLevels: { value: PriceLevel; label: string }[] = [
+    { value: 'retail', label: t('pos_tier_retail', 'Retail') },
+    { value: 'wholesale', label: t('pos_tier_wholesale', 'Wholesale') },
+    { value: 'super_wholesale', label: t('pos_tier_super_wholesale', 'Super Wholesale') },
+  ];
+
+  const balance = selectedStakeholderObj?.balance ?? 0;
+
+  return (
+    <header className="border-b border-border px-4 py-2.5 flex justify-between items-center bg-surface gap-3">
+      <div className="flex items-center gap-3 shrink-0">
+        <div className="bg-primary text-on-primary p-2 rounded-lg">
+          <ShoppingCart size={18} />
+        </div>
+        <h1 className="text-base font-bold text-text hidden sm:block">OmniPOS</h1>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap justify-end">
+        {/* Price level selector — changeable per sale, defaults from the selected customer */}
+        <div className="flex items-center gap-1 bg-surface-2 border border-border rounded-lg p-1" role="group" aria-label={t('pos_price_level', 'Price Level')}>
+          {priceLevels.map(lvl => (
+            <button
+              key={lvl.value}
+              onClick={() => setPriceLevel(lvl.value)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer min-h-[32px] ${
+                priceLevel === lvl.value ? 'bg-primary text-on-primary shadow-sm' : 'text-text-2 hover:text-text'
+              }`}
+              title={t('pos_price_level', 'Price Level')}
+            >
+              {lvl.label}
+            </button>
+          ))}
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Customer stays directly on the header, not tucked in the menu — it's a per-sale
-              action the cashier needs constantly, unlike the menu's occasional-use items. */}
-          <div className="flex items-center gap-2 relative" ref={customerDropdownRef}>
-            <User size={18} className="opacity-50" />
-            <div className="relative">
-              <button
-                onClick={() => setShowCustomerDropdown(!showCustomerDropdown)}
-                className="bg-app-bg/50 border border-app-border/20 px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 hover:border-app-border transition-all min-w-[150px] justify-between"
-              >
-                <span className="truncate">
-                  {stakeholders.find(s => s.id === selectedStakeholder)?.name || t.select_customer}
-                </span>
-                <Plus size={12} className={`transition-transform ${showCustomerDropdown ? 'rotate-45' : ''}`} />
-              </button>
+        {/* Customer selector — stays directly on the header, it's a per-sale action the cashier
+            needs constantly, unlike the menu's occasional-use items. */}
+        <div className="flex items-center gap-1.5 relative" ref={customerDropdownRef}>
+          <div className="relative">
+            <button
+              onClick={() => setShowCustomerDropdown(!showCustomerDropdown)}
+              className="bg-bg border border-border px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:border-border-strong transition-all min-w-[160px] min-h-[36px] justify-between cursor-pointer text-text"
+            >
+              <span className="flex items-center gap-1.5 min-w-0">
+                <User size={14} className="text-text-3 shrink-0" />
+                <span className="truncate">{stakeholders.find((s: any) => s.id === selectedStakeholder)?.name || t('select_customer', 'Select Customer')}</span>
+              </span>
+              <Plus size={12} className={`shrink-0 transition-transform text-text-3 ${showCustomerDropdown ? 'rotate-45' : ''}`} />
+            </button>
 
-              <AnimatePresence>
-                {showCustomerDropdown && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 10 }}
-                    className="absolute right-0 top-full mt-2 w-64 bg-app-surface border border-app-border shadow-2xl rounded-xl overflow-hidden z-[60]"
-                  >
-                    <div className="p-2 border-b border-app-border bg-app-bg/30">
-                      <div className="relative">
-                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 opacity-30" size={12} />
-                        <input
-                          autoFocus
-                          type="text"
-                          placeholder={t.search_customers}
-                          className="w-full pl-7 pr-2 py-1.5 bg-app-surface border border-app-border/20 rounded-md text-xs outline-none focus:border-app-border transition-all"
-                          value={customerSearchTerm}
-                          onChange={(e) => setCustomerSearchTerm(e.target.value)}
-                        />
-                      </div>
+            <AnimatePresence>
+              {showCustomerDropdown && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute end-0 top-full mt-2 w-72 bg-surface border border-border shadow-[var(--shadow-modal)] rounded-xl overflow-hidden z-[60]"
+                >
+                  <div className="p-2 border-b border-border bg-surface-2">
+                    <div className="relative">
+                      <Search className="absolute start-2.5 top-1/2 -translate-y-1/2 text-text-3" size={13} />
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder={t('search_customers', 'Search customers...')}
+                        className="w-full ps-8 pe-2 py-2 bg-surface border border-border rounded-md text-xs outline-none focus:border-primary transition-all text-text"
+                        value={customerSearchTerm}
+                        onChange={(e) => setCustomerSearchTerm(e.target.value)}
+                      />
                     </div>
-                    <div className="max-h-60 overflow-y-auto">
-                      <button
-                        onClick={openAddCustomer}
-                        className="w-full text-left px-4 py-3 text-xs font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all flex items-center gap-2 border-b border-app-border/10"
-                      >
-                        <Plus size={14} /> {t.add_new_customer}
-                      </button>
-                      {stakeholders
-                        .filter(s => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase()))
-                        .map(s => (
-                          <div key={s.id} className={`group flex items-stretch hover:bg-app-ink hover:text-app-bg transition-colors ${selectedStakeholder === s.id ? 'bg-app-ink/5' : ''}`}>
-                            <button
-                              onClick={() => {
-                                setSelectedStakeholder(s.id);
-                                setShowCustomerDropdown(false);
-                                setCustomerSearchTerm('');
-                              }}
-                              className="flex-1 min-w-0 text-left pl-4 pr-2 py-2.5 text-xs font-bold flex justify-between items-center gap-2"
-                            >
-                              <span className="min-w-0">
-                                <span className="block truncate">{s.name}</span>
-                                {s.address && <span className="block truncate text-[10px] font-medium opacity-50">{s.address}</span>}
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    <button
+                      onClick={openAddCustomer}
+                      className="w-full text-start px-4 py-3 text-xs font-bold uppercase tracking-wide bg-success-soft text-success hover:bg-success hover:text-white transition-all flex items-center gap-2 border-b border-border cursor-pointer"
+                    >
+                      <Plus size={14} /> {t('add_new_customer', 'Add New Customer')}
+                    </button>
+                    {stakeholders
+                      .filter((s: any) => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase()))
+                      .map((s: any) => (
+                        <div key={s.id} className={`group flex items-stretch hover:bg-primary hover:text-on-primary transition-colors ${selectedStakeholder === s.id ? 'bg-primary-soft' : ''}`}>
+                          <button
+                            onClick={() => {
+                              setSelectedStakeholder(s.id);
+                              setShowCustomerDropdown(false);
+                              setCustomerSearchTerm('');
+                            }}
+                            className="flex-1 min-w-0 text-start ps-4 pe-2 py-2.5 text-xs font-semibold flex justify-between items-center gap-2 cursor-pointer"
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate">{s.name}</span>
+                              {s.address && <span className="block truncate text-[10px] font-medium opacity-70">{s.address}</span>}
+                            </span>
+                            {s.balance !== 0 && (
+                              <span className={`text-[10px] flex-shrink-0 num ${s.balance < 0 ? 'text-danger' : 'text-success'}`}>
+                                {formatMoney(Math.abs(s.balance), { code: 'USD', symbol: '$' })}
                               </span>
-                              {s.balance !== 0 && (
-                                <span className={`text-[10px] flex-shrink-0 ${s.balance < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                                  ${Math.abs(s.balance).toFixed(2)}
-                                </span>
-                              )}
-                            </button>
-                            {/* Walk-in is looked up by name server-side, so it isn't editable here. */}
-                            {s.name !== 'Walk-in Customer' && (
-                              <button
-                                onClick={() => openEditCustomer(s)}
-                                title="Edit customer"
-                                className="px-3 opacity-40 hover:opacity-100 transition-opacity"
-                              >
-                                <Pencil size={12} />
-                              </button>
                             )}
-                          </div>
-                        ))}
-                      {stakeholders.filter(s => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase())).length === 0 && (
-                        <div className="p-4 text-center text-[10px] opacity-30 italic">{t.no_customers_found}</div>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {showCustomerDropdown === false && selectedStakeholder && stakeholders.find((s: any) => s.id === selectedStakeholder)?.type === 'customer' && stakeholders.find((s: any) => s.id === selectedStakeholder)?.balance < 0 && (
-              <button
-                onClick={() => setShowDebtModal(true)}
-                title={t.receive_payment}
-                className="ml-1 p-1.5 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white rounded-lg transition-colors border border-emerald-500/20"
-              >
-                <Banknote size={14} />
-              </button>
-            )}
-
+                          </button>
+                          {/* Walk-in is looked up by name server-side, so it isn't editable here. */}
+                          {s.name !== 'Walk-in Customer' && (
+                            <button
+                              onClick={() => openEditCustomer(s)}
+                              title="Edit customer"
+                              className="px-3 opacity-40 hover:opacity-100 transition-opacity cursor-pointer"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    {stakeholders.filter((s: any) => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase())).length === 0 && (
+                      <div className="p-4 text-center text-[10px] text-text-3 italic">{t('no_customers_found', 'No customers found')}</div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
-          <div className="relative" ref={headerMenuRef}>
+          {/* Credit limit badge for the selected customer */}
+          {creditLimit > 0 && (
+            <Badge variant={availableCredit != null && availableCredit < 0 ? 'danger' : 'info'} title={t('pos_available_credit', 'Available Credit')}>
+              <Wallet size={11} /> {formatMoney(availableCredit || 0, { code: 'USD', symbol: '$' })}
+            </Badge>
+          )}
+
+          {showCustomerDropdown === false && selectedStakeholder && balance < 0 && stakeholders.find((s: any) => s.id === selectedStakeholder)?.type === 'customer' && (
+            <IconButton
+              variant="success"
+              size="md"
+              aria-label={t('receive_payment', 'Receive Payment')}
+              title={t('receive_payment', 'Receive Payment')}
+              onClick={() => setShowDebtModal(true)}
+            >
+              <Banknote size={16} />
+            </IconButton>
+          )}
+        </div>
+
+        <IconButton
+          aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          onClick={() => setIsDarkMode((v: boolean) => !v)}
+        >
+          {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
+        </IconButton>
+
+        <div className="relative" ref={headerMenuRef}>
           <button
-            onClick={() => setShowHeaderMenu(v => !v)}
-            className="flex items-center gap-2 px-3 py-1.5 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
+            onClick={() => setShowHeaderMenu((v: boolean) => !v)}
+            className="flex items-center gap-2 px-3 py-2 min-h-[36px] border border-border rounded-lg text-xs font-bold uppercase tracking-wide text-text hover:bg-surface-2 transition-all cursor-pointer"
           >
-            <Menu size={16} /> {currentUser?.name || t.cashier}
+            <Menu size={16} /> <span className="hidden md:inline">{currentUser?.name || t('cashier', 'Cashier')}</span>
           </button>
 
           <AnimatePresence>
@@ -168,67 +197,68 @@ return (
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="absolute right-0 top-full mt-2 w-[420px] max-w-[92vw] bg-app-surface border border-app-border shadow-2xl rounded-xl p-4 z-[70] flex flex-col gap-3"
+                className="absolute end-0 top-full mt-2 w-[380px] max-w-[92vw] bg-surface border border-border shadow-[var(--shadow-modal)] rounded-xl p-4 z-[70] flex flex-col gap-3"
               >
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col">
-              <span className="text-xs font-bold uppercase opacity-50">{tenant.name}</span>
-              <button
-                onClick={handleLogout}
-                className="text-[10px] font-mono uppercase hover:text-red-500 transition-colors text-left"
-              >
-                {t.logout}
-              </button>
-            </div>
-            <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="opacity-50 italic">F1 {t.checkout_key}</span>
-              <span className="opacity-50 italic">F2 {t.scan_key}</span>
-              <span className="opacity-50 italic">F3 {t.cash_key}</span>
-            </div>
-          </div>
-          <div className="h-[1px] bg-app-border opacity-10"></div>
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-text">{tenant.name}</span>
+                    <button
+                      onClick={handleLogout}
+                      className="text-[10px] font-mono uppercase text-text-3 hover:text-danger transition-colors text-start cursor-pointer"
+                    >
+                      {t('logout', 'Logout')}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[10px]">
+                    <Kbd>F1</Kbd><span className="text-text-3">{t('checkout_key', 'Checkout')}</span>
+                    <Kbd>F2</Kbd><span className="text-text-3">{t('scan_key', 'Scan')}</span>
+                    <Kbd>F3</Kbd><span className="text-text-3">{t('cash_key', 'Cash')}</span>
+                  </div>
+                </div>
+                <div className="h-px bg-border" />
 
-          {/* User Status & Lock */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="px-3 py-1.5 bg-app-surface border border-app-border rounded-lg flex items-center gap-2">
-              <User size={14} className="opacity-50" />
-              <span className="text-[10px] font-black uppercase tracking-widest">{currentUser?.name || t.cashier}</span>
-            </div>
-            <button
-              onClick={() => setCurrentUser(null)}
-              title={t.lock_terminal}
-              className="p-1.5 bg-red-500/10 text-red-500 border border-red-500/20 rounded-lg hover:bg-red-500 hover:text-white transition-all flex items-center justify-center"
-            >
-              <Shield size={16} />
-            </button>
-          </div>
+                {/* User Status & Lock */}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="px-3 py-1.5 bg-surface-2 border border-border rounded-lg flex items-center gap-2">
+                    <User size={14} className="text-text-3" />
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-text">{currentUser?.name || t('cashier', 'Cashier')}</span>
+                  </div>
+                  <IconButton
+                    variant="danger"
+                    aria-label={t('lock_terminal', 'Lock Terminal')}
+                    title={t('lock_terminal', 'Lock Terminal')}
+                    onClick={() => setCurrentUser(null)}
+                  >
+                    <Shield size={16} />
+                  </IconButton>
+                </div>
 
-          <button
-            onClick={() => { setShowDailyHistory(true); setShowHeaderMenu(false); }}
-            className="flex items-center justify-center gap-2 px-3 py-2 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
-          >
-            <BarChart3 size={14} /> {t.history}
-          </button>
-          <Link
-            to="/price-checker"
-            onClick={() => setShowHeaderMenu(false)}
-            className="flex items-center justify-center gap-2 px-3 py-2 border-2 border-app-border rounded-lg text-xs font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
-          >
-            <Search size={14} /> {t.price_checker}
-          </Link>
-          <Link
-            to={`/dashboard?cashierId=${currentUser?.id || ''}`}
-            target="_blank"
-            onClick={() => setShowHeaderMenu(false)}
-            className="flex items-center justify-center gap-2 px-3 py-2 bg-app-ink text-app-bg rounded-lg text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all"
-          >
-            <LayoutDashboard size={14} /> {t.dashboard}
-          </Link>
+                <button
+                  onClick={() => { setShowDailyHistory(true); setShowHeaderMenu(false); }}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 min-h-[40px] border border-border rounded-lg text-xs font-bold uppercase tracking-wide text-text hover:bg-surface-2 transition-all cursor-pointer"
+                >
+                  <BarChart3 size={14} /> {t('history', 'History')}
+                </button>
+                <Link
+                  to="/price-checker"
+                  onClick={() => setShowHeaderMenu(false)}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 min-h-[40px] border border-border rounded-lg text-xs font-bold uppercase tracking-wide text-text hover:bg-surface-2 transition-all"
+                >
+                  <Search size={14} /> {t('price_checker', 'Price Checker')}
+                </Link>
+                <Link
+                  to={`/dashboard?cashierId=${currentUser?.id || ''}`}
+                  target="_blank"
+                  onClick={() => setShowHeaderMenu(false)}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 min-h-[40px] bg-primary text-on-primary rounded-lg text-xs font-bold uppercase tracking-wide hover:bg-primary-hover transition-all"
+                >
+                  <LayoutDashboard size={14} /> {t('dashboard', 'Dashboard')}
+                </Link>
               </motion.div>
             )}
           </AnimatePresence>
-          </div>
         </div>
-      </header>
-);
+      </div>
+    </header>
+  );
 }

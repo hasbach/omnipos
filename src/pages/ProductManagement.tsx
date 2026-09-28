@@ -1,151 +1,174 @@
-import React, { useState, useEffect, useCallback } from 'react';
-
-import { 
-  LayoutDashboard, 
-  Package, 
-  Users, 
-  FileText, 
-  BarChart3, 
-  Settings as SettingsIcon,
-  Plus,
-  Edit2,
-  Trash2,
-  Save,
-  X,
-  Search,
-  ArrowLeft,
-  ShoppingCart,
-  Sun,
-  Moon,
-  Globe,
-  Coins,
-  ClipboardList,
-  Activity,
-  Zap,
-  Wallet,
-  CalendarCheck,
-  RotateCcw,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Printer,
-  Download,
-  Upload,
-  Shield,
-  Monitor,
-  RefreshCw,
-  Clock,
-  ArrowRight,
-  Tag
-} from 'lucide-react';
-
-import { motion, AnimatePresence } from 'motion/react';
-
-import { Product, Stakeholder, Currency, Tenant } from '../types';
-
-import { Link, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-
-import WindowFrame from '../components/WindowFrame';
-
-import LabelPrinter from '../components/LabelPrinter';
-
-import { useTheme } from '../hooks/useTheme';
-
-import { translations, Language } from '../i18n';
-
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-
 import { jsPDF } from 'jspdf';
-
 import 'jspdf-autotable';
+import { Download, Plus, Printer, Tag, Trash2, Upload, Edit2 } from 'lucide-react';
+
+import {
+  PageHeader,
+  Toolbar,
+  SearchInput,
+  Select,
+  Switch,
+  DataTable,
+  DataTableColumn,
+  Badge,
+  Button,
+  IconButton,
+  Modal,
+  useToast,
+  useConfirm,
+} from '../components/ui';
+import { useI18n } from '../intl/index';
+import { api } from '../lib/api';
+import { formatMoney } from '../lib/format';
+import { marginPct } from '../lib/pricing';
+import { Product, Currency } from '../types';
+import LabelPrinter from '../components/LabelPrinter';
+import { ProductEditorDrawer } from './products/ProductEditorDrawer';
+import { BulkPriceModal } from './products/BulkPriceModal';
+
+type StockFilter = 'all' | 'low' | 'out' | 'service';
+
+const IMPORT_TEMPLATE_ROW = {
+  Barcode: '1001',
+  Barcodes: '1001, 1002',
+  Name: 'Sample Product',
+  Category: 'General',
+  Unit: 'pcs',
+  Cost: 5,
+  Price: 10.5,
+  'Price Wholesale': 9,
+  'Price Wholesale LBP': '',
+  'Price Super Wholesale': 8,
+  'Price Super Wholesale LBP': '',
+  'Min Price': '',
+  'Package Price': 100,
+  'Units/Pkg': 10,
+  Stock: 50,
+};
+
+function tf(str: string, vars: Record<string, string | number>): string {
+  return str.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''));
+}
 
 export default function ProductManagement() {
+  const { t } = useI18n();
+  const toast = useToast();
+  const confirm = useConfirm();
+
   const [products, setProducts] = useState<Product[]>([]);
-  const [editingProduct, setEditingProduct] = useState<Partial<Product> & { stockEntryMode?: 'units' | 'packages', stockInput?: number } | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [language, setLanguage] = useState<Language>('en');
-  const [showExportMenu, setShowExportMenu] = useState(false);
-  const [showImportMenu, setShowImportMenu] = useState(false);
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
+  const [stockFilter, setStockFilter] = useState<StockFilter>('all');
+  const [showTiers, setShowTiers] = useState(true);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string | number>>(new Set());
+
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
   const [showLabelPrinter, setShowLabelPrinter] = useState(false);
   const [labelPreSelected, setLabelPreSelected] = useState<number[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importRows, setImportRows] = useState<any[] | null>(null);
+  const [importFileName, setImportFileName] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  const fetchProducts = useCallback(() => {
+    setLoading(true);
+    api
+      .get<Product[]>('/api/products')
+      .then(setProducts)
+      .catch((err) => toast.error(err.message))
+      .finally(() => setLoading(false));
+  }, [toast]);
 
   useEffect(() => {
     fetchProducts();
-    fetch('/api/settings')
-      .then(res => res.ok ? res.json() : null)
-      .then(s => s && s.language && setLanguage(s.language as Language))
-      .catch(err => console.error('Settings fetch error:', err));
+    api.get<Currency[]>('/api/currencies').then(setCurrencies).catch(() => {});
 
     const handleSync = (e: any) => {
-      if (e.detail.type === 'PRODUCTS_UPDATED') {
-        fetchProducts();
-      }
+      if (e.detail?.type === 'PRODUCTS_UPDATED') fetchProducts();
     };
     window.addEventListener('pos-sync', handleSync);
     return () => window.removeEventListener('pos-sync', handleSync);
-  }, []);
+  }, [fetchProducts]);
 
-  const t = translations[language];
+  const usdCurrency = useMemo(() => currencies.find((c) => c.code === 'USD') || { code: 'USD', symbol: '$', rate: 1 }, [currencies]);
+  const localCurrency = useMemo(() => currencies.find((c) => c.code !== 'USD') || null, [currencies]);
 
-  const fetchProducts = () => {
-    fetch('/api/products').then(res => res.json()).then(setProducts);
-  };
+  const categories = useMemo(() => Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort(), [products]);
 
-  const categories = Array.from(new Set(products.map(p => p.category).filter(Boolean)));
-
-  const handleSave = async () => {
-    if (!editingProduct) return;
-    const method = editingProduct.id ? 'PUT' : 'POST';
-    const url = editingProduct.id ? `/api/products/${editingProduct.id}` : '/api/products';
-    
-    const isService = editingProduct.track_inventory === 0;
-
-    let finalStock = editingProduct.stock || 0;
-    if (editingProduct.stockEntryMode === 'packages' && editingProduct.stockInput !== undefined) {
-      finalStock = (editingProduct.stockInput * (editingProduct.units_per_package || 1));
-    } else if (editingProduct.stockInput !== undefined) {
-      finalStock = editingProduct.stockInput;
-    }
-
-    const payload = {
-      ...editingProduct,
-      track_inventory: isService ? 0 : 1,
-      stock: isService ? 0 : finalStock,
-      barcodes: editingProduct.barcodes || [editingProduct.barcode].filter(Boolean),
-      price: editingProduct.price || 0,
-      price_lbp: editingProduct.price_lbp || 0,
-      package_price: editingProduct.package_price || 0,
-      package_price_lbp: editingProduct.package_price_lbp || 0,
-      cost: editingProduct.cost || 0,
-      cost_lbp: editingProduct.cost_lbp || 0
-    };
-    
-    await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return products.filter((p) => {
+      if (q && !p.name.toLowerCase().includes(q) && !(p.barcode || '').includes(search) && !p.barcodes?.some((b) => b.includes(search))) {
+        return false;
+      }
+      if (category && p.category !== category) return false;
+      if (stockFilter === 'service' && p.track_inventory !== 0) return false;
+      if (stockFilter === 'low' && !(p.track_inventory !== 0 && p.stock > 0 && p.stock <= (p.reorder_point || 0))) return false;
+      if (stockFilter === 'out' && !(p.track_inventory !== 0 && p.stock <= 0)) return false;
+      return true;
     });
-    
-    setEditingProduct(null);
-    fetchProducts();
-  };
+  }, [products, search, category, stockFilter]);
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure?')) return;
-    await fetch(`/api/products/${id}`, { method: 'DELETE' });
-    fetchProducts();
-  };
-
-  const filtered = products.filter(p => 
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    (p.barcode || '').includes(searchTerm) ||
-    p.barcodes?.some(b => b.includes(searchTerm))
+  const totalValueAtCost = useMemo(
+    () => filtered.reduce((sum, p) => sum + (p.track_inventory !== 0 ? (p.stock || 0) * (p.cost || 0) : 0), 0),
+    [filtered],
   );
 
+  const openCreate = () => {
+    setEditingProduct(null);
+    setEditorOpen(true);
+  };
+  const openEdit = (p: Product) => {
+    setEditingProduct(p);
+    setEditorOpen(true);
+  };
+
+  const handleDelete = async (p: Product) => {
+    const ok = await confirm({
+      title: tf(t('prod_delete_confirm_title', 'Delete "{name}"?'), { name: p.name }),
+      description: t('prod_delete_confirm_desc'),
+      confirmLabel: t('prod_delete', 'Delete'),
+    });
+    if (!ok) return;
+    try {
+      await api.del(`/api/products/${p.id}`);
+      toast.success(t('prod_deleted_toast', 'Product deleted.'));
+      fetchProducts();
+    } catch (err: any) {
+      toast.error(err.message || t('prod_delete_error_toast'));
+    }
+  };
+
+  const handleBulkDelete = async (selected: Product[], clear: () => void) => {
+    const ok = await confirm({
+      title: tf(t('prod_bulk_delete_confirm_title', 'Delete {count} products?'), { count: selected.length }),
+      description: t('prod_bulk_delete_confirm_desc'),
+      confirmLabel: t('prod_delete', 'Delete'),
+    });
+    if (!ok) return;
+    try {
+      await Promise.all(selected.map((p) => api.del(`/api/products/${p.id}`)));
+      toast.success(t('prod_deleted_toast', 'Product deleted.'));
+      clear();
+      setSelectedKeys(new Set());
+      fetchProducts();
+    } catch (err: any) {
+      toast.error(err.message || t('prod_delete_error_toast'));
+    }
+  };
+
+  // ---- Export ----
   const handleExport = async (format: 'json' | 'csv' | 'xlsx' | 'pdf') => {
     try {
-      const res = await fetch('/api/products/export');
-      const data = await res.json();
+      const data = await api.get<any[]>('/api/products/export');
       const date = new Date().toISOString().split('T')[0];
       const filename = `products_export_${date}`;
 
@@ -160,520 +183,433 @@ export default function ProductManagement() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } else if (format === 'csv' || format === 'xlsx') {
-        const worksheet = XLSX.utils.json_to_sheet(data.map((p: any) => ({
-          ID: p.id,
-          Barcode: p.barcode,
-          Barcodes: p.barcodes?.join(', '),
-          Name: p.name,
-          Price: p.price,
-          'Package Price': p.package_price,
-          'Units/Pkg': p.units_per_package,
-          Stock: p.stock,
-          Category: p.category,
-          Unit: p.unit
-        })));
+        const worksheet = XLSX.utils.json_to_sheet(
+          data.map((p: any) => ({
+            ID: p.id,
+            Barcode: p.barcode,
+            Barcodes: p.barcodes?.join(', '),
+            Name: p.name,
+            Category: p.category,
+            Unit: p.unit,
+            Cost: p.cost,
+            Price: p.price,
+            'Price Wholesale': p.price_wholesale,
+            'Price Wholesale LBP': p.price_wholesale_lbp,
+            'Price Super Wholesale': p.price_super_wholesale,
+            'Price Super Wholesale LBP': p.price_super_wholesale_lbp,
+            'Min Price': p.min_price,
+            'Package Price': p.package_price,
+            'Units/Pkg': p.units_per_package,
+            Stock: p.stock,
+          })),
+        );
         const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Products");
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Products');
         XLSX.writeFile(workbook, `${filename}.${format}`);
-      } else if (format === 'pdf') {
+      } else {
         const doc = new jsPDF();
-        doc.text("Product Inventory Report", 14, 15);
+        doc.text('Product Inventory Report', 14, 15);
         (doc as any).autoTable({
           startY: 20,
-          head: [['Barcode', 'Name', 'Price', 'Stock', 'Category']],
-          body: data.map((p: any) => [p.barcode, p.name, `$${p.price.toFixed(2)}`, p.stock, p.category]),
+          head: [['Barcode', 'Name', 'Cost', 'Retail', 'Wholesale', 'Super WS', 'Stock', 'Category']],
+          body: data.map((p: any) => [
+            p.barcode,
+            p.name,
+            `$${(p.cost || 0).toFixed(2)}`,
+            `$${(p.price || 0).toFixed(2)}`,
+            p.price_wholesale ? `$${p.price_wholesale.toFixed(2)}` : '-',
+            p.price_super_wholesale ? `$${p.price_super_wholesale.toFixed(2)}` : '-',
+            p.stock,
+            p.category,
+          ]),
           theme: 'striped',
-          headStyles: { fillStyle: 'black' }
         });
         doc.save(`${filename}.pdf`);
       }
-      setShowExportMenu(false);
-    } catch (err) {
-      console.error('Export error:', err);
-      alert('Failed to export products');
+    } catch (err: any) {
+      toast.error(err.message || t('prod_export_error_toast', 'Export failed.'));
     }
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ---- Import ----
+  const handleFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const reader = new FileReader();
     const extension = file.name.split('.').pop()?.toLowerCase();
+    const reader = new FileReader();
 
-    reader.onload = async (event) => {
+    reader.onload = (event) => {
       try {
-        let jsonData: any[] = [];
-        
+        let rows: any[] = [];
         if (extension === 'json') {
-          jsonData = JSON.parse(event.target?.result as string);
-        } else if (extension === 'csv' || extension === 'xlsx' || extension === 'xls') {
+          rows = JSON.parse(event.target?.result as string);
+        } else {
           const data = new Uint8Array(event.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const rawData = XLSX.utils.sheet_to_json(worksheet);
-          
-          // Map friendly names back to keys
-          jsonData = rawData.map((row: any) => {
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const raw = XLSX.utils.sheet_to_json(sheet);
+          rows = raw.map((row: any) => {
             const barcode = String(row.Barcode || row.barcode || '');
             const rawBarcodes = row.Barcodes || row.barcodes;
-            const barcodes = rawBarcodes ? String(rawBarcodes).split(',').map((s: string) => s.trim()) : [barcode].filter(Boolean);
-            
+            const barcodes = rawBarcodes ? String(rawBarcodes).split(',').map((s: string) => s.trim()).filter(Boolean) : [barcode].filter(Boolean);
             return {
-              barcode: barcode,
-              barcodes: barcodes,
+              barcode,
+              barcodes,
               name: String(row.Name || row.name || 'Unnamed Product'),
-              price: parseFloat(String(row.Price || row.price || 0)),
-              package_price: parseFloat(String(row['Package Price'] || row.package_price || 0)),
-              units_per_package: parseInt(String(row['Units/Pkg'] || row.units_per_package || 1)),
-              stock: parseInt(String(row.Stock || row.stock || 0)),
               category: String(row.Category || row.category || 'General'),
-              unit: String(row.Unit || row.unit || 'pcs')
+              unit: String(row.Unit || row.unit || 'pcs'),
+              cost: parseFloat(String(row.Cost || row.cost || 0)) || 0,
+              price: parseFloat(String(row.Price || row.price || 0)) || 0,
+              price_wholesale: parseFloat(String(row['Price Wholesale'] || row.price_wholesale || 0)) || 0,
+              price_wholesale_lbp: parseFloat(String(row['Price Wholesale LBP'] || row.price_wholesale_lbp || 0)) || 0,
+              price_super_wholesale: parseFloat(String(row['Price Super Wholesale'] || row.price_super_wholesale || 0)) || 0,
+              price_super_wholesale_lbp: parseFloat(String(row['Price Super Wholesale LBP'] || row.price_super_wholesale_lbp || 0)) || 0,
+              min_price: parseFloat(String(row['Min Price'] || row.min_price || 0)) || 0,
+              package_price: parseFloat(String(row['Package Price'] || row.package_price || 0)) || 0,
+              units_per_package: parseInt(String(row['Units/Pkg'] || row.units_per_package || 1), 10) || 1,
+              stock: parseInt(String(row.Stock || row.stock || 0), 10) || 0,
             };
           });
-        } else {
-          throw new Error('Unsupported file format');
         }
-
-        const res = await fetch('/api/products/bulk-import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(jsonData)
-        });
-        
-        if (res.ok) {
-          alert('Products imported successfully');
-          fetchProducts();
-        } else {
-          const err = await res.json();
-          alert(`Import failed: ${err.error}`);
-        }
+        setImportRows(rows);
+        setImportFileName(file.name);
       } catch (err: any) {
-        console.error('Import error:', err);
-        alert(`Import error: ${err.message}`);
+        toast.error(err.message || t('prod_import_error_toast', 'Import failed.'));
       }
     };
 
-    if (extension === 'json') {
-      reader.readAsText(file);
-    } else {
-      reader.readAsArrayBuffer(file);
+    if (extension === 'json') reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
+
+    e.target.value = '';
+  };
+
+  const confirmImport = async () => {
+    if (!importRows) return;
+    setImporting(true);
+    try {
+      const res = await api.post<{ count: number }>('/api/products/bulk-import', importRows);
+      toast.success(tf(t('prod_import_success_toast', '{count} products imported.'), { count: res.count }));
+      setImportRows(null);
+      setImportOpen(false);
+      fetchProducts();
+    } catch (err: any) {
+      toast.error(err.message || t('prod_import_error_toast', 'Import failed.'));
+    } finally {
+      setImporting(false);
     }
-    
-    e.target.value = ''; // Reset input
-    setShowImportMenu(false);
   };
 
   const handleDownloadTemplate = () => {
-    const templateData = [
-      {
-        Barcode: "1001",
-        Name: "Sample Product",
-        Price: 10.50,
-        "Package Price": 100.00,
-        "Units/Pkg": 10,
-        Stock: 50,
-        Category: "General",
-        Unit: "pcs",
-        Barcodes: "1001, 1002"
-      }
-    ];
-    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const worksheet = XLSX.utils.json_to_sheet([IMPORT_TEMPLATE_ROW]);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
-    XLSX.writeFile(workbook, "product_import_template.xlsx");
-    setShowImportMenu(false);
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Template');
+    XLSX.writeFile(workbook, 'product_import_template.xlsx');
   };
 
+  // ---- Columns ----
+  const columns = useMemo<DataTableColumn<Product>[]>(() => {
+    const cols: DataTableColumn<Product>[] = [
+      { key: 'barcode', header: t('prod_col_barcode', 'Barcode'), sortable: true, render: (p) => <span className="font-mono text-xs text-text-3">{p.barcode || '—'}</span> },
+      { key: 'name', header: t('prod_col_name', 'Name'), sortable: true, render: (p) => <span className="font-medium text-text">{p.name}</span> },
+      { key: 'category', header: t('prod_col_category', 'Category'), sortable: true, render: (p) => <span className="text-text-3">{p.category}</span> },
+      {
+        key: 'stock',
+        header: t('prod_col_stock', 'Stock'),
+        align: 'end',
+        sortable: true,
+        render: (p) => {
+          if (p.track_inventory === 0) return <Badge variant="info">{t('prod_service_badge', 'Service')}</Badge>;
+          const out = p.stock <= 0;
+          const low = !out && p.stock <= (p.reorder_point || 0) && (p.reorder_point || 0) > 0;
+          return (
+            <span className={`num font-semibold ${out ? 'text-danger' : low ? 'text-accent' : 'text-text'}`}>
+              {p.stock}
+              {(out || low) && (
+                <Badge variant={out ? 'danger' : 'warning'} className="ms-1.5">
+                  {out ? t('prod_out_of_stock_badge', 'Out') : t('prod_low_stock_badge', 'Low')}
+                </Badge>
+              )}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'cost',
+        header: t('prod_col_cost', 'Cost'),
+        align: 'end',
+        sortable: true,
+        render: (p) => <span className="num text-text-3">{formatMoney(p.cost || 0, usdCurrency)}</span>,
+      },
+      {
+        key: 'price',
+        header: t('prod_col_retail', 'Retail'),
+        align: 'end',
+        sortable: true,
+        render: (p) => (
+          <div className="leading-tight">
+            <div className="num font-medium text-text">{formatMoney(p.price || 0, usdCurrency)}</div>
+            {!!p.price_lbp && localCurrency && <div className="num text-xs text-text-3">{formatMoney(p.price_lbp, localCurrency)}</div>}
+          </div>
+        ),
+      },
+    ];
+
+    if (showTiers) {
+      cols.push(
+        {
+          key: 'price_wholesale',
+          header: t('prod_col_wholesale', 'Wholesale'),
+          align: 'end',
+          render: (p) =>
+            p.price_wholesale ? (
+              <div className="leading-tight">
+                <div className="num text-text">{formatMoney(p.price_wholesale, usdCurrency)}</div>
+                {!!p.price_wholesale_lbp && localCurrency && <div className="num text-xs text-text-3">{formatMoney(p.price_wholesale_lbp, localCurrency)}</div>}
+              </div>
+            ) : (
+              <span className="text-text-3">—</span>
+            ),
+        },
+        {
+          key: 'price_super_wholesale',
+          header: t('prod_col_super_wholesale', 'Super wholesale'),
+          align: 'end',
+          render: (p) =>
+            p.price_super_wholesale ? (
+              <div className="leading-tight">
+                <div className="num text-text">{formatMoney(p.price_super_wholesale, usdCurrency)}</div>
+                {!!p.price_super_wholesale_lbp && localCurrency && <div className="num text-xs text-text-3">{formatMoney(p.price_super_wholesale_lbp, localCurrency)}</div>}
+              </div>
+            ) : (
+              <span className="text-text-3">—</span>
+            ),
+        },
+      );
+    }
+
+    cols.push(
+      {
+        key: 'margin',
+        header: t('prod_col_margin', 'Margin'),
+        align: 'end',
+        sortValue: (p) => marginPct(p.price || 0, p.cost || 0),
+        sortable: true,
+        render: (p) => {
+          const m = marginPct(p.price || 0, p.cost || 0);
+          return <span className={`num font-medium ${m < 0 ? 'text-danger' : m < 15 ? 'text-accent' : 'text-success'}`}>{m.toFixed(1)}%</span>;
+        },
+      },
+      {
+        key: 'actions',
+        header: t('prod_col_actions', 'Actions'),
+        align: 'end',
+        render: (p) => (
+          <div className="flex justify-end gap-1">
+            <IconButton
+              aria-label={t('prod_labels_for_row', 'Print label')}
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLabelPreSelected([p.id]);
+                setShowLabelPrinter(true);
+              }}
+            >
+              <Tag size={14} />
+            </IconButton>
+            <IconButton
+              aria-label={t('prod_edit', 'Edit')}
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                openEdit(p);
+              }}
+            >
+              <Edit2 size={14} />
+            </IconButton>
+            <IconButton
+              aria-label={t('prod_delete', 'Delete')}
+              size="sm"
+              variant="danger"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDelete(p);
+              }}
+            >
+              <Trash2 size={14} />
+            </IconButton>
+          </div>
+        ),
+      },
+    );
+
+    return cols;
+  }, [t, showTiers, usdCurrency, localCurrency]);
+
   return (
-    <div className="h-full flex flex-col space-y-6">
-      <header className="flex justify-between items-end flex-shrink-0">
-        <div>
-          <h1 className="text-4xl font-black tracking-tighter uppercase">{t.products}</h1>
-          <p className="opacity-50 font-medium">Manage your inventory and pricing.</p>
-        </div>
-        <div className="flex gap-2 items-center">
-          {/* Print Labels */}
-          <button
-            onClick={() => { setLabelPreSelected([]); setShowLabelPrinter(true); }}
-            className="px-4 py-3 bg-app-surface border border-app-border rounded-xl font-black uppercase text-[10px] flex items-center gap-2 hover:bg-app-bg transition-all"
-          >
-            <Tag size={16} /> Labels
-          </button>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        title={t('prod_title', 'Products')}
+        subtitle={t('prod_subtitle')}
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => { setLabelPreSelected([]); setShowLabelPrinter(true); }}>
+              <Printer size={16} /> {t('prod_print_labels', 'Print labels')}
+            </Button>
+            <Button variant="secondary" onClick={() => setImportOpen(true)}>
+              <Upload size={16} /> {t('prod_import', 'Import Excel')}
+            </Button>
+            <Button variant="secondary" onClick={() => handleExport('xlsx')}>
+              <Download size={16} /> {t('prod_export', 'Export Excel')}
+            </Button>
+            <Button variant="secondary" onClick={() => setBulkPriceOpen(true)}>
+              <Tag size={16} /> {t('prod_bulk_price', 'Bulk price update')}
+            </Button>
+            <Button variant="primary" onClick={openCreate}>
+              <Plus size={16} /> {t('prod_add', 'Add product')}
+            </Button>
+          </>
+        }
+      />
 
-          {/* Export Menu */}
-          <div className="relative">
-            <button 
-              onClick={() => setShowExportMenu(!showExportMenu)}
-              className="px-4 py-3 bg-app-surface border border-app-border rounded-xl font-black uppercase text-[10px] flex items-center gap-2 hover:bg-app-bg transition-all"
-            >
-              <Download size={16} /> Export
-            </button>
-            <AnimatePresence>
-              {showExportMenu && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowExportMenu(false)} />
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}
-                    className="absolute right-0 mt-2 w-40 bg-app-surface border border-app-border rounded-xl shadow-xl z-20 overflow-hidden"
-                  >
-                    {(['json', 'csv', 'xlsx', 'pdf'] as const).map(format => (
-                      <button
-                        key={format}
-                        onClick={() => handleExport(format)}
-                        className="w-full px-4 py-3 text-left text-[10px] font-black uppercase hover:bg-app-bg transition-colors border-b border-app-border last:border-0"
-                      >
-                        {format.toUpperCase()}
-                      </button>
-                    ))}
-                  </motion.div>
-                </>
-              )}
-            </AnimatePresence>
-          </div>
+      <Toolbar
+        className="mb-3"
+        actions={
+          <label className="flex items-center gap-2 text-sm text-text-2">
+            <Switch checked={showTiers} onChange={setShowTiers} />
+            {t('prod_price_level_toggle', 'Show price levels')}
+          </label>
+        }
+      >
+        <SearchInput value={search} onChange={setSearch} placeholder={t('prod_search_placeholder')} className="max-w-sm" />
+        <Select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          options={[{ value: '', label: t('prod_filter_category_all', 'All categories') }, ...categories.map((c) => ({ value: c, label: c }))]}
+          className="w-44"
+        />
+        <Select
+          value={stockFilter}
+          onChange={(e) => setStockFilter(e.target.value as StockFilter)}
+          options={[
+            { value: 'all', label: t('prod_filter_stock_all', 'All stock') },
+            { value: 'low', label: t('prod_filter_stock_low', 'Low stock') },
+            { value: 'out', label: t('prod_filter_stock_out', 'Out of stock') },
+            { value: 'service', label: t('prod_filter_stock_service', 'Service items') },
+          ]}
+          className="w-40"
+        />
+      </Toolbar>
 
-          {/* Import Menu */}
-          <div className="relative">
-            <button 
-              onClick={() => setShowImportMenu(!showImportMenu)}
-              className="px-4 py-3 bg-app-surface border border-app-border rounded-xl font-black uppercase text-[10px] flex items-center gap-2 hover:bg-app-bg transition-all"
-            >
-              <Upload size={16} /> Import
-            </button>
-            <AnimatePresence>
-              {showImportMenu && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowImportMenu(false)} />
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}
-                    className="absolute right-0 mt-2 w-48 bg-app-surface border border-app-border rounded-xl shadow-xl z-20 overflow-hidden p-2 space-y-1"
-                  >
-                    <p className="px-2 py-1 text-[8px] font-black uppercase opacity-30">Select File</p>
-                    <label className="block w-full px-4 py-3 text-left text-[10px] font-black uppercase hover:bg-app-bg transition-colors rounded-lg cursor-pointer">
-                      JSON / CSV / EXCEL
-                      <input type="file" accept=".json,.csv,.xlsx,.xls" className="hidden" onChange={handleImport} />
-                    </label>
-                    <div className="h-px bg-app-border mx-2 my-1" />
-                    <button 
-                      onClick={handleDownloadTemplate}
-                      className="w-full px-4 py-3 text-left text-[10px] font-black uppercase hover:bg-app-bg transition-colors rounded-lg flex items-center gap-2"
-                    >
-                      <Download size={14} /> Template
-                    </button>
-                  </motion.div>
-                </>
-              )}
-            </AnimatePresence>
-          </div>
-
-          <button 
-            onClick={() => setEditingProduct({ name: '', barcode: '', price: 0, package_price: 0, units_per_package: 1, stock: 0, stockInput: 0, stockEntryMode: 'units', track_inventory: 1, category: 'General', unit: 'pcs' })}
-            className="px-6 py-3 bg-app-ink text-app-bg rounded-xl font-black uppercase text-[10px] flex items-center gap-2 hover:opacity-90 transition-all shadow-lg"
-          >
-            <Plus size={18} /> {t.add_product}
-          </button>
-        </div>
-      </header>
-
-      <div className="relative flex-shrink-0">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
-        <input 
-          type="text"
-          placeholder={t.search_placeholder}
-          className="w-full pl-12 pr-4 py-4 bg-app-surface border border-app-border rounded-xl outline-none focus:border-app-ink transition-all"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+        <DataTable
+          columns={columns}
+          data={filtered}
+          rowKey={(p) => p.id}
+          loading={loading}
+          selectable
+          selectedKeys={selectedKeys}
+          onSelectedKeysChange={setSelectedKeys}
+          onRowClick={openEdit}
+          emptyTitle={t('prod_empty_title', 'No products found')}
+          emptyDescription={t('prod_empty_desc')}
+          bulkActions={(selected, clear) => (
+            <>
+              <Button size="sm" variant="secondary" onClick={() => setBulkPriceOpen(true)}>
+                <Tag size={14} /> {t('prod_bulk_price_update_selected', 'Bulk price update')}
+              </Button>
+              <Button size="sm" variant="danger" onClick={() => handleBulkDelete(selected, clear)}>
+                <Trash2 size={14} /> {t('prod_bulk_delete', 'Delete selected')}
+              </Button>
+            </>
+          )}
+          footerTotals={{
+            name: tf(t('prod_footer_count', '{count} products'), { count: filtered.length }),
+            cost: <span className="num">{tf(t('prod_footer_value', 'Inventory value (cost): {value}'), { value: formatMoney(totalValueAtCost, usdCurrency) })}</span>,
+          }}
+          pageSizeOptions={[25, 50, 100]}
+          defaultPageSize={25}
         />
       </div>
 
-      <div className="flex-1 min-h-0 bg-app-surface border border-app-border rounded-2xl overflow-hidden shadow-sm flex flex-col">
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-left border-collapse min-w-[1200px]">
-            <thead className="sticky top-0 z-10 bg-app-bg">
-              <tr className="text-[10px] uppercase tracking-widest font-black opacity-50">
-                <th className="p-4 border-b border-app-border">{t.barcode}</th>
-                <th className="p-4 border-b border-app-border">{t.name}</th>
-                <th className="p-4 border-b border-app-border">{t.unit}</th>
-                <th className="p-4 border-b border-app-border text-right">Price (USD)</th>
-                <th className="p-4 border-b border-app-border text-right">Price (LBP)</th>
-                <th className="p-4 border-b border-app-border text-right">Pkg Price</th>
-                <th className="p-4 border-b border-app-border text-right">Units/Pkg</th>
-                <th className="p-4 border-b border-app-border text-right">{t.stock}</th>
-                <th className="p-4 border-b border-app-border">{t.category}</th>
-                <th className="p-4 border-b border-app-border text-right">{t.actions}</th>
-              </tr>
-            </thead>
-            <tbody className="text-sm">
-              {filtered.map(p => (
-                <tr key={p.id} className="hover:bg-app-bg/30 transition-colors group">
-                  <td className="p-4 border-b border-app-border font-mono">{p.barcode}</td>
-                  <td className="p-4 border-b border-app-border font-bold">{p.name}</td>
-                  <td className="p-4 border-b border-app-border opacity-50">{p.unit}</td>
-                  <td className="p-4 border-b border-app-border text-right font-mono">${(p.price || 0).toFixed(2)}</td>
-                  <td className="p-4 border-b border-app-border text-right font-mono text-emerald-600 font-bold">{(p.price_lbp || 0).toLocaleString()} LL</td>
-                  <td className="p-4 border-b border-app-border text-right font-mono opacity-50">
-                    {p.package_price ? `$${p.package_price.toFixed(2)}` : '-'}
-                  </td>
-                  <td className="p-4 border-b border-app-border text-right font-mono opacity-50">
-                    {p.units_per_package || 1}
-                  </td>
-                  <td className={`p-4 border-b border-app-border text-right font-mono font-bold ${p.track_inventory === 0 ? '' : (p.stock < 10 ? 'text-red-500' : '')}`}>
-                    {p.track_inventory === 0 ? (
-                      <span className="px-2 py-1 bg-violet-500/10 text-violet-500 text-[10px] font-black uppercase rounded">Service</span>
-                    ) : p.stock}
-                  </td>
-                  <td className="p-4 border-b border-app-border uppercase text-[10px] font-black opacity-50">{p.category}</td>
-                  <td className="p-4 border-b border-app-border text-right">
-                    <div className="flex justify-end gap-2 items-center">
-                      <button
-                        onClick={() => { setLabelPreSelected([p.id]); setShowLabelPrinter(true); }}
-                        className="p-2 bg-violet-500/10 hover:bg-violet-500 text-violet-500 hover:text-white rounded-lg transition-colors"
-                        title="Print label for this product"
-                      >
-                        <Tag size={14} />
-                      </button>
-                      <button 
-                        onClick={() => setEditingProduct({ ...p, stockInput: p.stock, stockEntryMode: 'units' })} 
-                        className="p-2 bg-blue-500/10 hover:bg-blue-500 text-blue-500 hover:text-white rounded-lg transition-colors flex items-center gap-1 text-[10px] font-black uppercase"
-                        title="Edit product"
-                      >
-                        <Edit2 size={14} /> Edit
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(p.id)} 
-                        className="p-2 hover:bg-red-500 hover:text-white rounded-lg transition-colors text-app-ink/40 hover:text-white"
-                        title="Delete product"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <ProductEditorDrawer
+        open={editorOpen}
+        product={editingProduct}
+        categories={categories}
+        localCurrency={localCurrency ? { code: localCurrency.code, symbol: localCurrency.symbol, rate: localCurrency.rate } : null}
+        onClose={() => setEditorOpen(false)}
+        onSaved={fetchProducts}
+      />
 
-      <AnimatePresence>
-        {editingProduct && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setEditingProduct(null)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-app-surface w-full max-w-2xl rounded-2xl shadow-2xl border border-app-border p-8 space-y-6 max-h-[90vh] overflow-y-auto"
-            >
-              <h2 className="text-2xl font-black uppercase tracking-tighter">{editingProduct.id ? t.edit_product : t.new_product}</h2>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2 flex items-center justify-between p-3 bg-app-bg/50 rounded-xl border border-app-border/50">
-                  <div>
-                    <div className="text-[10px] font-black uppercase">Service (no inventory)</div>
-                    <div className="text-[10px] opacity-50">Turn off stock tracking for time/labor-based items.</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setEditingProduct({ ...editingProduct, track_inventory: editingProduct.track_inventory === 0 ? 1 : 0 })}
-                    className={`w-12 h-7 rounded-full transition-colors relative flex-shrink-0 ${editingProduct.track_inventory === 0 ? 'bg-violet-500' : 'bg-app-border'}`}
-                  >
-                    <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-transform ${editingProduct.track_inventory === 0 ? 'translate-x-6' : 'translate-x-1'}`} />
-                  </button>
-                </div>
+      <BulkPriceModal
+        open={bulkPriceOpen}
+        onClose={() => setBulkPriceOpen(false)}
+        products={products}
+        selectedIds={selectedKeys}
+        categories={categories}
+        onApplied={fetchProducts}
+      />
 
-                <div className="space-y-1 col-span-2">
-                  <label className="text-[10px] font-black uppercase opacity-50">{t.barcodes_label}</label>
-                  <input
-                    type="text" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-mono"
-                    placeholder="1001, 1002, ..."
-                    value={editingProduct.barcodes?.join(', ') || editingProduct.barcode || ''}
-                    onChange={e => {
-                      const codes = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
-                      setEditingProduct({...editingProduct, barcodes: codes, barcode: codes[0] || ''});
-                    }}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase opacity-50">{t.name}</label>
-                  <input
-                    type="text" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
-                    value={editingProduct.name} onChange={e => setEditingProduct({...editingProduct, name: e.target.value})}
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase opacity-50">{t.unit_label}</label>
-                  <input 
-                    type="text" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
-                    placeholder="pcs, kg, box..."
-                    value={editingProduct.unit || ''} onChange={e => setEditingProduct({...editingProduct, unit: e.target.value})}
-                  />
-                </div>
-
-                {/* Pricing Section */}
-                <div className="col-span-2 grid grid-cols-2 gap-4 p-4 bg-app-bg/50 rounded-2xl border border-app-border/50">
-                  <div className="col-span-2 flex items-center justify-between mb-2">
-                    <h3 className="text-[10px] font-black uppercase tracking-widest opacity-50">Pricing & Cost (Auto-Calculate)</h3>
-                    <div className="text-[8px] font-bold opacity-30 italic">Rate: 1 USD = 89,500 LBP</div>
-                  </div>
-                  
-                  {/* Unit Price */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase opacity-50">Unit Price (USD)</label>
-                    <input 
-                      type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-mono"
-                      value={editingProduct.price || 0} 
-                      onChange={e => {
-                        const usd = parseFloat(e.target.value) || 0;
-                        setEditingProduct({...editingProduct, price: usd, price_lbp: Math.round(usd * 89500)});
-                      }}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase opacity-50">Unit Price (LBP)</label>
-                    <input 
-                      type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-mono"
-                      value={editingProduct.price_lbp || 0} 
-                      onChange={e => {
-                        const lbp = parseFloat(e.target.value) || 0;
-                        setEditingProduct({...editingProduct, price_lbp: lbp, price: parseFloat((lbp / 89500).toFixed(2))});
-                      }}
-                    />
-                  </div>
-
-                  {/* Package Price */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase opacity-50">Package Price (USD)</label>
-                    <input 
-                      type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-mono"
-                      value={editingProduct.package_price || 0} 
-                      onChange={e => {
-                        const usd = parseFloat(e.target.value) || 0;
-                        setEditingProduct({...editingProduct, package_price: usd, package_price_lbp: Math.round(usd * 89500)});
-                      }}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase opacity-50">Package Price (LBP)</label>
-                    <input 
-                      type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-mono"
-                      value={editingProduct.package_price_lbp || 0} 
-                      onChange={e => {
-                        const lbp = parseFloat(e.target.value) || 0;
-                        setEditingProduct({...editingProduct, package_price_lbp: lbp, package_price: parseFloat((lbp / 89500).toFixed(2))});
-                      }}
-                    />
-                  </div>
-
-                  {/* Cost Price */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase opacity-50">Cost Price (USD)</label>
-                    <input 
-                      type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-mono"
-                      value={editingProduct.cost || 0} 
-                      onChange={e => {
-                        const usd = parseFloat(e.target.value) || 0;
-                        setEditingProduct({...editingProduct, cost: usd, cost_lbp: Math.round(usd * 89500)});
-                      }}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase opacity-50">Cost Price (LBP)</label>
-                    <input 
-                      type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-mono"
-                      value={editingProduct.cost_lbp || 0} 
-                      onChange={e => {
-                        const lbp = parseFloat(e.target.value) || 0;
-                        setEditingProduct({...editingProduct, cost_lbp: lbp, cost: parseFloat((lbp / 89500).toFixed(2))});
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {editingProduct.track_inventory !== 0 && (
-                  <>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black uppercase opacity-50">Units per Package</label>
-                      <input
-                        type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
-                        value={editingProduct.units_per_package || 1} onChange={e => setEditingProduct({...editingProduct, units_per_package: parseInt(e.target.value)})}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between items-center">
-                        <label className="text-[10px] font-black uppercase opacity-50">{t.stock_label}</label>
-                        <select
-                          className="text-[8px] font-black uppercase bg-transparent outline-none"
-                          value={editingProduct.stockEntryMode}
-                          onChange={e => setEditingProduct({ ...editingProduct, stockEntryMode: e.target.value as any })}
-                        >
-                          <option value="units">Base Units</option>
-                          <option value="packages">Packages</option>
-                        </select>
-                      </div>
-                      <input
-                        type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
-                        value={editingProduct.stockInput}
-                        onChange={e => setEditingProduct({...editingProduct, stockInput: parseFloat(e.target.value)})}
-                      />
-                      {editingProduct.stockEntryMode === 'packages' && (
-                        <p className="text-[8px] font-mono opacity-50 mt-1">
-                          = {(editingProduct.stockInput || 0) * (editingProduct.units_per_package || 1)} Total Units
-                        </p>
-                      )}
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black uppercase opacity-50">Reorder Point</label>
-                      <input
-                        type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
-                        value={editingProduct.reorder_point || 0} onChange={e => setEditingProduct({...editingProduct, reorder_point: parseInt(e.target.value)})}
-                      />
-                    </div>
-                  </>
-                )}
-                <div className="space-y-1 col-span-2">
-                  <label className="text-[10px] font-black uppercase opacity-50">{t.category_label}</label>
-                  <input 
-                    type="text" 
-                    list="category-list"
-                    className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none"
-                    value={editingProduct.category} 
-                    onChange={e => setEditingProduct({...editingProduct, category: e.target.value})}
-                  />
-                  <datalist id="category-list">
-                    {categories.map(cat => (
-                      <option key={cat} value={cat} />
-                    ))}
-                  </datalist>
-                </div>
-              </div>
-
-              <div className="flex gap-4 pt-4">
-                <button onClick={handleSave} className="flex-1 py-4 bg-app-ink text-app-bg rounded-xl font-black uppercase text-xs flex items-center justify-center gap-2">
-                  <Save size={18} /> {t.save}
-                </button>
-                <button onClick={() => setEditingProduct(null)} className="px-6 py-4 border-2 border-app-border rounded-xl font-black uppercase text-xs">
-                  {t.cancel}
-                </button>
-              </div>
-            </motion.div>
+      <Modal
+        open={importOpen}
+        onClose={() => { setImportOpen(false); setImportRows(null); }}
+        size="md"
+        title={t('prod_import_title', 'Import products')}
+        footer={
+          importRows ? (
+            <>
+              <Button variant="secondary" onClick={() => setImportRows(null)} disabled={importing}>
+                {t('prod_cancel', 'Cancel')}
+              </Button>
+              <Button variant="primary" onClick={confirmImport} loading={importing}>
+                {tf(t('prod_import_confirm', 'Import {count} products'), { count: importRows.length })}
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {!importRows ? (
+          <div className="space-y-3">
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-[var(--radius-card)] border-2 border-dashed border-border p-8 text-center hover:border-primary">
+              <Upload size={22} className="text-text-3" />
+              <span className="text-sm font-medium text-text">{t('prod_import_pick_file', 'JSON / CSV / Excel file')}</span>
+              <input type="file" accept=".json,.csv,.xlsx,.xls" className="hidden" onChange={handleFilePicked} />
+            </label>
+            <Button variant="ghost" onClick={handleDownloadTemplate} className="w-full">
+              <Download size={14} /> {t('prod_import_template', 'Download template')}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-text-2">{tf(t('prod_import_summary_desc', '{count} rows read from "{file}". Continue to import them.'), { count: importRows.length, file: importFileName })}</p>
+            <div className="max-h-56 overflow-y-auto rounded-[var(--radius-card)] border border-border">
+              <table className="w-full border-collapse text-xs">
+                <thead className="bg-surface-2 text-text-3">
+                  <tr>
+                    <th className="px-2 py-1.5 text-start">{t('prod_col_name', 'Name')}</th>
+                    <th className="px-2 py-1.5 text-start">{t('prod_col_category', 'Category')}</th>
+                    <th className="px-2 py-1.5 text-end">{t('prod_col_retail', 'Retail')}</th>
+                    <th className="px-2 py-1.5 text-end">{t('prod_col_stock', 'Stock')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importRows.slice(0, 20).map((r, i) => (
+                    <tr key={i} className="border-t border-border">
+                      <td className="px-2 py-1.5">{r.name}</td>
+                      <td className="px-2 py-1.5 text-text-3">{r.category}</td>
+                      <td className="num px-2 py-1.5 text-end">{r.price}</td>
+                      <td className="num px-2 py-1.5 text-end">{r.stock}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
-      </AnimatePresence>
+      </Modal>
 
-      {/* Label Printer */}
       <AnimatePresence>
-        {showLabelPrinter && (
-          <LabelPrinter
-            products={products}
-            preSelected={labelPreSelected}
-            onClose={() => setShowLabelPrinter(false)}
-          />
-        )}
+        {showLabelPrinter && <LabelPrinter products={products as any} preSelected={labelPreSelected} onClose={() => setShowLabelPrinter(false)} />}
       </AnimatePresence>
     </div>
   );

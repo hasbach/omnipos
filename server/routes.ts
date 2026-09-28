@@ -1150,7 +1150,15 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/transactions", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { stakeholder_id, user_id, type, items, currency, exchange_rate, payments, discount, tax, terminalId, original_transaction_id, price_level, notes, reference } = req.body;
+    const { stakeholder_id, user_id, items, currency, exchange_rate, payments, discount, tax, terminalId, original_transaction_id, price_level, notes, reference } = req.body;
+    // The POS checkout has never sent `type` (it relied on the INSERT's `type || 'sale'` default),
+    // so every branch below that checks `type === 'sale'` was skipped for POS sales: the line was
+    // priced from the client's item.price (no package break, no price tier) and its unit_cost was
+    // set to the selling price. Normalize once, up front, so a POS sale IS a sale everywhere.
+    const type: 'sale' | 'purchase' | 'refund' = req.body.type || 'sale';
+    if (!['sale', 'purchase', 'refund'].includes(type)) {
+      return res.status(400).json({ error: "Invalid transaction type." });
+    }
     // Always store user_id AND stakeholder_id that belong to THIS tenant (never the old hard-coded
     // 1 defaults, which point at a seed tenant's rows and break the cloud FKs, blocking sync).
     const resolvedUserId = tenantUserId(tenantId, user_id);

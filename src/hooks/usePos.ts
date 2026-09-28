@@ -1,8 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Fuse from 'fuse.js';
 import { Product, CartItem, Stakeholder, Transaction, Payment, Discount, Tenant } from '../types';
-import { translations, Language } from '../i18n';
 import { useTheme } from './useTheme';
+import { useI18n } from '../intl/index';
+import { useToast } from '../components/ui/ToastProvider';
+import { useConfirm } from '../components/ui/ConfirmDialog';
+import {
+  PriceLevel,
+  normalizeLevel,
+  saleLineUnitPrice,
+  saleLineUnitPriceLbp,
+} from '../lib/pricing';
 
 export const CURRENCIES = [
   { code: 'USD', symbol: '$', rate: 1 },
@@ -15,7 +23,22 @@ const EMPTY_CUSTOMER_FORM = { name: '', phone: '', email: '', address: '' };
 export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrentUser: any, users: any, setUsers: any, handleLogout?: any) {
   // Read terminal identity from URL (?terminalId=POS+1) injected by Electron on launch
   const terminalId = new URLSearchParams(window.location.search).get('terminalId') || 'MAIN';
-const [products, setProducts] = useState<Product[]>([]);
+  const { t: t18n, lang, dir, setLang } = useI18n();
+  const toast = useToast();
+  const confirm = useConfirm();
+
+  // Interpolating translate helper: t('key', 'English fallback {var}', { var: 5 })
+  const t = useCallback((key: string, fallback?: string, vars?: Record<string, any>) => {
+    let s = t18n(key, fallback);
+    if (vars) {
+      for (const k of Object.keys(vars)) {
+        s = s.replace(new RegExp(`\\{${k}\\}`, 'g'), String(vars[k]));
+      }
+    }
+    return s;
+  }, [t18n]);
+
+  const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [selectedStakeholder, setSelectedStakeholder] = useState<number>(1); // Default to Walk-in
@@ -37,7 +60,7 @@ const [products, setProducts] = useState<Product[]>([]);
   const [newCustomerForm, setNewCustomerForm] = useState(EMPTY_CUSTOMER_FORM);
   const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
   const [isPriceChecker, setIsPriceChecker] = useState(false);
-  const [isDarkMode] = useTheme();
+  const [isDarkMode, setIsDarkMode] = useTheme();
   const [globalDiscount, setGlobalDiscount] = useState<Discount>({ type: 'percentage', value: 0 });
   const [showReceiptDialog, setShowReceiptDialog] = useState(true);
   const [lastTransaction, setLastTransaction] = useState<any>(null);
@@ -46,8 +69,6 @@ const [products, setProducts] = useState<Product[]>([]);
   const [suggestions, setSuggestions] = useState<Product[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 12;
-  const [language, setLanguage] = useState<Language>('en');
-  const t = translations[language];
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showDailyHistory, setShowDailyHistory] = useState(false);
@@ -63,12 +84,26 @@ const [products, setProducts] = useState<Product[]>([]);
   const [updateStatus, setUpdateStatus] = useState<'idle'|'checking'|'available'|'downloading'|'downloaded'|'error'>('idle');
   const [updateProgress, setUpdateProgress] = useState(0);
   const [isUpdating, setIsUpdating] = useState(false);
-              const socketRef = useRef<WebSocket | null>(null);
-  
+  const socketRef = useRef<WebSocket | null>(null);
+
+  // Tenant Settings (full map, incl. default_price_level / allow_price_override / enforce_min_price /
+  // enforce_credit_limit) — used to mirror the server's pricing + guardrail decisions client-side.
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const allowPriceOverride = settings.allow_price_override === '1';
+  const enforceMinPrice = settings.enforce_min_price === '1';
+
+  // Price level (Retail / Wholesale / Super wholesale) for the CURRENT sale. Defaults from the
+  // selected customer's own price_level, else the tenant's configured default, but the cashier can
+  // change it per sale via the header selector.
+  const [priceLevel, setPriceLevelState] = useState<PriceLevel>('retail');
+  const priceLevelManualRef = useRef(false);
+  const setPriceLevel = useCallback((level: PriceLevel) => {
+    priceLevelManualRef.current = true;
+    setPriceLevelState(level);
+  }, []);
+
   const barcodeRef = useRef<HTMLInputElement>(null);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
-
-
 
   useEffect(() => {
     if (!tenant) return;
@@ -79,8 +114,8 @@ const [products, setProducts] = useState<Product[]>([]);
     socketRef.current = socket;
 
     socket.onopen = () => {
-      socket.send(JSON.stringify({ 
-        type: 'IDENTIFY', 
+      socket.send(JSON.stringify({
+        type: 'IDENTIFY',
         tenantId: tenant.tenantId,
         terminalId,
         isMonitor: false
@@ -91,7 +126,7 @@ const [products, setProducts] = useState<Product[]>([]);
       try {
         const data = JSON.parse(event.data);
         console.log('Sync Event:', data.type);
-        
+
         const safeFetch = (url: string, callback: (data: any) => void) => {
           fetch(url)
             .then(res => {
@@ -136,7 +171,7 @@ const [products, setProducts] = useState<Product[]>([]);
 
   useEffect(() => {
     if (!tenant) return;
-    
+
     // Check for scheduled updates
     const checkScheduledUpdate = () => {
       if (tenant.scheduled_update_at) {
@@ -150,7 +185,7 @@ const [products, setProducts] = useState<Product[]>([]);
 
     const interval = setInterval(checkScheduledUpdate, 60000); // Check every minute
     checkScheduledUpdate(); // Check immediately
-    
+
     return () => clearInterval(interval);
   }, [tenant]);
 
@@ -249,12 +284,14 @@ const [products, setProducts] = useState<Product[]>([]);
         if (!contentType || !contentType.includes("application/json")) return null;
         return res.json();
       })
-      .then(settings => {
-        if (settings && settings.language) setLanguage(settings.language as Language);
-        if (settings) setShowReceiptDialog(settings.show_receipt_dialog !== '0');
+      .then(settingsMap => {
+        if (!settingsMap) return;
+        setSettings(settingsMap);
+        if (settingsMap.language) setLang(settingsMap.language as any);
+        setShowReceiptDialog(settingsMap.show_receipt_dialog !== '0');
       })
       .catch(err => console.error('Settings fetch error:', err));
-  }, []);
+  }, [setLang]);
 
   // Load this tenant's configured currencies and, on first load, default the display + payment
   // currency to the one marked default in Settings (e.g. LBP). Falls back to USD, then the first
@@ -311,7 +348,7 @@ const [products, setProducts] = useState<Product[]>([]);
 
   const handleRefund = async () => {
     if (!selectedHistoryTransaction) return;
-    
+
     const itemsToRefund = selectedHistoryTransaction.items
       .filter((item: any) => refundQuantities[item.id] > 0)
       .map((item: any) => ({
@@ -323,7 +360,7 @@ const [products, setProducts] = useState<Product[]>([]);
       }));
 
     if (itemsToRefund.length === 0) {
-      alert('Please select at least one item to refund.');
+      toast.error(t('pos_select_at_least_one_item', 'Please select at least one item to refund.'));
       return;
     }
 
@@ -369,14 +406,14 @@ const [products, setProducts] = useState<Product[]>([]);
         setShowRefundModal(false);
         setSelectedHistoryTransaction(null);
         fetchDailyHistory();
-        alert('Refund processed successfully');
+        toast.success(t('pos_refund_success', 'Refund processed successfully.'));
       } else {
         const err = await res.json().catch(() => ({}));
-        alert(err.error || 'Failed to process refund.');
+        toast.error(err.error || t('pos_refund_failed', 'Failed to process refund.'));
       }
     } catch (err) {
       console.error(err);
-      alert('Failed to process refund');
+      toast.error(t('pos_refund_failed', 'Failed to process refund.'));
     } finally {
       setIsProcessing(false);
     }
@@ -390,7 +427,7 @@ const [products, setProducts] = useState<Product[]>([]);
         fetch('/api/transactions/recent'),
         fetch('/api/users')
       ]);
-      
+
       if (pRes.ok) setProducts(await pRes.json());
       if (sRes.ok) setStakeholders(await sRes.json());
       if (tRes.ok) setRecentTransactions(await tRes.json());
@@ -412,11 +449,22 @@ const [products, setProducts] = useState<Product[]>([]);
     }
   }, [tenant, fetchData, fetchSettings, fetchCurrencies]);
 
+  // Default the price level from the selected customer's own price_level, else the tenant's
+  // configured default_price_level, whenever the customer (or those settings) change. The cashier
+  // can still override it per sale via setPriceLevel (header selector) — but switching customer
+  // resets the "manual" flag so the NEXT customer change re-defaults again.
+  useEffect(() => {
+    const s = stakeholders.find((x: any) => x.id === selectedStakeholder);
+    priceLevelManualRef.current = false;
+    setPriceLevelState(normalizeLevel(s?.price_level || settings.default_price_level));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStakeholder, stakeholders.length, settings.default_price_level]);
+
   const addToCart = (product: Product) => {
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
-        return prev.map(item => 
+        return prev.map(item =>
           item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
@@ -427,7 +475,7 @@ const [products, setProducts] = useState<Product[]>([]);
   const handleBarcodeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!barcodeInput) return;
-    
+
     try {
       const res = await fetch(`/api/products/${barcodeInput}`);
       if (res.ok) {
@@ -436,7 +484,7 @@ const [products, setProducts] = useState<Product[]>([]);
         setBarcodeInput('');
         setSuggestions([]);
       } else {
-        alert('Product not found');
+        toast.error(t('product_not_found', 'Product Not Found'));
       }
     } catch (err) {
       console.error(err);
@@ -460,6 +508,11 @@ const [products, setProducts] = useState<Product[]>([]);
     }).filter(item => item.quantity > 0));
   };
 
+  const setItemQuantity = (id: number, qty: number) => {
+    setCart(prev => prev.map(item => item.id === id ? { ...item, quantity: Math.max(0, qty) } : item)
+      .filter(item => item.quantity > 0));
+  };
+
   const applyItemDiscount = (id: number, type: 'percentage' | 'fixed', value: number) => {
     setCart(prev => prev.map(item => {
       if (item.id === id) {
@@ -469,42 +522,55 @@ const [products, setProducts] = useState<Product[]>([]);
     }));
   };
 
-  // --- Currency-aware pricing --------------------------------------------------------------
-  // A product can carry a directly-entered price per currency (price_lbp / package_price_lbp).
-  // When the active (selected) currency has its own entered price we use THAT as authoritative
-  // rather than converting the USD price by the exchange rate — so a product priced at 300,000 LL
-  // shows and charges 300,000, not a rounded conversion. USD remains the stored accounting base
-  // and is DERIVED from the active-currency total, so the receipt, payment amount and change all
-  // agree with what the cashier sees.
+  // Manual per-line price override (only meaningful when Settings → allow_price_override is on).
+  // Stored in USD on the cart item ('unit_price'), same field the server accepts on checkout.
+  const setItemPriceOverride = (id: number, unitPriceUsd: number | null) => {
+    setCart(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const next: any = { ...item };
+      if (unitPriceUsd === null) {
+        delete next.unit_price;
+      } else {
+        next.unit_price = unitPriceUsd;
+      }
+      return next;
+    }));
+  };
+
+  // --- Currency + tier-aware pricing ------------------------------------------------------
+  // Resolution order per line: 1) cashier's manual override (item.unit_price, USD, only ever set
+  // when allow_price_override is on) 2) the tier/package price resolved by src/lib/pricing.ts for
+  // the active price_level — this MUST match what the server computes (server/pricing.ts mirrors
+  // this file 1:1) so what the cashier sees is exactly what gets charged and recorded.
   const activeCode = selectedCurrency?.code || 'USD';
   const activeRate = selectedCurrency?.rate || 1;
-  // The product model stores exactly two prices: the USD base (`price`) and one local-currency
-  // price (`price_lbp`). So any non-USD currency IS the local currency and maps to price_lbp —
-  // regardless of the code the merchant chose for it (LBP, LB, LL, …). Match on "not USD" rather
-  // than a hard-coded 'LBP', which is what made a currency coded "LB" fall back to conversion.
   const usesLocalPrice = (code: string) => code !== 'USD';
   const localCurrency = currencies.find((c: any) => c.code !== 'USD');
   const localCode = localCurrency?.code || 'LBP';
   const lbpRate = localCurrency?.rate || activeRate || 89500;
 
-  const hasPrice = (v: any) => v !== null && v !== undefined && v !== '' && !isNaN(Number(v)) && Number(v) > 0;
-  const unitPriceIn = (item: any, code: string, rate: number) =>
-    (usesLocalPrice(code) && hasPrice(item.price_lbp)) ? Number(item.price_lbp) : (Number(item.price) || 0) * rate;
-  const packagePriceIn = (item: any, code: string, rate: number) =>
-    (usesLocalPrice(code) && hasPrice(item.package_price_lbp)) ? Number(item.package_price_lbp) : (Number(item.package_price) || 0) * rate;
+  const unitPriceUSD = useCallback((item: any, qty: number): number => {
+    if (item.unit_price != null && Number.isFinite(item.unit_price)) return item.unit_price;
+    return saleLineUnitPrice(item, priceLevel, qty);
+  }, [priceLevel]);
 
-  // Item line total in a given currency, honouring bulk pricing and the per-item discount.
-  const itemTotalIn = (item: any, code: string, rate: number) => {
-    let base = unitPriceIn(item, code, rate) * item.quantity;
-    if (item.package_price && item.units_per_package && item.units_per_package > 1) {
-      const numPackages = Math.floor(item.quantity / item.units_per_package);
-      const remainder = item.quantity % item.units_per_package;
-      base = (numPackages * packagePriceIn(item, code, rate)) + (remainder * unitPriceIn(item, code, rate));
+  const unitPriceIn = useCallback((item: any, code: string, qty: number, rate: number): number => {
+    if (item.unit_price != null && Number.isFinite(item.unit_price)) {
+      return usesLocalPrice(code) ? item.unit_price * rate : item.unit_price;
     }
+    return usesLocalPrice(code)
+      ? saleLineUnitPriceLbp(item, priceLevel, qty, rate)
+      : saleLineUnitPrice(item, priceLevel, qty);
+  }, [priceLevel]);
+
+  // Item line total in a given currency, honouring tier/package pricing and the per-item discount.
+  const itemTotalIn = useCallback((item: any, code: string, rate: number) => {
+    const unit = unitPriceIn(item, code, item.quantity, rate);
+    const base = unit * item.quantity;
     if (!item.discount || item.discount.value === 0) return base;
     if (item.discount.type === 'percentage') return base * (1 - item.discount.value / 100);
     return Math.max(0, base - item.discount.value * rate); // fixed discounts are entered in USD
-  };
+  }, [unitPriceIn]);
 
   const applyGlobalDiscount = (subtotal: number, rate: number) => {
     if (globalDiscount.value === 0) return subtotal;
@@ -515,7 +581,7 @@ const [products, setProducts] = useState<Product[]>([]);
   // USD line total (accounting base), derived from the active-currency price so what we store
   // matches what we charge.
   const calculateItemTotal = (item: CartItem) => itemTotalIn(item as any, activeCode, activeRate) / activeRate;
-  // Local-currency line total straight from the entered price_lbp (for the green "LL" line).
+  // Local-currency line total straight from the resolved LBP price (for the green "LL" line).
   const calculateItemTotalLBP = (item: CartItem) => itemTotalIn(item as any, localCode, lbpRate);
 
   const subtotalActive = cart.reduce((sum, item) => sum + itemTotalIn(item as any, activeCode, activeRate), 0);
@@ -524,11 +590,19 @@ const [products, setProducts] = useState<Product[]>([]);
   const subtotalUSD = subtotalActive / activeRate;
   const totalUSD = totalActive / activeRate;
 
-  // The secondary "LL" figures always sum the entered LBP prices (matching the per-item LBP lines),
+  // The secondary "LL" figures always sum the resolved LBP prices (matching the per-item LBP lines),
   // so they stay consistent whether the active currency is LBP or USD.
   const subtotalLBPraw = cart.reduce((sum, item) => sum + itemTotalIn(item as any, localCode, lbpRate), 0);
   const subtotalLBP = Math.round(subtotalLBPraw);
   const totalLBP = Math.round(applyGlobalDiscount(subtotalLBPraw, lbpRate));
+
+  // --- Credit limit -------------------------------------------------------------------------
+  const selectedStakeholderObj = stakeholders.find((s: any) => s.id === selectedStakeholder) as any;
+  const creditLimit = selectedStakeholderObj?.credit_limit && selectedStakeholderObj.credit_limit > 0
+    ? selectedStakeholderObj.credit_limit
+    : 0;
+  // Balance sign convention: negative = customer owes us. Headroom before hitting the limit.
+  const availableCredit = creditLimit > 0 ? creditLimit + (selectedStakeholderObj?.balance || 0) : null;
 
   useEffect(() => {
     if (showCheckout && !lastTransaction && cart.length > 0) {
@@ -578,7 +652,7 @@ const [products, setProducts] = useState<Product[]>([]);
           closeCustomerModal();
         } else {
           const err = await res.json().catch(() => ({ error: res.statusText }));
-          alert(`Error saving customer: ${err.error || 'Unknown error'}`);
+          toast.error(err.error || 'Unknown error');
         }
         return;
       }
@@ -596,7 +670,7 @@ const [products, setProducts] = useState<Product[]>([]);
         setShowCustomerDropdown(false);
       } else {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        alert(`Error saving customer: ${err.error || 'Unknown error'}`);
+        toast.error(err.error || 'Unknown error');
       }
     } catch (err) {
       console.error(err);
@@ -641,7 +715,24 @@ const [products, setProducts] = useState<Product[]>([]);
   const totalPages = Math.ceil(filteredProducts.length / itemsPerPage);
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  const handleCheckout = useCallback(async (payments: any[]) => {
+  const handleCheckout = useCallback(async (paymentsArg: any[]) => {
+    // Credit-limit heads-up before submitting — the server is authoritative and will reject with
+    // {code:'CREDIT_LIMIT'} if this check is stale or the setting changed server-side, but warning
+    // up front saves the cashier a round trip.
+    if (selectedStakeholderObj && creditLimit > 0) {
+      const paidUSD = paymentsArg.filter(p => p.method !== 'credit').reduce((sum, p) => sum + p.amount / p.exchange_rate, 0);
+      const prospective = (selectedStakeholderObj.balance || 0) - (totalUSD - paidUSD);
+      if (prospective < -creditLimit) {
+        const proceed = await confirm({
+          title: t('pos_credit_limit_reached', 'Credit Limit Reached'),
+          description: t('pos_credit_limit_warning', "This sale would exceed the customer's credit limit."),
+          confirmLabel: t('pos_complete_transaction', 'Complete Transaction'),
+          variant: 'danger',
+        });
+        if (!proceed) return;
+      }
+    }
+
     setIsProcessing(true);
     const transaction: any = {
       stakeholder_id: selectedStakeholder,
@@ -652,7 +743,8 @@ const [products, setProducts] = useState<Product[]>([]);
       exchange_rate: 1,
       discount: globalDiscount.value > 0 ? globalDiscount : undefined,
       terminalId,
-      payments: payments
+      price_level: priceLevel,
+      payments: paymentsArg
     };
 
     try {
@@ -676,13 +768,21 @@ const [products, setProducts] = useState<Product[]>([]);
           setLastTransaction(null);
           setShowCheckout(false);
         }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        if (err.code === 'CREDIT_LIMIT') {
+          toast.error(err.error || t('pos_credit_limit_warning', "This sale would exceed the customer's credit limit."));
+        } else {
+          toast.error(err.error || 'Failed to process transaction.');
+        }
       }
     } catch (err) {
       console.error(err);
+      toast.error(t('pos_network_error', 'Network error while processing payment.'));
     } finally {
       setIsProcessing(false);
     }
-  }, [selectedStakeholder, cart, totalUSD, globalDiscount, fetchData, setShowCheckout, currentUser, showReceiptDialog]);
+  }, [selectedStakeholder, selectedStakeholderObj, creditLimit, cart, totalUSD, globalDiscount, fetchData, setShowCheckout, currentUser, showReceiptDialog, terminalId, priceLevel, confirm, t, toast]);
 
   const handleQuickCash = useCallback(() => {
     if (cart.length > 0 && !isProcessing) {
@@ -739,7 +839,7 @@ const [products, setProducts] = useState<Product[]>([]);
           if (printRes.ok) return;
           const errBody = await printRes.json().catch(() => null);
           console.error('Thermal receipt print failed, falling back to browser print:', errBody?.error);
-          alert(`Receipt printer "${receiptPrinter.name}" failed to print (${errBody?.error || 'unknown error'}). Falling back to a basic print — check the printer is online and its name/address in Settings → Printers still matches.`);
+          toast.error(`Receipt printer "${receiptPrinter.name}" failed to print (${errBody?.error || 'unknown error'}). Falling back to a basic print.`);
         }
       } catch (err) {
         console.error('Thermal receipt print error, falling back to browser print:', err);
@@ -749,27 +849,27 @@ const [products, setProducts] = useState<Product[]>([]);
     // This fallback only fires when no receipt printer is configured (or the direct print
     // failed above), but it still needs to show the tenant's own business info — not a
     // hardcoded vendor name — so it fetches the same settings the ESC/POS path reads.
-    let settings: any = {};
+    let printSettings: any = {};
     try {
       const settingsRes = await fetch('/api/settings');
-      if (settingsRes.ok) settings = await settingsRes.json();
+      if (settingsRes.ok) printSettings = await settingsRes.json();
     } catch { /* fall through and print with the defaults below */ }
 
     const width = 32;
     const center = (text: string) => {
-      const t = text.slice(0, width);
-      const pad = Math.max(0, width - t.length);
+      const tt = text.slice(0, width);
+      const pad = Math.max(0, width - tt.length);
       const left = Math.floor(pad / 2);
-      return ' '.repeat(left) + t + ' '.repeat(pad - left);
+      return ' '.repeat(left) + tt + ' '.repeat(pad - left);
     };
 
     const customer = stakeholders.find(s => s.id === transaction.stakeholder_id);
     const stakeholder = customer?.name || 'Walk-in Customer';
     const lines = [
       "================================",
-      center(settings.store_name || 'Unnamed Business'),
-      ...(settings.business_address ? [center(settings.business_address)] : []),
-      ...(settings.business_phone ? [center(settings.business_phone)] : []),
+      center(printSettings.store_name || 'Unnamed Business'),
+      ...(printSettings.business_address ? [center(printSettings.business_address)] : []),
+      ...(printSettings.business_phone ? [center(printSettings.business_phone)] : []),
       "================================",
       `Date: ${new Date(transaction.created_at).toLocaleString()}`,
       `Receipt: ${
@@ -796,14 +896,14 @@ const [products, setProducts] = useState<Product[]>([]);
 
     lines.push("--------------------------------");
     lines.push(`TOTAL:            $${transaction.total_amount.toFixed(2)}`);
-    
+
     if (transaction.discount?.value > 0) {
       const disc = transaction.discount.type === 'percentage' ? `${transaction.discount.value}%` : `$${transaction.discount.value}`;
       lines.push(`Global Discount:   ${disc}`);
     }
 
     lines.push("================================",
-               center(settings.receipt_footer || 'Thank you for shopping with us!'),
+               center(printSettings.receipt_footer || 'Thank you for shopping with us!'),
                "================================");
 
     const receiptText = lines.join('\n');
@@ -824,11 +924,11 @@ const [products, setProducts] = useState<Product[]>([]);
         );
         const result = await Promise.race([window.electronAPI.printSilent(receiptHtml), timeout]);
         if (!result?.success) {
-          alert(`Could not print the receipt automatically (${result?.error || 'no printer available'}). Configure a receipt printer under Settings → Printers, or set a default Windows printer.`);
+          toast.error(`Could not print the receipt automatically (${result?.error || 'no printer available'}). Configure a receipt printer under Settings → Printers.`);
         }
       } catch (err) {
         console.error('Silent print error:', err);
-        alert('Could not print the receipt automatically. Configure a receipt printer under Settings → Printers.');
+        toast.error('Could not print the receipt automatically. Configure a receipt printer under Settings → Printers.');
       }
       return;
     }
@@ -845,7 +945,7 @@ const [products, setProducts] = useState<Product[]>([]);
     }
   };
 
-  
+
   const handleReceiveDebt = async (amount: number, method: 'cash' | 'card' | 'credit', currency: any) => {
     if (!tenant || !selectedStakeholder) return;
     setIsProcessing(true);
@@ -864,13 +964,13 @@ const [products, setProducts] = useState<Product[]>([]);
       if (res.ok) {
         setShowDebtModal(false);
         fetchData(); // Refresh stakeholders balance
-        alert('Payment received successfully');
+        toast.success(t('pos_debt_received', 'Payment received successfully.'));
       } else {
-        alert('Failed to process payment');
+        toast.error(t('pos_debt_failed', 'Failed to process payment.'));
       }
     } catch (err) {
       console.error(err);
-      alert('Network error while processing payment');
+      toast.error(t('pos_network_error', 'Network error while processing payment.'));
     } finally {
       setIsProcessing(false);
     }
@@ -885,6 +985,7 @@ const [products, setProducts] = useState<Product[]>([]);
     setStakeholders,
     selectedStakeholder,
     setSelectedStakeholder,
+    selectedStakeholderObj,
     barcodeInput,
     setBarcodeInput,
     isProcessing,
@@ -922,8 +1023,10 @@ const [products, setProducts] = useState<Product[]>([]);
     setSuggestions,
     currentPage,
     setCurrentPage,
-    language,
-    setLanguage,
+    lang,
+    dir,
+    isDarkMode,
+    setIsDarkMode,
     customerSearchTerm,
     setCustomerSearchTerm,
     showCustomerDropdown,
@@ -956,6 +1059,16 @@ const [products, setProducts] = useState<Product[]>([]);
     setScheduleForm,
     fetchDailyHistory,
     fetchData,
+    fetchSettings,
+    settings,
+    priceLevel,
+    setPriceLevel,
+    allowPriceOverride,
+    enforceMinPrice,
+    creditLimit,
+    availableCredit,
+    setItemPriceOverride,
+    setItemQuantity,
     handleCheckout,
     handleQuickCash,
 
@@ -977,6 +1090,7 @@ const [products, setProducts] = useState<Product[]>([]);
     applyItemDiscount,
     calculateItemTotal,
     calculateItemTotalLBP,
+    unitPriceUSD,
     totalUSD,
     filteredProducts,
     printReceipt,

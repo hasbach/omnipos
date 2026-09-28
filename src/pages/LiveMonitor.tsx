@@ -1,99 +1,57 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Globe, Monitor, Users, Wallet, Zap } from 'lucide-react';
+import { Badge, EmptyState, PageHeader, StatCard } from '../components/ui';
+import { useI18n } from '../intl/index';
+import { formatMoney } from '../lib/format';
+import { api } from '../lib/api';
+import type { Tenant } from '../types';
 
-import { 
-  LayoutDashboard, 
-  Package, 
-  Users, 
-  FileText, 
-  BarChart3, 
-  Settings as SettingsIcon,
-  Plus,
-  Edit2,
-  Trash2,
-  Save,
-  X,
-  Search,
-  ArrowLeft,
-  ShoppingCart,
-  Sun,
-  Moon,
-  Globe,
-  Coins,
-  ClipboardList,
-  Activity,
-  Zap,
-  Wallet,
-  CalendarCheck,
-  RotateCcw,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Printer,
-  Download,
-  Upload,
-  Shield,
-  Monitor,
-  RefreshCw,
-  Clock,
-  ArrowRight
-} from 'lucide-react';
+interface Activity {
+  id: number;
+  type: 'sale' | 'refund' | 'purchase' | string;
+  created_at: string;
+  user_name?: string;
+  stakeholder_name?: string;
+  total_amount: number;
+  currency?: string;
+}
 
-import { motion, AnimatePresence } from 'motion/react';
-
-import { Product, Stakeholder, Currency, Tenant } from '../types';
-
-import { Link, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-
-import WindowFrame from '../components/WindowFrame';
-
-import { useTheme } from '../hooks/useTheme';
-
-import { translations, Language } from '../i18n';
-
-import * as XLSX from 'xlsx';
-
-import { jsPDF } from 'jspdf';
-
-import 'jspdf-autotable';
+interface TerminalCart {
+  user: string;
+  cart: { name: string; quantity: number; price: number }[];
+  total: number;
+  lastUpdate: Date;
+}
 
 export default function LiveMonitor() {
-  const [activities, setActivities] = useState<any[]>([]);
-  const [activeTerminals, setActiveTerminals] = useState<Record<string, any>>({});
+  const { t } = useI18n();
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [activeTerminals, setActiveTerminals] = useState<Record<string, TerminalCart>>({});
   const [tenant, setTenant] = useState<Tenant | null>(null);
-  const [stats, setStats] = useState({
-    todayTotal: 0,
-    todayCount: 0,
-    activeUsers: new Set(),
-  });
+  const [stats, setStats] = useState({ todayTotal: 0, todayCount: 0, activeUsers: new Set<string>() });
 
   useEffect(() => {
-    fetch('/api/auth/me').then(res => res.json()).then(setTenant);
-    // Initial load of today's transactions
-    fetch('/api/reports/daily-sales')
-      .then(res => res.json())
-      .then(data => {
-        setActivities(data);
-        const total = data.reduce((acc: number, t: any) => acc + t.total_amount, 0);
-        const users = new Set(data.map((t: any) => t.user_name));
-        setStats({
-          todayTotal: total,
-          todayCount: data.length,
-          activeUsers: users
-        });
-      });
+    api.get<Tenant>('/api/auth/me').then(setTenant).catch(() => {});
+
+    api.get<Activity[]>('/api/reports/daily-sales').then((data) => {
+      setActivities(data || []);
+      const total = (data || []).reduce((acc, a) => acc + a.total_amount, 0);
+      const users = new Set((data || []).map((a) => a.user_name || ''));
+      setStats({ todayTotal: total, todayCount: (data || []).length, activeUsers: users });
+    }).catch(() => {});
 
     const handleSync = (e: any) => {
       const data = e.detail;
       if (data.type === 'TRANSACTIONS_UPDATED' && data.transaction) {
-        const newTx = data.transaction;
-        setActivities(prev => [newTx, ...prev].slice(0, 50));
-        setStats(prev => ({
+        const newTx = data.transaction as Activity;
+        setActivities((prev) => [newTx, ...prev].slice(0, 50));
+        setStats((prev) => ({
           todayTotal: prev.todayTotal + newTx.total_amount,
           todayCount: prev.todayCount + 1,
-          activeUsers: new Set([...Array.from(prev.activeUsers), newTx.user_name])
+          activeUsers: new Set([...Array.from(prev.activeUsers), newTx.user_name || '']),
         }));
-        // Clear active cart for this terminal
-        setActiveTerminals(prev => {
+        setActiveTerminals((prev) => {
           const next = { ...prev };
           delete next[data.terminalId];
           return next;
@@ -101,19 +59,19 @@ export default function LiveMonitor() {
       }
 
       if (data.type === 'REMOTE_CART_UPDATE') {
-        setActiveTerminals(prev => ({
+        setActiveTerminals((prev) => ({
           ...prev,
           [data.terminalId]: {
             user: data.user,
             cart: data.cart,
             total: data.total,
-            lastUpdate: new Date()
-          }
+            lastUpdate: new Date(),
+          },
         }));
       }
 
       if (data.type === 'TERMINAL_OFFLINE') {
-        setActiveTerminals(prev => {
+        setActiveTerminals((prev) => {
           const next = { ...prev };
           delete next[data.terminalId];
           return next;
@@ -125,92 +83,78 @@ export default function LiveMonitor() {
     return () => window.removeEventListener('pos-sync', handleSync);
   }, []);
 
-  const isOnlineExpired = tenant && tenant.email !== 'hasbach' && (tenant.online_license_type !== 'lifetime' && (!tenant.online_license_expiry || new Date(tenant.online_license_expiry) < new Date()));
+  const isOnlineExpired =
+    tenant &&
+    tenant.email !== 'hasbach' &&
+    tenant.online_license_type !== 'lifetime' &&
+    (!tenant.online_license_expiry || new Date(tenant.online_license_expiry) < new Date());
 
   if (isOnlineExpired) {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-12 text-center space-y-6">
-        <div className="w-20 h-20 bg-orange-500/10 text-orange-500 rounded-full flex items-center justify-center">
-          <Globe size={40} />
-        </div>
-        <div className="max-w-md space-y-2">
-          <h2 className="text-2xl font-black uppercase tracking-tight">Online Monitor Expired</h2>
-          <p className="opacity-50 text-sm">Your online monitoring subscription has expired. Please renew to access real-time terminal tracking.</p>
-        </div>
+      <div className="flex h-full flex-col items-center justify-center p-12">
+        <EmptyState
+          icon={Globe}
+          title={t('fin_lm_expired_title', 'Online Monitor Expired')}
+          description={t('fin_lm_expired_desc', 'Your online monitoring subscription has expired. Please renew to access real-time terminal tracking.')}
+        />
       </div>
     );
   }
 
   return (
-    <div className="space-y-8">
-      <header className="flex justify-between items-end">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse" />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-500">Live Remote Feed</span>
-          </div>
-          <h1 className="text-5xl font-black tracking-tighter uppercase">Store Monitor</h1>
-          <p className="opacity-50 font-medium">Real-time activity from all POS terminals.</p>
-        </div>
-      </header>
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-success">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
+        {t('fin_lm_live_feed', 'Live Remote Feed')}
+      </div>
+      <PageHeader
+        title={t('fin_lm_title', 'Store Monitor')}
+        subtitle={t('fin_lm_subtitle', 'Real-time activity from all POS terminals.')}
+      />
 
-      {/* Real-time Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
-          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">Sales Today</p>
-          <p className="text-4xl font-black font-mono">${stats.todayTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-        </div>
-        <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
-          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">Transactions</p>
-          <p className="text-4xl font-black font-mono">{stats.todayCount}</p>
-        </div>
-        <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
-          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">Active Staff</p>
-          <p className="text-4xl font-black font-mono">{stats.activeUsers.size}</p>
-        </div>
-        <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
-          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">Active Terminals</p>
-          <p className="text-4xl font-black font-mono">{Object.keys(activeTerminals).length}</p>
-        </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard label={t('fin_lm_sales_today', 'Sales Today')} icon={Wallet} value={formatMoney(stats.todayTotal, { code: 'USD', symbol: '$' })} />
+        <StatCard label={t('fin_lm_transactions', 'Transactions')} icon={Zap} value={stats.todayCount} />
+        <StatCard label={t('fin_lm_active_staff', 'Active Staff')} icon={Users} value={stats.activeUsers.size} />
+        <StatCard label={t('fin_lm_active_terminals', 'Active Terminals')} icon={Monitor} value={Object.keys(activeTerminals).length} />
       </div>
 
-      {/* Active Terminals / Live Carts */}
       {Object.keys(activeTerminals).length > 0 && (
-        <div className="space-y-4">
-          <h2 className="font-black uppercase tracking-widest text-xs opacity-50">Live Terminals (Current Carts)</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-text">{t('fin_lm_live_terminals', 'Live Terminals (Current Carts)')}</h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             <AnimatePresence>
-              {Object.entries(activeTerminals).map(([id, data]: [string, any]) => (
-                <motion.div 
+              {Object.entries(activeTerminals).map(([id, data]) => (
+                <motion.div
                   key={id}
-                  initial={{ opacity: 0, scale: 0.9 }}
+                  initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  className="bg-app-surface border-2 border-app-ink rounded-3xl overflow-hidden shadow-xl"
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="overflow-hidden rounded-[var(--radius-card)] border-2 border-primary bg-surface shadow-[var(--shadow-modal)]"
                 >
-                  <div className="p-4 bg-app-ink text-app-bg flex justify-between items-center">
+                  <div className="flex items-center justify-between bg-primary px-4 py-2.5 text-on-primary">
                     <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                      <span className="font-black uppercase text-[10px] tracking-widest">{id}</span>
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
+                      <span className="text-xs font-bold uppercase tracking-[0.04em]">{id}</span>
                     </div>
-                    <span className="text-[10px] font-mono opacity-50">{data.user}</span>
+                    <span className="num text-xs opacity-80">{data.user}</span>
                   </div>
-                  <div className="p-6 space-y-4">
-                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                  <div className="flex flex-col gap-3 p-4">
+                    <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
                       {data.cart.length > 0 ? (
-                        data.cart.map((item: any, i: number) => (
-                          <div key={i} className="flex justify-between text-xs font-bold">
-                            <span className="opacity-50">{item.quantity}x {item.name}</span>
-                            <span className="font-mono">${(item.price * item.quantity).toFixed(2)}</span>
+                        data.cart.map((item, i) => (
+                          <div key={i} className="flex justify-between text-xs">
+                            <span className="text-text-2">{item.quantity}x {item.name}</span>
+                            <span className="num font-semibold text-text">{formatMoney(item.price * item.quantity, { code: 'USD', symbol: '$' })}</span>
                           </div>
                         ))
                       ) : (
-                        <p className="text-center py-4 text-[10px] font-black uppercase opacity-20 italic tracking-widest">Empty Cart</p>
+                        <p className="py-4 text-center text-[11px] font-semibold uppercase italic text-text-3">{t('fin_lm_empty_cart', 'Empty cart')}</p>
                       )}
                     </div>
-                    <div className="pt-4 border-t border-app-border/10 flex justify-between items-end">
-                      <span className="text-[10px] font-black uppercase opacity-50">Current Total</span>
-                      <span className="text-2xl font-black font-mono">${data.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <div className="flex items-end justify-between border-t border-border pt-3">
+                      <span className="text-[10px] font-bold uppercase text-text-3">{t('fin_lm_current_total', 'Current Total')}</span>
+                      <span className="num text-xl font-bold text-text">{formatMoney(data.total, { code: 'USD', symbol: '$' })}</span>
                     </div>
                   </div>
                 </motion.div>
@@ -220,53 +164,57 @@ export default function LiveMonitor() {
         </div>
       )}
 
-      {/* Activity Feed */}
-      <div className="bg-app-surface border border-app-border rounded-[40px] overflow-hidden shadow-xl">
-        <div className="p-8 border-b border-app-border flex items-center justify-between bg-app-bg/10">
-          <h2 className="font-black uppercase tracking-widest text-xs">Activity Stream</h2>
-          <span className="text-[10px] font-bold opacity-30 uppercase">Showing last 50 events</span>
+      <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface shadow-[var(--shadow-card)]">
+        <div className="flex items-center justify-between border-b border-border px-5 py-3">
+          <h2 className="text-sm font-semibold text-text">{t('fin_lm_activity_stream', 'Activity Stream')}</h2>
+          <span className="text-xs text-text-3">{t('fin_lm_last_50', 'Showing last 50 events')}</span>
         </div>
-        <div className="divide-y divide-app-border/5">
+        <div className="divide-y divide-border">
           <AnimatePresence initial={false}>
             {activities.length > 0 ? (
-              activities.map((activity, idx) => (
-                <motion.div 
+              activities.map((activity) => (
+                <motion.div
                   key={activity.id}
-                  initial={{ opacity: 0, x: -20 }}
+                  initial={{ opacity: 0, x: -12 }}
                   animate={{ opacity: 1, x: 0 }}
-                  className="p-6 flex items-center justify-between hover:bg-app-bg/20 transition-colors group"
+                  className="flex items-center justify-between px-5 py-3.5 transition-colors hover:bg-surface-2"
                 >
-                  <div className="flex items-center gap-6">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl ${
-                      activity.type === 'sale' ? 'bg-emerald-500/10 text-emerald-600' : 
-                      activity.type === 'refund' ? 'bg-red-500/10 text-red-600' : 'bg-blue-500/10 text-blue-600'
-                    }`}>
+                  <div className="flex items-center gap-4">
+                    <div
+                      className={[
+                        'flex h-9 w-9 items-center justify-center rounded-xl text-sm font-bold',
+                        activity.type === 'sale' ? 'bg-success-soft text-success' : activity.type === 'refund' ? 'bg-danger-soft text-danger' : 'bg-info-soft text-info',
+                      ].join(' ')}
+                    >
                       {activity.type === 'sale' ? '$' : activity.type === 'refund' ? 'R' : 'P'}
                     </div>
                     <div>
-                      <div className="flex items-center gap-3">
-                        <p className="font-black uppercase tracking-tight">{activity.type} #{activity.id}</p>
-                        <span className="text-[10px] font-bold opacity-30">{new Date(activity.created_at).toLocaleTimeString()}</span>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold capitalize text-text">{activity.type} #{activity.id}</p>
+                        <span className="text-[11px] text-text-3">{new Date(activity.created_at).toLocaleTimeString()}</span>
                       </div>
-                      <p className="text-xs font-bold opacity-50">
-                        Processed by <span className="text-app-ink">{activity.user_name}</span> 
-                        {activity.stakeholder_name && <> for <span className="text-app-ink">{activity.stakeholder_name}</span></>}
+                      <p className="text-xs text-text-3">
+                        {t('fin_lm_processed_by', 'Processed by')} <span className="font-medium text-text-2">{activity.user_name}</span>
+                        {activity.stakeholder_name && (
+                          <>
+                            {' '}
+                            {t('fin_lm_for', 'for')} <span className="font-medium text-text-2">{activity.stakeholder_name}</span>
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className={`text-xl font-black font-mono ${activity.type === 'refund' ? 'text-red-500' : 'text-app-ink'}`}>
-                      {activity.type === 'refund' ? '-' : ''}${activity.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  <div className="text-end">
+                    <p className={['num text-base font-bold', activity.type === 'refund' ? 'text-danger' : 'text-text'].join(' ')}>
+                      {activity.type === 'refund' ? '-' : ''}
+                      {formatMoney(activity.total_amount, { code: 'USD', symbol: '$' })}
                     </p>
-                    <p className="text-[10px] font-black uppercase opacity-30 tracking-widest">{activity.currency}</p>
+                    <Badge variant="neutral">{activity.currency || 'USD'}</Badge>
                   </div>
                 </motion.div>
               ))
             ) : (
-              <div className="p-20 text-center opacity-20">
-                <Zap size={48} className="mx-auto mb-4" strokeWidth={1} />
-                <p className="font-black uppercase tracking-widest">Waiting for activity...</p>
-              </div>
+              <EmptyState icon={Zap} title={t('fin_lm_waiting', 'Waiting for activity…')} />
             )}
           </AnimatePresence>
         </div>

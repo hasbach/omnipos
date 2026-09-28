@@ -71,3 +71,30 @@ test("computeTotals: global discount clamped to subtotal, then tax, floored at 0
   // no adjustments -> sum of line totals
   assert.equal(computeTotals([10, 20, 30]), 60);
 });
+
+test("a POS checkout that omits `type` is still priced as a sale (tier price, cost snapshot)", async () => {
+  const { createTestApp, seedTenant } = await import("./helpers/testApp.js");
+  const app = await createTestApp();
+  try {
+    const tenantId = seedTenant(app.db, "POS No Type Co", "pos-no-type@example.com");
+    const productId = Number(app.db.prepare(
+      "INSERT INTO products (tenant_id, barcode, name, price, price_super_wholesale, cost, stock, category) VALUES (?, 'NT-1', 'Milk', 1.5, 1.23, 1.05, 50, 'Dairy')"
+    ).run(tenantId).lastInsertRowid);
+    const cust = (await app.api("POST", "/api/stakeholders", { tenantId, body: { name: "Big Buyer", type: "customer", price_level: "super_wholesale" } })).body.id;
+    // Exactly the POS payload shape: no `type`, client item.price = retail.
+    const res = await app.api("POST", "/api/transactions", { tenantId, body: {
+      stakeholder_id: cust, items: [{ id: productId, quantity: 2, price: 1.5 }], total_amount: 2.46, currency: "USD", exchange_rate: 1,
+      price_level: "super_wholesale", payments: [{ amount: 2.46, method: "cash", currency: "USD", exchange_rate: 1 }] } });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const tx = app.db.prepare("SELECT type, total_amount FROM transactions WHERE id = ?").get(res.body.id) as any;
+    assert.equal(tx.type, "sale");
+    assert.ok(Math.abs(tx.total_amount - 2.46) < 1e-9, `total ${tx.total_amount}`);
+    const line = app.db.prepare("SELECT unit_price, unit_cost FROM transaction_items WHERE transaction_id = ?").get(res.body.id) as any;
+    assert.equal(line.unit_price, 1.23);
+    assert.equal(line.unit_cost, 1.05);
+    const bal = app.db.prepare("SELECT balance FROM stakeholders WHERE id = ?").get(cust) as any;
+    assert.ok(Math.abs(bal.balance) < 1e-9, "fully paid — no phantom debt");
+  } finally {
+    await app.close();
+  }
+});

@@ -1,123 +1,173 @@
-import React, { useState, useEffect, useCallback } from 'react';
-
-import { 
-  LayoutDashboard, 
-  Package, 
-  Users, 
-  FileText, 
-  BarChart3, 
-  Settings as SettingsIcon,
-  Plus,
-  Edit2,
-  Trash2,
-  Save,
-  X,
-  Search,
-  ArrowLeft,
-  ShoppingCart,
-  Sun,
-  Moon,
-  Globe,
-  Coins,
-  ClipboardList,
-  Activity,
-  Zap,
-  Wallet,
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Calculator,
   CalendarCheck,
-  RotateCcw,
+  Check,
   CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Printer,
-  Download,
-  Upload,
-  Shield,
-  Monitor,
-  RefreshCw,
-  Clock,
-  ArrowRight,
+  ChevronLeft,
+  ChevronRight,
   LogOut,
-  Lock
+  Lock,
+  Printer,
+  Zap,
 } from 'lucide-react';
+import {
+  Button,
+  DataTable,
+  type DataTableColumn,
+  Field,
+  Modal,
+  PageHeader,
+  Select,
+  Tabs,
+  Textarea,
+  useConfirm,
+  useToast,
+} from '../components/ui';
+import { useI18n } from '../intl/index';
+import { formatMoney } from '../lib/format';
+import { api } from '../lib/api';
+import { DenominationCounter } from './finance/DenominationCounter';
 
-import { motion, AnimatePresence } from 'motion/react';
+interface Currency {
+  id?: number;
+  code: string;
+  symbol: string;
+  rate: number;
+}
 
-import { Product, Stakeholder, Currency, Tenant } from '../types';
+interface Summary {
+  openingBalance: number;
+  totalSales: number;
+  totalRefunds: number;
+  totalPurchases: number;
+  totalIn: number;
+  totalOut: number;
+  expectedBalance: number;
+}
 
-import { Link, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+interface AppUser {
+  id: number;
+  name: string;
+  role: string;
+}
 
-import WindowFrame from '../components/WindowFrame';
+interface CashierShift {
+  id: number;
+  user_name: string;
+  cash_sales: number;
+  expected_cash: number;
+  actual_cash: number;
+  difference: number;
+  date: string;
+  opening_balance?: number;
+  total_purchases?: number;
+  cash_purchases?: number;
+  total_cash_in?: number;
+  cash_in?: number;
+  total_cash_out?: number;
+  cash_out?: number;
+  closing_balance?: number;
+  notes?: string;
+}
 
-import { useTheme } from '../hooks/useTheme';
+interface DailyReport {
+  id: number;
+  date: string;
+  closing_balance: number;
+  actual_balance: number;
+  difference: number;
+  user_name: string;
+  opening_balance?: number;
+  total_sales?: number;
+  total_refunds?: number;
+  total_purchases?: number;
+  total_cash_in?: number;
+  total_cash_out?: number;
+  notes?: string;
+}
 
-import { translations, Language } from '../i18n';
+interface YearlyReport {
+  id: number;
+  year: number;
+  total_sales: number;
+  total_purchases: number;
+  total_profit: number;
+  user_name: string;
+  notes?: string;
+}
 
-import * as XLSX from 'xlsx';
-
-import { jsPDF } from 'jspdf';
-
-import 'jspdf-autotable';
-
+// Only USD (rate 1) is safe as a hardcoded fallback — the local-currency (e.g. LBP) rate must
+// come from the tenant's own configured rate, fetched below, or a cash-out / settlement done
+// before that fetch resolves would silently convert the counted drawer cash at a stale guessed
+// rate instead of the real one.
+const DEFAULT_CURRENCIES: Currency[] = [{ code: 'USD', symbol: '$', rate: 1 }];
 
 export default function Settlement() {
-  const [dailyReports, setDailyReports] = useState<any[]>([]);
-  const [yearlyReports, setYearlyReports] = useState<any[]>([]);
-  const [summary, setSummary] = useState<any>(null);
-  const [users, setUsers] = useState<any[]>([]);
+  const { t } = useI18n();
+  const toast = useToast();
+  const confirm = useConfirm();
+
+  const [dailyReports, setDailyReports] = useState<DailyReport[]>([]);
+  const [yearlyReports, setYearlyReports] = useState<YearlyReport[]>([]);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [users, setUsers] = useState<AppUser[]>([]);
   const parsedCashierId = parseInt(sessionStorage.getItem('currentCashierId') || '');
   const [selectedUserId, setSelectedUserId] = useState<number>(isNaN(parsedCashierId) ? 0 : parsedCashierId);
-  // Only USD (rate 1) is safe as a hardcoded fallback — the local-currency (e.g. LBP) rate must
-  // come from the tenant's own configured rate, fetched below, or a cash-out / settlement done
-  // before that fetch resolves would silently convert the counted drawer cash at a stale guessed
-  // rate instead of the real one.
-  const [currencies, setCurrencies] = useState<any[]>([{ code: 'USD', symbol: '$', rate: 1 }]);
+  const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
   const [actualBalances, setActualBalances] = useState<Record<string, string>>(
-    currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {})
+    DEFAULT_CURRENCIES.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {} as Record<string, string>),
   );
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'daily' | 'yearly'>('daily');
-  const [showAdminConfirm, setShowAdminConfirm] = useState(false);
-  const [cashierShifts, setCashierShifts] = useState<any[]>([]);
+  const [cashierShifts, setCashierShifts] = useState<CashierShift[]>([]);
   const [businessName, setBusinessName] = useState('');
+
+  // End-of-day stepper
+  const [step, setStep] = useState(1);
+  const [countMode, setCountMode] = useState<'denomination' | 'direct'>('denomination');
+  const [yearlyModalOpen, setYearlyModalOpen] = useState(false);
+  const [yearlyNotes, setYearlyNotes] = useState('');
+  const [submittingCashOut, setSubmittingCashOut] = useState(false);
+  const [submittingSettlement, setSubmittingSettlement] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
       const [dailyRes, yearlyRes, summaryRes, usersRes, shiftsRes, currenciesRes] = await Promise.all([
-        fetch('/api/reports/daily'),
-        fetch('/api/reports/yearly'),
-        fetch('/api/cash-flow/summary'),
-        fetch('/api/users'),
-        fetch('/api/tenant/cashier-shifts'),
-        fetch('/api/currencies')
+        api.get<DailyReport[]>('/api/reports/daily'),
+        api.get<YearlyReport[]>('/api/reports/yearly'),
+        api.get<Summary>('/api/cash-flow/summary'),
+        api.get<AppUser[]>('/api/users'),
+        api.get<CashierShift[]>('/api/tenant/cashier-shifts'),
+        api.get<Currency[]>('/api/currencies'),
       ]);
-      if (dailyRes.ok) setDailyReports(await dailyRes.json());
-      if (yearlyRes.ok) setYearlyReports(await yearlyRes.json());
-      if (summaryRes.ok) setSummary(await summaryRes.json());
-      if (usersRes.ok) {
-        const userData = await usersRes.json();
-        setUsers(userData);
-        if (userData.length > 0 && !selectedUserId) setSelectedUserId(userData[0].id);
+      setDailyReports(dailyRes || []);
+      setYearlyReports(yearlyRes || []);
+      setSummary(summaryRes || null);
+      if (usersRes) {
+        setUsers(usersRes);
+        setSelectedUserId((prev) => (usersRes.length > 0 && !prev ? usersRes[0].id : prev));
       }
-      if (shiftsRes.ok) setCashierShifts(await shiftsRes.json());
-      if (currenciesRes.ok) {
-        const rows = await currenciesRes.json();
-        if (Array.isArray(rows) && rows.length > 0) {
-          setCurrencies(rows);
-          // Merge in any newly-seen currency codes without wiping amounts already typed in.
-          setActualBalances(prev => {
-            const merged = { ...prev };
-            rows.forEach((c: any) => { if (!(c.code in merged)) merged[c.code] = ''; });
-            return merged;
+      setCashierShifts(shiftsRes || []);
+      if (Array.isArray(currenciesRes) && currenciesRes.length > 0) {
+        setCurrencies(currenciesRes);
+        // Merge in any newly-seen currency codes without wiping amounts already typed in.
+        setActualBalances((prev) => {
+          const merged = { ...prev };
+          currenciesRes.forEach((c) => {
+            if (!(c.code in merged)) merged[c.code] = '';
           });
-        }
+          return merged;
+        });
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      toast.error(err.message || String(err));
     } finally {
       setLoading(false);
     }
-  }, [selectedUserId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     fetchData();
@@ -125,58 +175,86 @@ export default function Settlement() {
 
   useEffect(() => {
     // For the printed X-report footer — the business's own name, not the app's.
-    fetch('/api/settings')
-      .then(res => res.ok ? res.json() : null)
-      .then(data => data?.store_name && setBusinessName(data.store_name));
+    api
+      .get<any>('/api/settings')
+      .then((data) => data?.store_name && setBusinessName(data.store_name))
+      .catch(() => {});
   }, []);
 
   const totalActualUSD = (Object.entries(actualBalances) as [string, string][]).reduce((sum, [code, val]) => {
     if (!val) return sum;
-    const currency = currencies.find(c => c.code === code);
-    return sum + (parseFloat(val) / (currency?.rate || 1));
+    const currency = currencies.find((c) => c.code === code);
+    return sum + parseFloat(val) / (currency?.rate || 1);
   }, 0);
 
-  const selectedUser = users.find(u => u.id === selectedUserId);
+  const selectedUser = users.find((u) => u.id === selectedUserId);
   const isAdmin = selectedUser?.role === 'admin';
 
-  // Cash Out: saves report snapshot, keeps transactions/order numbers
-  const handleCashOut = async () => {
-    if (totalActualUSD <= 0 && !confirm('Cash out with zero balance?')) return;
+  const manualNet = summary ? summary.totalIn - summary.totalOut : 0;
 
-    const notesWithBreakdown = notes + (Object.entries(actualBalances).some(([_, v]) => v) 
-      ? ` [Breakdown: ${Object.entries(actualBalances).filter(([_, v]) => v).map(([c, v]) => `${v} ${c}`).join(', ')}]` 
+  const buildNotesWithBreakdown = () =>
+    notes +
+    (Object.entries(actualBalances).some(([, v]) => v)
+      ? ` [Breakdown: ${Object.entries(actualBalances)
+          .filter(([, v]) => v)
+          .map(([c, v]) => `${v} ${c}`)
+          .join(', ')}]`
       : '');
 
+  // Cash Out: saves shift snapshot, keeps transactions/order numbers
+  const handleCashOut = async () => {
+    if (totalActualUSD <= 0) {
+      const ok = await confirm({
+        title: t('fin_stl_confirm_cash_out_zero_title', 'Cash out with zero balance?'),
+        description: t('fin_stl_confirm_cash_out_zero_desc', 'You are about to cash out with no counted cash. Continue?'),
+        variant: 'primary',
+        confirmLabel: t('fin_continue', 'Continue'),
+      });
+      if (!ok) return;
+    } else {
+      const ok = await confirm({
+        title: t('fin_stl_confirm_cash_out_title', 'Confirm Cash Out'),
+        description: t('fin_stl_confirm_cash_out_desc', 'This records a shift snapshot for the current cashier. Transactions and order numbers are kept.'),
+        variant: 'primary',
+        confirmLabel: t('fin_stl_cash_out', 'Cash Out'),
+      });
+      if (!ok) return;
+    }
+
+    setSubmittingCashOut(true);
     try {
-      const res = await fetch('/api/tenant/cashout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: selectedUserId,
-          opening_balance: summary?.openingBalance || 0,
-          actual_cash: totalActualUSD,
-          notes: notesWithBreakdown
-        })
+      const data = await api.post<any>('/api/tenant/cashout', {
+        user_id: selectedUserId,
+        opening_balance: summary?.openingBalance || 0,
+        actual_cash: totalActualUSD,
+        notes: buildNotesWithBreakdown(),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {}));
-        setNotes('');
-        fetchData();
-        if (confirm('Cash out complete. Your shift has been recorded. Would you like to print the receipt?')) {
-          printXReport(data.shift, 'CASH OUT');
-        }
-      }
-    } catch (err) {
-      console.error(err);
+      setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {} as Record<string, string>));
+      setNotes('');
+      setStep(1);
+      fetchData();
+      toast.success(t('fin_stl_cash_out_done', 'Cash out complete. Shift recorded.'));
+
+      const printIt = await confirm({
+        title: t('fin_stl_cash_out_done', 'Cash out complete. Shift recorded.'),
+        description: t('fin_stl_print_receipt_q', 'Print the receipt?'),
+        variant: 'primary',
+        confirmLabel: t('fin_print', 'Print'),
+        cancelLabel: t('fin_close', 'Close'),
+      });
+      if (printIt) printXReport(data.shift, 'CASH OUT');
+    } catch (err: any) {
+      toast.error(err.message || String(err));
+    } finally {
+      setSubmittingCashOut(false);
     }
   };
 
   // Complete Settlement (Admin only): full archival + order number reset
   const handleDailySettlement = async () => {
-    if (!isAdmin) {
-      alert('Only admin users can perform a complete settlement.');
+    if (!isAdmin || !summary) {
+      toast.error(t('fin_stl_admin_required', 'Only admin users can perform a complete settlement.'));
       return;
     }
 
@@ -195,57 +273,58 @@ export default function Settlement() {
       total_cash_out: summary.totalOut,
       closing_balance: summary.expectedBalance,
       actual_balance: totalActualUSD,
-      notes: notes + (Object.entries(actualBalances).some(([_, v]) => v) 
-        ? ` [Breakdown: ${Object.entries(actualBalances).filter(([_, v]) => v).map(([c, v]) => `${v} ${c}`).join(', ')}]` 
-        : '')
+      notes: buildNotesWithBreakdown(),
     };
 
+    setSubmittingSettlement(true);
     try {
-      const res = await fetch('/api/reports/daily', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(report)
-      });
-      if (res.ok) {
-        // Also trigger the transaction archival/reset (local + cloud purge)
-        const settleRes = await fetch('/api/tenant/settlement', { method: 'POST' });
-        const settleData = settleRes.ok ? await settleRes.json().catch(() => null) : null;
-
-        setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {}));
-        setNotes('');
-        setShowAdminConfirm(false);
-        fetchData();
-
-        if (settleData && settleData.cloudPurged === false) {
-          alert(settleData.warning || 'Settlement completed locally, but the cloud copy could not be cleared. Reconnect to the internet and run the settlement again, otherwise the settled sales may reappear.');
-        }
-
-        if (confirm('Settlement saved. All data has been archived and order numbering reset. Would you like to print the X-Report?')) {
-          printXReport(report, 'END OF DAY');
-        }
+      await api.post('/api/reports/daily', report);
+      // Also trigger the transaction archival/reset (local + cloud purge)
+      let settleData: any = null;
+      try {
+        settleData = await api.post<any>('/api/tenant/settlement');
+      } catch (settleErr: any) {
+        toast.error(settleErr.message || String(settleErr));
       }
-    } catch (err) {
-      console.error(err);
+
+      setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {} as Record<string, string>));
+      setNotes('');
+      setStep(1);
+      fetchData();
+
+      if (settleData && settleData.cloudPurged === false) {
+        toast.error(settleData.warning || t('fin_stl_cloud_warning_default', 'Settlement completed locally, but the cloud copy could not be cleared. Reconnect to the internet and run the settlement again, otherwise the settled sales may reappear.'), {
+          title: t('fin_stl_cloud_warning_title', 'Cloud sync warning'),
+          duration: 10000,
+        });
+      }
+
+      toast.success(t('fin_stl_settlement_done', 'Settlement saved. All data has been archived and order numbering reset.'));
+      const printIt = await confirm({
+        title: t('fin_stl_settlement_done', 'Settlement saved. All data has been archived and order numbering reset.'),
+        description: t('fin_stl_print_xreport_q', 'Print the X-Report?'),
+        variant: 'primary',
+        confirmLabel: t('fin_print', 'Print'),
+        cancelLabel: t('fin_close', 'Close'),
+      });
+      if (printIt) printXReport(report, 'END OF DAY');
+    } catch (err: any) {
+      toast.error(err.message || String(err));
+    } finally {
+      setSubmittingSettlement(false);
     }
   };
 
   const handleYearlySettlement = async () => {
     const year = new Date().getFullYear();
-    const notes = prompt('Enter notes for the yearly settlement:');
-    if (notes === null) return;
-
     try {
-      const res = await fetch('/api/reports/yearly', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, notes })
-      });
-      if (res.ok) {
-        fetchData();
-        alert('Yearly settlement generated successfully.');
-      }
-    } catch (err) {
-      console.error(err);
+      await api.post('/api/reports/yearly', { year, notes: yearlyNotes });
+      setYearlyModalOpen(false);
+      setYearlyNotes('');
+      fetchData();
+      toast.success(t('fin_stl_yearly_generated', 'Yearly settlement generated successfully.'));
+    } catch (err: any) {
+      toast.error(err.message || String(err));
     }
   };
 
@@ -286,332 +365,314 @@ export default function Settlement() {
           <div class="row total"><span>Difference:</span> <span class="diff">${diff >= 0 ? '+' : ''}${diff.toFixed(2)}</span></div>
           ${report.notes ? `<div style="margin-top: 15px; font-size: 12px; border-top: 1px dashed #000; padding-top: 5px;"><strong>Notes:</strong><br>${report.notes}</div>` : ''}
           <div class="footer">${businessName || 'Business'}<br>${title}</div>
-          <script>window.print(); window.close();</script>
+          <script>window.print(); window.close();<\/script>
         </body>
       </html>
     `);
   };
 
+  const shiftColumns: DataTableColumn<CashierShift>[] = [
+    { key: 'user_name', header: t('fin_stl_cashier', 'Cashier') },
+    { key: 'cash_sales', header: t('fin_stl_sales', 'Sales'), align: 'end', render: (r) => <span className="num">{formatMoney(r.cash_sales, { code: 'USD', symbol: '$' })}</span> },
+    { key: 'expected_cash', header: t('fin_stl_expected', 'Expected'), align: 'end', render: (r) => <span className="num">{formatMoney(r.expected_cash, { code: 'USD', symbol: '$' })}</span> },
+    { key: 'actual_cash', header: t('fin_stl_actual', 'Actual'), align: 'end', render: (r) => <span className="num">{formatMoney(r.actual_cash, { code: 'USD', symbol: '$' })}</span> },
+    {
+      key: 'difference',
+      header: t('fin_stl_diff', 'Difference'),
+      align: 'end',
+      render: (r) => (
+        <span className={['num font-semibold', r.difference === 0 ? 'text-text-3' : r.difference > 0 ? 'text-success' : 'text-danger'].join(' ')}>
+          {r.difference > 0 ? '+' : ''}
+          {formatMoney(r.difference, { code: 'USD', symbol: '$' })}
+        </span>
+      ),
+    },
+    {
+      key: 'action',
+      header: t('fin_action', 'Action'),
+      render: (r) => (
+        <Button variant="ghost" size="sm" onClick={() => printXReport(r, 'CASH OUT')}>
+          <Printer size={14} />
+        </Button>
+      ),
+    },
+  ];
+
+  const historyColumns: DataTableColumn<DailyReport>[] = [
+    { key: 'date', header: t('fin_today', 'Date'), sortable: true },
+    { key: 'closing_balance', header: t('fin_stl_expected', 'Expected'), align: 'end', render: (r) => <span className="num">{formatMoney(r.closing_balance, { code: 'USD', symbol: '$' })}</span> },
+    { key: 'actual_balance', header: t('fin_stl_actual', 'Actual'), align: 'end', render: (r) => <span className="num">{formatMoney(r.actual_balance, { code: 'USD', symbol: '$' })}</span> },
+    {
+      key: 'difference',
+      header: t('fin_stl_diff', 'Difference'),
+      align: 'end',
+      render: (r) => (
+        <span className={['num font-semibold', r.difference === 0 ? 'text-text-3' : r.difference > 0 ? 'text-success' : 'text-danger'].join(' ')}>
+          {r.difference > 0 ? '+' : ''}
+          {formatMoney(r.difference, { code: 'USD', symbol: '$' })}
+        </span>
+      ),
+    },
+    { key: 'user_name', header: t('fin_user', 'User') },
+    {
+      key: 'action',
+      header: t('fin_action', 'Action'),
+      render: (r) => (
+        <Button variant="ghost" size="sm" onClick={() => printXReport(r)}>
+          <Printer size={14} />
+        </Button>
+      ),
+    },
+  ];
+
+  const yearlyColumns: DataTableColumn<YearlyReport>[] = [
+    { key: 'year', header: t('fin_stl_year', 'Year'), render: (r) => <span className="text-lg font-bold">{r.year}</span> },
+    { key: 'total_sales', header: t('fin_stl_total_sales', 'Total Sales'), align: 'end', render: (r) => <span className="num font-semibold text-success">{formatMoney(r.total_sales, { code: 'USD', symbol: '$' })}</span> },
+    { key: 'total_purchases', header: t('fin_stl_total_purchases', 'Total Purchases'), align: 'end', render: (r) => <span className="num font-semibold text-danger">{formatMoney(r.total_purchases, { code: 'USD', symbol: '$' })}</span> },
+    { key: 'total_profit', header: t('fin_stl_net_profit', 'Net Profit'), align: 'end', render: (r) => <span className="num font-bold">{formatMoney(r.total_profit, { code: 'USD', symbol: '$' })}</span> },
+    { key: 'user_name', header: t('fin_user', 'User') },
+    { key: 'notes', header: t('fin_notes', 'Notes'), render: (r) => <span className="italic text-text-3">{r.notes || '—'}</span> },
+  ];
+
+  const stepItems = [
+    { n: 1, label: t('fin_stl_step_review', 'Review Totals') },
+    { n: 2, label: t('fin_stl_step_count', 'Count Cash') },
+    { n: 3, label: t('fin_stl_step_confirm', 'Notes & Confirm') },
+  ];
+
   return (
-    <div className="space-y-6">
-      <header className="flex justify-between items-end">
-        <div>
-          <h1 className="text-4xl font-black tracking-tighter uppercase">Settlement & Reports</h1>
-          <p className="opacity-50 font-medium">Close the day or year and audit your finances.</p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setActiveTab('daily')}
-            className={`px-6 py-3 rounded-xl font-black uppercase tracking-widest transition-all ${activeTab === 'daily' ? 'bg-app-ink text-app-bg shadow-lg' : 'bg-app-surface border border-app-border opacity-50 hover:opacity-100'}`}
-          >
-            Daily
-          </button>
-          <button
-            onClick={() => setActiveTab('yearly')}
-            className={`px-6 py-3 rounded-xl font-black uppercase tracking-widest transition-all ${activeTab === 'yearly' ? 'bg-app-ink text-app-bg shadow-lg' : 'bg-app-surface border border-app-border opacity-50 hover:opacity-100'}`}
-          >
-            Yearly
-          </button>
-        </div>
-      </header>
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title={t('fin_stl_title', 'Settlement & Reports')}
+        subtitle={t('fin_stl_subtitle', 'Close the day or year and audit your finances.')}
+        actions={
+          <Tabs
+            items={[
+              { value: 'daily', label: t('fin_stl_daily', 'Daily') },
+              { value: 'yearly', label: t('fin_stl_yearly', 'Yearly') },
+            ]}
+            value={activeTab}
+            onChange={(v) => setActiveTab(v as 'daily' | 'yearly')}
+          />
+        }
+      />
 
       {activeTab === 'daily' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-1 space-y-6">
-            <div className="bg-app-surface border border-app-border rounded-2xl p-6 shadow-sm space-y-6">
-              <h2 className="text-xl font-black uppercase tracking-tight flex items-center gap-2">
-                <CalendarCheck className="text-emerald-500" /> End of Day
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          <div className="lg:col-span-1">
+            <div className="rounded-[var(--radius-card)] border border-border bg-surface p-5 shadow-[var(--shadow-card)]">
+              <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-text">
+                <CalendarCheck size={18} className="text-success" /> {t('fin_stl_end_of_day', 'End of Day')}
               </h2>
 
-              {summary ? (
-                <div className="space-y-4">
-                  <div className="p-4 bg-app-bg rounded-xl border border-app-border/50">
-                    <span className="text-[10px] uppercase tracking-widest font-black opacity-50 block mb-1">Expected Balance</span>
-                    <span className="text-3xl font-black font-mono">${summary.expectedBalance.toFixed(2)}</span>
+              {/* Stepper indicator */}
+              <div className="mb-5 flex items-center gap-1">
+                {stepItems.map((s, i) => (
+                  <React.Fragment key={s.n}>
+                    <div className="flex flex-1 flex-col items-center gap-1">
+                      <div
+                        className={[
+                          'flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold',
+                          step === s.n
+                            ? 'bg-primary text-on-primary'
+                            : step > s.n
+                              ? 'bg-success text-white'
+                              : 'bg-surface-2 text-text-3',
+                        ].join(' ')}
+                      >
+                        {step > s.n ? <Check size={14} /> : s.n}
+                      </div>
+                      <span className={['text-center text-[11px] font-medium', step === s.n ? 'text-text' : 'text-text-3'].join(' ')}>{s.label}</span>
+                    </div>
+                    {i < stepItems.length - 1 && <div className={['mb-4 h-px flex-1', step > s.n ? 'bg-success' : 'bg-border'].join(' ')} />}
+                  </React.Fragment>
+                ))}
+              </div>
+
+              {!summary ? (
+                <div className="py-12 text-center text-sm italic text-text-3">{t('fin_loading', 'Loading…')}</div>
+              ) : step === 1 ? (
+                <div className="flex flex-col gap-4">
+                  <p className="text-xs text-text-3">{t('fin_stl_step1_desc', 'Review today’s register activity before counting the drawer.')}</p>
+                  <div className="rounded-[var(--radius-card)] border border-border bg-surface-2 p-4">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-[0.04em] text-text-3">{t('fin_stl_expected_balance', 'Expected Balance')}</span>
+                    <span className="num text-3xl font-bold text-text">{formatMoney(summary.expectedBalance, { code: 'USD', symbol: '$' })}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex justify-between rounded-md bg-surface-2 px-2 py-1.5"><span className="text-text-3">{t('fin_stl_sales', 'Sales')}</span><span className="num font-semibold text-success">+{formatMoney(summary.totalSales, { code: 'USD', symbol: '$' })}</span></div>
+                    <div className="flex justify-between rounded-md bg-surface-2 px-2 py-1.5"><span className="text-text-3">{t('fin_stl_refunds', 'Refunds')}</span><span className="num font-semibold text-danger">-{formatMoney(summary.totalRefunds, { code: 'USD', symbol: '$' })}</span></div>
+                    <div className="flex justify-between rounded-md bg-surface-2 px-2 py-1.5"><span className="text-text-3">{t('fin_stl_purchases', 'Purchases')}</span><span className="num font-semibold text-danger">-{formatMoney(summary.totalPurchases, { code: 'USD', symbol: '$' })}</span></div>
+                    <div className="flex justify-between rounded-md bg-surface-2 px-2 py-1.5"><span className="text-text-3">{t('fin_stl_manual', 'Manual In/Out')}</span><span className={['num font-semibold', manualNet >= 0 ? 'text-success' : 'text-danger'].join(' ')}>{manualNet >= 0 ? '+' : ''}{formatMoney(manualNet, { code: 'USD', symbol: '$' })}</span></div>
+                  </div>
+                  <Field label={t('fin_stl_cashier', 'Cashier')}>
+                    <Select value={String(selectedUserId)} disabled options={users.map((u) => ({ value: String(u.id), label: `${u.name} (${u.role})` }))} />
+                  </Field>
+                  <Button variant="primary" className="w-full" onClick={() => setStep(2)}>
+                    {t('fin_continue', 'Continue')} <ChevronRight size={15} className="rtl:rotate-180" />
+                  </Button>
+                </div>
+              ) : step === 2 ? (
+                <div className="flex flex-col gap-4">
+                  <p className="text-xs text-text-3">{t('fin_stl_step2_desc', 'Count the physical cash in the drawer, or enter totals directly.')}</p>
+
+                  <div className="flex gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 p-1 text-xs font-semibold">
+                    <button type="button" onClick={() => setCountMode('denomination')} className={['flex-1 cursor-pointer rounded-md py-1.5 uppercase tracking-[0.04em]', countMode === 'denomination' ? 'bg-primary text-on-primary' : 'text-text-3'].join(' ')}>
+                      <Calculator size={13} className="me-1 inline" /> {t('fin_stl_denomination_count', 'Denomination count')}
+                    </button>
+                    <button type="button" onClick={() => setCountMode('direct')} className={['flex-1 cursor-pointer rounded-md py-1.5 uppercase tracking-[0.04em]', countMode === 'direct' ? 'bg-primary text-on-primary' : 'text-text-3'].join(' ')}>
+                      {t('fin_stl_enter_directly', 'Enter total directly')}
+                    </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] font-black uppercase tracking-widest opacity-60 px-1">
-                    <div className="flex justify-between"><span>Sales:</span> <span className="text-emerald-500 font-mono">+${summary.totalSales.toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span>Refunds:</span> <span className="text-rose-500 font-mono">-${(summary.totalRefunds || 0).toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span>Purchases:</span> <span className="text-rose-500 font-mono">-${summary.totalPurchases.toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span>Manual:</span> <span className={`${(summary.totalIn - summary.totalOut) >= 0 ? 'text-emerald-500' : 'text-rose-500'} font-mono`}>{(summary.totalIn - summary.totalOut) >= 0 ? '+' : ''}${(summary.totalIn - summary.totalOut).toFixed(2)}</span></div>
-                  </div>
-
-                  {/* User Selector */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Cashier</label>
-                    <select
-                      className="w-full p-3 bg-app-bg border border-app-border rounded-xl text-sm font-bold outline-none focus:border-app-ink transition-all disabled:opacity-50 cursor-not-allowed"
-                      value={selectedUserId}
-                      onChange={(e) => setSelectedUserId(parseInt(e.target.value))}
-                      disabled
-                    >
-                      {users.map(u => (
-                        <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-3">
-                    <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Actual Cash in Drawer</label>
-                    {currencies.map(c => (
-                      <div key={c.code} className="flex items-center gap-3">
-                        <div className="w-12 text-xs font-black opacity-50">{c.code}</div>
+                  {currencies.map((c) => (
+                    <div key={c.code} className="rounded-[var(--radius-card)] border border-border p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-[0.04em] text-text-2">{c.code}</span>
+                      </div>
+                      {countMode === 'denomination' ? (
+                        <DenominationCounter
+                          currency={c}
+                          onTotalChange={(total) => setActualBalances((prev) => ({ ...prev, [c.code]: total ? String(total) : '' }))}
+                        />
+                      ) : (
                         <input
                           type="number"
                           step="0.01"
                           placeholder="0.00"
-                          className="flex-1 p-3 bg-app-bg border border-app-border rounded-xl font-mono text-lg outline-none focus:border-app-ink transition-all"
+                          className="num h-10 w-full rounded-[var(--radius-input)] border border-border bg-surface px-3 text-end text-lg outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                           value={actualBalances[c.code] ?? ''}
-                          onChange={(e) => setActualBalances(prev => ({ ...prev, [c.code]: e.target.value }))}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => setActualBalances((prev) => ({ ...prev, [c.code]: e.target.value }))}
                         />
-                      </div>
-                    ))}
-                    <div className="p-3 bg-app-ink/5 rounded-xl border border-dashed border-app-ink/20 flex justify-between items-center">
-                      <span className="text-[10px] uppercase font-black opacity-50">Total (USD)</span>
-                      <span className="font-mono font-black text-lg">${totalActualUSD.toFixed(2)}</span>
+                      )}
                     </div>
+                  ))}
+
+                  <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-dashed border-primary/40 bg-primary-soft px-3 py-2.5">
+                    <span className="text-xs font-bold uppercase text-primary">{t('fin_total_usd', 'Total (USD)')}</span>
+                    <span className="num text-lg font-bold text-text">{formatMoney(totalActualUSD, { code: 'USD', symbol: '$' })}</span>
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-widest font-black opacity-50 ml-1">Notes</label>
-                    <textarea
-                      placeholder="Any discrepancies or notes..."
-                      className="w-full p-3 bg-app-bg border border-app-border rounded-xl text-sm outline-none focus:border-app-ink transition-all min-h-[80px]"
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                    />
-                  </div>
-
-                  {/* Cash Out Button — available to all */}
-                  <button
-                    onClick={handleCashOut}
-                    className="w-full py-4 bg-amber-500 text-white rounded-xl font-black uppercase tracking-widest shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all active:scale-95 flex items-center justify-center gap-2"
-                  >
-                    <LogOut size={18} /> Cash Out
-                  </button>
-
-                  {/* Complete Settlement — admin only */}
-                  {isAdmin ? (
-                    <button
-                      onClick={() => setShowAdminConfirm(true)}
-                      className="w-full py-4 bg-emerald-500 text-white rounded-xl font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-all active:scale-95 flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle2 size={18} /> Complete Settlement
-                    </button>
-                  ) : (
-                    <div className="w-full py-4 bg-app-bg border border-app-border rounded-xl flex items-center justify-center gap-2 opacity-40 cursor-not-allowed">
-                      <Lock size={16} />
-                      <span className="text-[10px] font-black uppercase tracking-widest">Admin only — Complete Settlement</span>
-                    </div>
-                  )}
-
-                  <div className="text-[10px] opacity-40 text-center px-2 leading-relaxed">
-                    <strong>Cash Out</strong> resets today's sales summary but keeps order numbers.<br />
-                    <strong>Complete Settlement</strong> archives all data and resets order numbers (admin only).
+                  <div className="flex gap-2">
+                    <Button variant="secondary" className="flex-1" onClick={() => setStep(1)}>
+                      <ChevronLeft size={15} className="rtl:rotate-180" /> {t('fin_back', 'Back')}
+                    </Button>
+                    <Button variant="primary" className="flex-1" onClick={() => setStep(3)}>
+                      {t('fin_continue', 'Continue')} <ChevronRight size={15} className="rtl:rotate-180" />
+                    </Button>
                   </div>
                 </div>
               ) : (
-                <div className="py-12 text-center opacity-30 italic">Loading summary...</div>
+                <div className="flex flex-col gap-4">
+                  <p className="text-xs text-text-3">{t('fin_stl_step3_desc', 'Add any notes, then confirm to record this shift.')}</p>
+
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="rounded-md bg-surface-2 px-3 py-2">
+                      <span className="block text-[10px] uppercase text-text-3">{t('fin_stl_expected', 'Expected')}</span>
+                      <span className="num font-semibold">{formatMoney(summary.expectedBalance, { code: 'USD', symbol: '$' })}</span>
+                    </div>
+                    <div className="rounded-md bg-surface-2 px-3 py-2">
+                      <span className="block text-[10px] uppercase text-text-3">{t('fin_stl_actual', 'Actual')}</span>
+                      <span className="num font-semibold">{formatMoney(totalActualUSD, { code: 'USD', symbol: '$' })}</span>
+                    </div>
+                  </div>
+                  <div className={['flex items-center justify-between rounded-md px-3 py-2', Math.abs(totalActualUSD - summary.expectedBalance) < 0.01 ? 'bg-success-soft' : 'bg-danger-soft'].join(' ')}>
+                    <span className="text-xs font-bold uppercase text-text-2">{t('fin_stl_diff', 'Difference')}</span>
+                    <span className={['num font-bold', Math.abs(totalActualUSD - summary.expectedBalance) < 0.01 ? 'text-success' : 'text-danger'].join(' ')}>
+                      {totalActualUSD - summary.expectedBalance >= 0 ? '+' : ''}
+                      {formatMoney(totalActualUSD - summary.expectedBalance, { code: 'USD', symbol: '$' })}
+                    </span>
+                  </div>
+
+                  <Field label={t('fin_notes', 'Notes')}>
+                    <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t('fin_stl_notes_placeholder', 'Any discrepancies or notes…')} rows={3} />
+                  </Field>
+
+                  <div className="flex gap-2">
+                    <Button variant="secondary" className="flex-1" onClick={() => setStep(2)}>
+                      <ChevronLeft size={15} className="rtl:rotate-180" /> {t('fin_back', 'Back')}
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-col gap-2 border-t border-border pt-4">
+                    <Button variant="secondary" loading={submittingCashOut} onClick={handleCashOut} className="w-full">
+                      <LogOut size={16} /> {t('fin_stl_cash_out', 'Cash Out')}
+                    </Button>
+                    <p className="text-center text-[11px] text-text-3">{t('fin_stl_cash_out_desc', 'Resets today’s sales summary but keeps order numbers. Use this for a shift change.')}</p>
+
+                    {isAdmin ? (
+                      <>
+                        <Button variant="success" loading={submittingSettlement} onClick={async () => {
+                          const ok = await confirm({
+                            title: t('fin_stl_confirm_settlement_title', 'Complete Settlement'),
+                            description: t('fin_stl_confirm_settlement_desc', 'This will archive all transactions and reset order numbering. This action cannot be undone.'),
+                            confirmText: 'SETTLE',
+                            confirmLabel: t('fin_stl_complete_settlement', 'Complete Settlement'),
+                          });
+                          if (ok) handleDailySettlement();
+                        }} className="w-full">
+                          <CheckCircle2 size={16} /> {t('fin_stl_complete_settlement', 'Complete Settlement')}
+                        </Button>
+                        <p className="text-center text-[11px] text-text-3">{t('fin_stl_complete_settlement_desc', 'Archives all data and resets order numbers. Admin only.')}</p>
+                      </>
+                    ) : (
+                      <div className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 py-3 text-text-3">
+                        <Lock size={15} />
+                        <span className="text-xs font-semibold uppercase tracking-[0.04em]">{t('fin_stl_admin_only', 'Admin only — Complete Settlement')}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </div>
 
-          <div className="lg:col-span-2 space-y-6">
-            {/* Cashier Shifts Table */}
-            <div className="bg-app-surface border border-app-border rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-4 bg-app-bg/30 border-b border-app-border flex justify-between items-center">
-                <h3 className="text-xs font-black uppercase tracking-widest">Today's Cashier Shifts</h3>
-              </div>
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-app-bg/50 text-[10px] uppercase tracking-widest font-black opacity-50">
-                    <th className="p-4 border-b border-app-border">Cashier</th>
-                    <th className="p-4 border-b border-app-border">Sales</th>
-                    <th className="p-4 border-b border-app-border">Expected</th>
-                    <th className="p-4 border-b border-app-border">Actual</th>
-                    <th className="p-4 border-b border-app-border">Diff</th>
-                    <th className="p-4 border-b border-app-border">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="text-sm">
-                  {loading ? (
-                    <tr><td colSpan={6} className="p-12 text-center opacity-30 italic">Loading...</td></tr>
-                  ) : cashierShifts.length === 0 ? (
-                    <tr><td colSpan={6} className="p-12 text-center opacity-30 italic">No shifts recorded today.</td></tr>
-                  ) : (
-                    cashierShifts.map(shift => (
-                      <tr key={shift.id} className="hover:bg-app-bg/30 transition-colors group">
-                        <td className="p-4 border-b border-app-border font-bold">{shift.user_name}</td>
-                        <td className="p-4 border-b border-app-border font-mono text-xs">${shift.cash_sales.toFixed(2)}</td>
-                        <td className="p-4 border-b border-app-border font-mono text-xs">${shift.expected_cash.toFixed(2)}</td>
-                        <td className="p-4 border-b border-app-border font-mono text-xs">${shift.actual_cash.toFixed(2)}</td>
-                        <td className={`p-4 border-b border-app-border font-mono text-xs font-bold ${shift.difference === 0 ? 'opacity-30' : shift.difference > 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                          {shift.difference > 0 ? '+' : ''}{shift.difference.toFixed(2)}
-                        </td>
-                        <td className="p-4 border-b border-app-border">
-                          <button 
-                            onClick={() => printXReport(shift, 'CASH OUT')}
-                            className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                          >
-                            <Printer size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+          <div className="flex flex-col gap-5 lg:col-span-2">
+            <div>
+              <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_shifts_title', "Today's Cashier Shifts")}</h3>
+              <DataTable columns={shiftColumns} data={cashierShifts} rowKey={(r) => r.id} loading={loading} emptyTitle={t('fin_stl_shifts_empty', 'No shifts recorded today')} />
             </div>
-
-            <div className="bg-app-surface border border-app-border rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-4 bg-app-bg/30 border-b border-app-border flex justify-between items-center">
-                <h3 className="text-xs font-black uppercase tracking-widest">Settlement History</h3>
-              </div>
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-app-bg/50 text-[10px] uppercase tracking-widest font-black opacity-50">
-                    <th className="p-4 border-b border-app-border">Date</th>
-                    <th className="p-4 border-b border-app-border">Expected</th>
-                    <th className="p-4 border-b border-app-border">Actual</th>
-                    <th className="p-4 border-b border-app-border">Diff</th>
-                    <th className="p-4 border-b border-app-border">User</th>
-                    <th className="p-4 border-b border-app-border">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="text-sm">
-                  {loading ? (
-                    <tr><td colSpan={6} className="p-12 text-center opacity-30 italic">Loading...</td></tr>
-                  ) : dailyReports.length === 0 ? (
-                    <tr><td colSpan={6} className="p-12 text-center opacity-30 italic">No reports found.</td></tr>
-                  ) : (
-                    dailyReports.map(report => (
-                      <tr key={report.id} className="hover:bg-app-bg/30 transition-colors group">
-                        <td className="p-4 border-b border-app-border font-bold">{report.date}</td>
-                        <td className="p-4 border-b border-app-border font-mono text-xs">${report.closing_balance.toFixed(2)}</td>
-                        <td className="p-4 border-b border-app-border font-mono text-xs">${report.actual_balance.toFixed(2)}</td>
-                        <td className={`p-4 border-b border-app-border font-mono text-xs font-bold ${report.difference === 0 ? 'opacity-30' : report.difference > 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                          {report.difference > 0 ? '+' : ''}{report.difference.toFixed(2)}
-                        </td>
-                        <td className="p-4 border-b border-app-border opacity-50">{report.user_name}</td>
-                        <td className="p-4 border-b border-app-border">
-                          <button 
-                            onClick={() => printXReport(report)}
-                            className="p-2 hover:bg-app-ink hover:text-app-bg rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                          >
-                            <Printer size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_history_title', 'Settlement History')}</h3>
+              <DataTable columns={historyColumns} data={dailyReports} rowKey={(r) => r.id} loading={loading} searchable emptyTitle={t('fin_stl_history_empty', 'No reports found')} />
             </div>
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
-          <div className="bg-app-surface border border-app-border rounded-2xl p-8 shadow-sm flex flex-col items-center text-center space-y-6">
-            <div className="w-20 h-20 bg-app-ink text-app-bg rounded-3xl flex items-center justify-center shadow-2xl">
-              <Zap size={40} />
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface p-8 text-center shadow-[var(--shadow-card)]">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-on-primary shadow-lg">
+              <Zap size={32} />
             </div>
             <div className="max-w-md">
-              <h2 className="text-3xl font-black uppercase tracking-tighter">Yearly Closing</h2>
-              <p className="opacity-50 mt-2">Generate a comprehensive financial report for the current year. This will calculate total sales, purchases, and net profit.</p>
+              <h2 className="text-xl font-bold text-text">{t('fin_stl_yearly_title', 'Yearly Closing')}</h2>
+              <p className="mt-1 text-sm text-text-3">{t('fin_stl_yearly_desc', 'Generate a comprehensive financial report for the current year. This calculates total sales, purchases, and net profit.')}</p>
             </div>
-            <button
-              onClick={handleYearlySettlement}
-              className="px-12 py-4 bg-app-ink text-app-bg rounded-2xl font-black uppercase tracking-widest shadow-2xl hover:opacity-90 transition-all active:scale-95"
-            >
-              Generate {new Date().getFullYear()} Report
-            </button>
+            <Button variant="primary" size="lg" onClick={() => setYearlyModalOpen(true)}>
+              {t('fin_stl_generate_report', 'Generate {year} Report').replace('{year}', String(new Date().getFullYear()))}
+            </Button>
           </div>
 
-          <div className="bg-app-surface border border-app-border rounded-2xl overflow-hidden shadow-sm">
-            <div className="p-4 bg-app-bg/30 border-b border-app-border">
-              <h3 className="text-xs font-black uppercase tracking-widest">Yearly Reports History</h3>
-            </div>
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-app-bg/50 text-[10px] uppercase tracking-widest font-black opacity-50">
-                  <th className="p-4 border-b border-app-border">Year</th>
-                  <th className="p-4 border-b border-app-border">Total Sales</th>
-                  <th className="p-4 border-b border-app-border">Total Purchases</th>
-                  <th className="p-4 border-b border-app-border">Net Profit</th>
-                  <th className="p-4 border-b border-app-border">User</th>
-                  <th className="p-4 border-b border-app-border">Notes</th>
-                </tr>
-              </thead>
-              <tbody className="text-sm">
-                {loading ? (
-                  <tr><td colSpan={6} className="p-12 text-center opacity-30 italic">Loading...</td></tr>
-                ) : yearlyReports.length === 0 ? (
-                  <tr><td colSpan={6} className="p-12 text-center opacity-30 italic">No yearly reports found.</td></tr>
-                ) : (
-                  yearlyReports.map(report => (
-                    <tr key={report.id} className="hover:bg-app-bg/30 transition-colors">
-                      <td className="p-4 border-b border-app-border font-black text-lg">{report.year}</td>
-                      <td className="p-4 border-b border-app-border font-mono text-emerald-500 font-bold">${report.total_sales.toFixed(2)}</td>
-                      <td className="p-4 border-b border-app-border font-mono text-rose-500 font-bold">${report.total_purchases.toFixed(2)}</td>
-                      <td className="p-4 border-b border-app-border font-mono font-black text-lg">${report.total_profit.toFixed(2)}</td>
-                      <td className="p-4 border-b border-app-border opacity-50">{report.user_name}</td>
-                      <td className="p-4 border-b border-app-border opacity-70 italic">{report.notes || '-'}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          <div>
+            <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_yearly_history', 'Yearly Reports History')}</h3>
+            <DataTable columns={yearlyColumns} data={yearlyReports} rowKey={(r) => r.id} loading={loading} emptyTitle={t('fin_stl_yearly_empty', 'No yearly reports found')} />
           </div>
         </div>
       )}
 
-      {/* Admin Confirmation Modal for Complete Settlement */}
-      <AnimatePresence>
-        {showAdminConfirm && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-app-ink/80 backdrop-blur-sm"
-              onClick={() => setShowAdminConfirm(false)}
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-md bg-app-surface border border-app-border rounded-3xl overflow-hidden shadow-2xl"
-            >
-              <div className="p-8 text-center space-y-6">
-                <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-full flex items-center justify-center mx-auto">
-                  <AlertCircle size={40} />
-                </div>
-                
-                <div className="space-y-2">
-                  <h2 className="text-2xl font-black uppercase tracking-tight">Complete Settlement</h2>
-                  <p className="opacity-50 text-sm">This will <strong>archive all transactions</strong> and <strong>reset order numbering</strong>. This action cannot be undone. Are you sure?</p>
-                </div>
-
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setShowAdminConfirm(false)}
-                    className="flex-1 py-4 bg-app-bg border border-app-border rounded-xl font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleDailySettlement}
-                    className="flex-1 py-4 bg-rose-500 text-white rounded-xl font-black uppercase tracking-widest hover:bg-rose-600 transition-all flex items-center justify-center gap-2"
-                  >
-                    <Shield size={16} /> Confirm
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal
+        open={yearlyModalOpen}
+        onClose={() => setYearlyModalOpen(false)}
+        title={t('fin_stl_yearly_notes_prompt', 'Notes for the yearly settlement')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setYearlyModalOpen(false)}>{t('fin_cancel', 'Cancel')}</Button>
+            <Button variant="primary" onClick={handleYearlySettlement}>{t('fin_confirm', 'Confirm')}</Button>
+          </>
+        }
+      >
+        <Textarea value={yearlyNotes} onChange={(e) => setYearlyNotes(e.target.value)} placeholder={t('fin_stl_yearly_notes_placeholder', 'Optional notes…')} rows={4} />
+      </Modal>
     </div>
   );
 }

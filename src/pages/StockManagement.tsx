@@ -1,239 +1,316 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Boxes, DollarSign, ListOrdered, PackageX } from 'lucide-react';
 
-import { 
-  LayoutDashboard, 
-  Package, 
-  Users, 
-  FileText, 
-  BarChart3, 
-  Settings as SettingsIcon,
-  Plus,
-  Edit2,
-  Trash2,
-  Save,
-  X,
-  Search,
-  ArrowLeft,
-  ShoppingCart,
-  Sun,
-  Moon,
-  Globe,
-  Coins,
-  ClipboardList,
-  Activity,
-  Zap,
-  Wallet,
-  CalendarCheck,
-  RotateCcw,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Printer,
-  Download,
-  Upload,
-  Shield,
-  Monitor,
-  RefreshCw,
-  Clock,
-  ArrowRight
-} from 'lucide-react';
+import {
+  PageHeader,
+  Toolbar,
+  SearchInput,
+  Select,
+  Tabs,
+  DataTable,
+  DataTableColumn,
+  StatCard,
+  Badge,
+  Button,
+  useToast,
+} from '../components/ui';
+import { useI18n } from '../intl/index';
+import { api } from '../lib/api';
+import { formatDateTime, formatMoney } from '../lib/format';
+import { Product, Currency } from '../types';
+import { AdjustStockModal, AdjustStockTarget } from './stock/AdjustStockModal';
+import { MovementsDrawer } from './stock/MovementsDrawer';
 
-import { motion, AnimatePresence } from 'motion/react';
+type StatusFilter = 'all' | 'low' | 'out';
 
-import { Product, Stakeholder, Currency, Tenant } from '../types';
+interface InventoryValuationRow {
+  product_id: number;
+  stock: number;
+  cost: number;
+  value_cost: number;
+  price: number;
+  value_retail: number;
+}
 
-import { Link, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+interface InventoryValuationResponse {
+  rows: InventoryValuationRow[];
+  totals: { value_cost: number; value_retail: number; potential_profit: number; product_count: number };
+}
 
-import WindowFrame from '../components/WindowFrame';
+interface LowStockRow {
+  product_id: number;
+  stock: number;
+  reorder_point: number;
+}
 
-import { useTheme } from '../hooks/useTheme';
-
-import { translations, Language } from '../i18n';
-
-import * as XLSX from 'xlsx';
-
-import { jsPDF } from 'jspdf';
-
-import 'jspdf-autotable';
+interface StockAdjustmentRow {
+  id: number;
+  product_id: number;
+  product_name: string;
+  user_name: string | null;
+  qty_before: number;
+  qty_after: number;
+  delta: number;
+  reason: string | null;
+  created_at: string;
+}
 
 export default function StockManagement() {
+  const { t, lang } = useI18n();
+  const toast = useToast();
+
   const [products, setProducts] = useState<Product[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [editingStock, setEditingStock] = useState<Product | null>(null);
-  const [newStock, setNewStock] = useState<number>(0);
-  const [newReorderPoint, setNewReorderPoint] = useState<number>(0);
-  const [language, setLanguage] = useState<Language>('en');
+  const [valuation, setValuation] = useState<InventoryValuationResponse | null>(null);
+  const [lowStock, setLowStock] = useState<LowStockRow[]>([]);
+  const [adjustments, setAdjustments] = useState<StockAdjustmentRow[]>([]);
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adjustmentsLoading, setAdjustmentsLoading] = useState(false);
+
+  const [tab, setTab] = useState<'levels' | 'adjustments'>('levels');
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
+  const [status, setStatus] = useState<StatusFilter>('all');
+
+  const [adjustTarget, setAdjustTarget] = useState<AdjustStockTarget | null>(null);
+  const [movementsTarget, setMovementsTarget] = useState<{ id: number; name: string } | null>(null);
+
+  const fetchAll = useCallback(() => {
+    setLoading(true);
+    Promise.all([
+      api.get<Product[]>('/api/products'),
+      api.get<InventoryValuationResponse>('/api/reports/inventory-valuation'),
+      api.get<LowStockRow[]>('/api/reports/low-stock'),
+    ])
+      .then(([p, v, l]) => {
+        setProducts(p);
+        setValuation(v);
+        setLowStock(l);
+      })
+      .catch((err) => toast.error(err.message))
+      .finally(() => setLoading(false));
+  }, [toast]);
+
+  const fetchAdjustments = useCallback(() => {
+    setAdjustmentsLoading(true);
+    api
+      .get<StockAdjustmentRow[]>('/api/stock/adjustments')
+      .then(setAdjustments)
+      .catch((err) => toast.error(err.message))
+      .finally(() => setAdjustmentsLoading(false));
+  }, [toast]);
 
   useEffect(() => {
-    fetchProducts();
-    fetch('/api/settings')
-      .then(res => res.ok ? res.json() : null)
-      .then(s => s && s.language && setLanguage(s.language as Language))
-      .catch(err => console.error('Settings fetch error:', err));
+    fetchAll();
+    api.get<Currency[]>('/api/currencies').then(setCurrencies).catch(() => {});
 
     const handleSync = (e: any) => {
-      if (e.detail.type === 'PRODUCTS_UPDATED') {
-        fetchProducts();
-      }
+      if (e.detail?.type === 'PRODUCTS_UPDATED') fetchAll();
     };
     window.addEventListener('pos-sync', handleSync);
     return () => window.removeEventListener('pos-sync', handleSync);
-  }, []);
+  }, [fetchAll]);
 
-  const t = translations[language];
+  useEffect(() => {
+    if (tab === 'adjustments') fetchAdjustments();
+  }, [tab, fetchAdjustments]);
 
-  const fetchProducts = () => {
-    fetch('/api/products').then(res => res.json()).then(setProducts);
-  };
+  const usdCurrency = useMemo(() => currencies.find((c) => c.code === 'USD') || { code: 'USD', symbol: '$', rate: 1 }, [currencies]);
 
-  const handleUpdateStock = async () => {
-    if (!editingStock) return;
-    
-    const res = await fetch(`/api/products/${editingStock.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...editingStock,
-        stock: newStock,
-        reorder_point: newReorderPoint
-      })
+  const trackedProducts = useMemo(() => products.filter((p) => p.track_inventory !== 0), [products]);
+  const categories = useMemo(() => Array.from(new Set(trackedProducts.map((p) => p.category).filter(Boolean))).sort(), [trackedProducts]);
+
+  const lowStockCount = useMemo(() => lowStock.filter((r) => r.stock > 0).length, [lowStock]);
+  const outOfStockCount = useMemo(() => lowStock.filter((r) => r.stock <= 0).length, [lowStock]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return trackedProducts.filter((p) => {
+      if (q && !p.name.toLowerCase().includes(q) && !(p.barcode || '').includes(search)) return false;
+      if (category && p.category !== category) return false;
+      const out = p.stock <= 0;
+      const low = !out && p.stock > 0 && (p.reorder_point || 0) > 0 && p.stock <= (p.reorder_point || 0);
+      if (status === 'low' && !low) return false;
+      if (status === 'out' && !out) return false;
+      return true;
     });
-    
-    if (res.ok) {
-      setEditingStock(null);
-      fetchProducts();
-    }
-  };
+  }, [trackedProducts, search, category, status]);
 
-  const trackedProducts = products.filter(p => p.track_inventory !== 0);
+  const openAdjust = (p: Product) => setAdjustTarget({ id: p.id, name: p.name, stock: p.stock, unit: p.unit });
+  const openMovements = (p: Product) => setMovementsTarget({ id: p.id, name: p.name });
 
-  const categories = ['All', ...new Set(trackedProducts.map(p => p.category))];
+  const levelColumns = useMemo<DataTableColumn<Product>[]>(
+    () => [
+      {
+        key: 'name',
+        header: t('stock_col_product', 'Product'),
+        sortable: true,
+        render: (p) => (
+          <div>
+            <div className="font-medium text-text">{p.name}</div>
+            <div className="font-mono text-xs text-text-3">{p.barcode}</div>
+          </div>
+        ),
+      },
+      { key: 'category', header: t('stock_col_category', 'Category'), sortable: true, render: (p) => <span className="text-text-3">{p.category}</span> },
+      {
+        key: 'stock',
+        header: t('stock_col_stock', 'Current stock'),
+        align: 'end',
+        sortable: true,
+        render: (p) => (
+          <span className="num font-semibold text-text">
+            {p.stock} {p.unit}
+          </span>
+        ),
+      },
+      {
+        key: 'reorder_point',
+        header: t('stock_col_reorder', 'Reorder point'),
+        align: 'end',
+        sortable: true,
+        render: (p) => <span className="num text-text-3">{p.reorder_point || 0}</span>,
+      },
+      {
+        key: 'status',
+        header: t('stock_col_status', 'Status'),
+        render: (p) => {
+          const out = p.stock <= 0;
+          const low = !out && (p.reorder_point || 0) > 0 && p.stock <= (p.reorder_point || 0);
+          if (out) return <Badge variant="danger">{t('stock_status_out', 'Out of stock')}</Badge>;
+          if (low) return <Badge variant="warning">{t('stock_status_low', 'Low stock')}</Badge>;
+          return <Badge variant="success">{t('stock_status_in', 'In stock')}</Badge>;
+        },
+      },
+      {
+        key: 'actions',
+        header: t('stock_col_actions', 'Actions'),
+        align: 'end',
+        render: (p) => (
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); openMovements(p); }}>
+              {t('stock_movements', 'Movements')}
+            </Button>
+            <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); openAdjust(p); }}>
+              {t('stock_adjust', 'Adjust')}
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [t],
+  );
 
-  const filtered = trackedProducts.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         (p.barcode || '').includes(searchTerm);
-    const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+  const adjustmentColumns = useMemo<DataTableColumn<StockAdjustmentRow>[]>(
+    () => [
+      {
+        key: 'created_at',
+        header: t('stock_adjustments_col_date', 'Date'),
+        sortable: true,
+        render: (r) => <span className="text-text-3">{formatDateTime(r.created_at, lang)}</span>,
+      },
+      { key: 'product_name', header: t('stock_adjustments_col_product', 'Product'), sortable: true, render: (r) => <span className="font-medium text-text">{r.product_name}</span> },
+      {
+        key: 'delta',
+        header: t('stock_adjustments_col_change', 'Change'),
+        align: 'end',
+        sortable: true,
+        render: (r) => <span className={`num font-semibold ${r.delta < 0 ? 'text-danger' : 'text-success'}`}>{r.delta > 0 ? `+${r.delta}` : r.delta}</span>,
+      },
+      { key: 'qty_before', header: t('stock_adjustments_col_before', 'Before'), align: 'end', render: (r) => <span className="num text-text-3">{r.qty_before}</span> },
+      { key: 'qty_after', header: t('stock_adjustments_col_after', 'After'), align: 'end', render: (r) => <span className="num text-text">{r.qty_after}</span> },
+      { key: 'reason', header: t('stock_adjustments_col_reason', 'Reason'), render: (r) => <span className="text-text-3">{r.reason || '—'}</span> },
+      { key: 'user_name', header: t('stock_adjustments_col_user', 'User'), render: (r) => <span className="text-text-3">{r.user_name || '—'}</span> },
+    ],
+    [t, lang],
+  );
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-4xl font-black tracking-tighter uppercase">Stock Management</h1>
-        <p className="opacity-50 font-medium">Monitor levels and manage reorder points.</p>
-      </header>
+    <div className="flex h-full flex-col">
+      <PageHeader title={t('stock_title', 'Stock')} subtitle={t('stock_subtitle')} />
 
-      <div className="flex gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
-          <input 
-            type="text"
-            placeholder="Search by name or barcode..."
-            className="w-full pl-12 pr-4 py-4 bg-app-surface border border-app-border rounded-xl outline-none focus:border-app-ink transition-all"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <StatCard label={t('stock_kpi_tracked_skus', 'Tracked SKUs')} value={valuation?.totals.product_count ?? 0} icon={Boxes} />
+        <StatCard label={t('stock_kpi_value_cost', 'Inventory value (cost)')} value={formatMoney(valuation?.totals.value_cost || 0, usdCurrency)} icon={DollarSign} />
+        <StatCard label={t('stock_kpi_value_retail', 'Inventory value (retail)')} value={formatMoney(valuation?.totals.value_retail || 0, usdCurrency)} icon={ListOrdered} />
+        <StatCard label={t('stock_kpi_low', 'Low stock')} value={lowStockCount} icon={AlertTriangle} />
+        <StatCard label={t('stock_kpi_out', 'Out of stock')} value={outOfStockCount} icon={PackageX} />
+      </div>
+
+      <Tabs
+        className="mb-3"
+        value={tab}
+        onChange={(v) => setTab(v as any)}
+        items={[
+          { value: 'levels', label: t('stock_tab_levels', 'Stock levels') },
+          { value: 'adjustments', label: t('stock_tab_adjustments', 'Recent adjustments') },
+        ]}
+      />
+
+      {tab === 'levels' ? (
+        <>
+          <Toolbar className="mb-3">
+            <SearchInput value={search} onChange={setSearch} placeholder={t('stock_search_placeholder')} className="max-w-sm" />
+            <Select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              options={[{ value: '', label: t('stock_filter_category_all', 'All categories') }, ...categories.map((c) => ({ value: c, label: c }))]}
+              className="w-44"
+            />
+            <Select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as StatusFilter)}
+              options={[
+                { value: 'all', label: t('stock_filter_status_all', 'All stock') },
+                { value: 'low', label: t('stock_filter_status_low', 'Low stock') },
+                { value: 'out', label: t('stock_filter_status_out', 'Out of stock') },
+              ]}
+              className="w-40"
+            />
+          </Toolbar>
+          <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+            <DataTable
+              columns={levelColumns}
+              data={filtered}
+              rowKey={(p) => p.id}
+              loading={loading}
+              emptyTitle={t('stock_empty_title', 'No products found')}
+              emptyDescription={t('stock_empty_desc')}
+              pageSizeOptions={[25, 50, 100]}
+              defaultPageSize={25}
+            />
+          </div>
+        </>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+          <DataTable
+            columns={adjustmentColumns}
+            data={adjustments}
+            rowKey={(r) => r.id}
+            loading={adjustmentsLoading}
+            emptyTitle={t('stock_adjustments_empty', 'No adjustments recorded yet.')}
+            pageSizeOptions={[25, 50, 100]}
+            defaultPageSize={25}
           />
         </div>
-        <select 
-          className="px-6 py-4 bg-app-surface border border-app-border rounded-xl outline-none font-bold"
-          value={selectedCategory}
-          onChange={(e) => setSelectedCategory(e.target.value)}
-        >
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-      </div>
+      )}
 
-      <div className="bg-app-surface border border-app-border rounded-2xl overflow-hidden shadow-sm">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-app-bg/50 text-[10px] uppercase tracking-widest font-black opacity-50">
-              <th className="p-4 border-b border-app-border">Product</th>
-              <th className="p-4 border-b border-app-border">Category</th>
-              <th className="p-4 border-b border-app-border text-right">Current Stock</th>
-              <th className="p-4 border-b border-app-border text-right">Reorder Point</th>
-              <th className="p-4 border-b border-app-border">Status</th>
-              <th className="p-4 border-b border-app-border text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="text-sm">
-            {filtered.map(p => {
-              const isLowStock = p.stock <= (p.reorder_point || 0);
-              return (
-                <tr key={p.id} className="hover:bg-app-bg/30 transition-colors group">
-                  <td className="p-4 border-b border-app-border">
-                    <div className="font-bold">{p.name}</div>
-                    <div className="text-[10px] font-mono opacity-50">{p.barcode}</div>
-                  </td>
-                  <td className="p-4 border-b border-app-border uppercase text-[10px] font-black opacity-50">{p.category}</td>
-                  <td className={`p-4 border-b border-app-border text-right font-mono font-bold ${isLowStock ? 'text-red-500' : ''}`}>
-                    {p.stock} {p.unit}
-                  </td>
-                  <td className="p-4 border-b border-app-border text-right font-mono opacity-50">
-                    {p.reorder_point || 0}
-                  </td>
-                  <td className="p-4 border-b border-app-border">
-                    {isLowStock ? (
-                      <span className="px-2 py-1 bg-red-500/10 text-red-500 text-[10px] font-black uppercase rounded">Low Stock</span>
-                    ) : (
-                      <span className="px-2 py-1 bg-emerald-500/10 text-emerald-500 text-[10px] font-black uppercase rounded">In Stock</span>
-                    )}
-                  </td>
-                  <td className="p-4 border-b border-app-border text-right">
-                    <button 
-                      onClick={() => {
-                        setEditingStock(p);
-                        setNewStock(p.stock);
-                        setNewReorderPoint(p.reorder_point || 0);
-                      }}
-                      className="px-4 py-2 bg-app-ink text-app-bg rounded-lg font-black uppercase text-[10px] hover:opacity-90 transition-all"
-                    >
-                      Adjust
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <AdjustStockModal
+        open={!!adjustTarget}
+        product={adjustTarget}
+        onClose={() => setAdjustTarget(null)}
+        onSaved={() => {
+          fetchAll();
+          if (tab === 'adjustments') fetchAdjustments();
+        }}
+      />
 
-      <AnimatePresence>
-        {editingStock && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingStock(null)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-            <motion.div initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }} className="relative bg-app-surface w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-app-border p-8 space-y-6">
-              <h2 className="text-2xl font-black uppercase tracking-tighter">Adjust Stock: {editingStock.name}</h2>
-              
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase opacity-50">Current Quantity ({editingStock.unit})</label>
-                  <input 
-                    type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-bold"
-                    value={newStock} onChange={e => setNewStock(parseFloat(e.target.value))}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase opacity-50">Reorder Point</label>
-                  <input 
-                    type="number" className="w-full p-3 bg-app-bg border border-app-border rounded-xl outline-none font-bold"
-                    value={newReorderPoint} onChange={e => setNewReorderPoint(parseInt(e.target.value))}
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-4 pt-4">
-                <button onClick={handleUpdateStock} className="flex-1 py-4 bg-app-ink text-app-bg rounded-xl font-black uppercase text-xs flex items-center justify-center gap-2">
-                  <Save size={18} /> Update Stock
-                </button>
-                <button onClick={() => setEditingStock(null)} className="px-6 py-4 border-2 border-app-border rounded-xl font-black uppercase text-xs">
-                  Cancel
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <MovementsDrawer
+        open={!!movementsTarget}
+        productId={movementsTarget?.id ?? null}
+        productName={movementsTarget?.name}
+        onClose={() => setMovementsTarget(null)}
+      />
     </div>
   );
 }
