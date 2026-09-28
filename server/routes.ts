@@ -23,6 +23,7 @@ import {
 } from "./uom.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
+import { resolveArchiveIdCollisions } from "./settlementIds.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
 import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
 
@@ -562,18 +563,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
 
     const settleData = db.transaction(() => {
-      // Before archiving, fix any potential overlap caused by previous sequence resets
-      const maxArchived = db.prepare("SELECT MAX(id) as max_id FROM archived_transactions").get() as any;
-      if (maxArchived && maxArchived.max_id > 0) {
-        const minActive = db.prepare("SELECT MIN(id) as min_id FROM transactions").get() as any;
-        if (minActive && minActive.min_id <= maxArchived.max_id) {
-          // Offset all active transactions by a safe margin
-          const offset = maxArchived.max_id + 10000;
-          db.prepare("UPDATE transactions SET id = id + ?").run(offset);
-          db.prepare("UPDATE transaction_items SET transaction_id = transaction_id + ?").run(offset);
-          db.prepare("UPDATE payments SET transaction_id = transaction_id + ?").run(offset);
-        }
-      }
+      // Before archiving, renumber any of THIS tenant's live rows whose id is already taken in the
+      // archive (only possible after a past sequence reset) — see server/settlementIds.ts.
+      resolveArchiveIdCollisions(tenantId);
 
       // Move payments
       db.prepare(`
