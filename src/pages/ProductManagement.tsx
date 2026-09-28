@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import { autoTable } from 'jspdf-autotable';
 import { Download, Plus, Printer, Tag, Trash2, Upload, Edit2 } from 'lucide-react';
 
 import {
@@ -209,7 +209,7 @@ export default function ProductManagement() {
       } else {
         const doc = new jsPDF();
         doc.text('Product Inventory Report', 14, 15);
-        (doc as any).autoTable({
+        autoTable(doc, {
           startY: 20,
           head: [['Barcode', 'Name', 'Cost', 'Retail', 'Wholesale', 'Super WS', 'Stock', 'Category']],
           body: data.map((p: any) => [

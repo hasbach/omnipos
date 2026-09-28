@@ -308,7 +308,7 @@ export default {
     stk_filter_with_balance: 'له رصيد',
     stk_filter_over_limit: 'تجاوز الحد',
     stk_filter_all: 'الكل',
-    stk_price_level_retail: 'تجزئة',
+    stk_price_level_retail: 'مفرق',
     stk_price_level_wholesale: 'جملة',
     stk_price_level_super_wholesale: 'جملة الجملة',
     stk_price_level_help: 'يحدد فئة سعر المنتج التي يُحاسب بها هذا الحساب عند البيع.',

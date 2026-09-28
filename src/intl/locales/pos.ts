@@ -246,7 +246,7 @@ export default {
     pos_price_level: 'Niveau de prix',
     pos_tier_retail: 'Détail',
     pos_tier_wholesale: 'Gros',
-    pos_tier_super_wholesale: 'Gros supérieur',
+    pos_tier_super_wholesale: 'Super gros',
     pos_tier_badge: 'Niveau',
 
     pos_available_credit: 'Crédit disponible',

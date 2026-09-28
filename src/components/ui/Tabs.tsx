@@ -18,7 +18,7 @@ export function Tabs({ items, value, onChange, className = '' }: TabsProps) {
   const name = useId();
 
   return (
-    <div role="tablist" aria-label="Tabs" className={['flex items-center gap-1 border-b border-border', className].join(' ')}>
+    <div role="tablist" aria-label="Tabs" className={['flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border', className].join(' ')}>
       {items.map((item) => {
         const active = item.value === value;
         return (
@@ -31,14 +31,14 @@ export function Tabs({ items, value, onChange, className = '' }: TabsProps) {
             disabled={item.disabled}
             onClick={() => onChange(item.value)}
             className={[
-              'relative flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors duration-150',
+              'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors duration-150',
               'cursor-pointer disabled:cursor-not-allowed disabled:opacity-40',
               active ? 'text-primary' : 'text-text-3 hover:text-text',
             ].join(' ')}
           >
             {item.icon}
             {item.label}
-            {active && <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-primary" />}
+            {active && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
           </button>
         );
       })}

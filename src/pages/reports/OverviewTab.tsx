@@ -98,7 +98,7 @@ export function OverviewTab({ range, localCurrency, businessName }: ReportTabPro
   if (loading && !summary) {
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
           {Array.from({ length: 12 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-[var(--radius-card)]" />
           ))}
@@ -119,7 +119,7 @@ export function OverviewTab({ range, localCurrency, businessName }: ReportTabPro
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
         <StatCard label={t('rep_kpi_net_sales', 'Net sales')} value={usd(summary.net_sales)} icon={Banknote} />
         <StatCard
           label={t('rep_kpi_gross_profit', 'Gross profit')}

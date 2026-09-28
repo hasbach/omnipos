@@ -136,10 +136,10 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
   const handleExportStatement = () => {
     if (!statement) return;
     import('jspdf').then(({ jsPDF }) => {
-      import('jspdf-autotable').then(() => {
+      import('jspdf-autotable').then(({ autoTable }) => {
         const doc = new jsPDF();
         doc.text(`${stakeholder.name} — ${t('stk_detail_tab_statement')}`, 14, 14);
-        (doc as any).autoTable({
+        autoTable(doc, {
           startY: 20,
           head: [[t('stk_statement_col_date'), t('stk_statement_col_desc'), t('stk_statement_col_debit'), t('stk_statement_col_credit'), t('stk_statement_col_balance')]],
           body: statement.map((r) => [

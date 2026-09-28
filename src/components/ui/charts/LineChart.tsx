@@ -24,8 +24,19 @@ export function LineChart({ labels, series, height = 220, width = 640, valueForm
   const innerH = height - padding.top - padding.bottom;
 
   const allValues = series.flatMap((s) => s.data);
-  const max = Math.max(1, ...allValues);
-  const min = Math.min(0, ...allValues);
+  // Round the axis out to a "nice" step (1/2/2.5/5 × 10^n over 4 gridlines) so labels read
+  // $0 / $150 / $300 … rather than $152.76 / $305.51.
+  const niceStep = (span: number) => {
+    const raw = span / 4;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+    const f = raw / mag;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+  };
+  const rawMax = Math.max(1, ...allValues);
+  const rawMin = Math.min(0, ...allValues);
+  const step = niceStep(rawMax - rawMin);
+  const max = Math.ceil(rawMax / step) * step;
+  const min = Math.floor(rawMin / step) * step;
   const range = max - min || 1;
 
   const n = labels.length;
@@ -39,9 +50,9 @@ export function LineChart({ labels, series, height = 220, width = 640, valueForm
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" role="img" aria-label="Line chart">
         <g transform={`translate(${padding.left},${padding.top})`}>
           {/* gridlines */}
-          {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          {Array.from({ length: Math.round(range / step) + 1 }, (_, i) => i / Math.round(range / step)).map((t) => {
             const y = innerH * t;
-            const val = max - range * t;
+            const val = Math.round((max - range * t) / step) * step;
             return (
               <g key={t}>
                 <line x1={0} x2={innerW} y1={y} y2={y} stroke="var(--color-border)" strokeWidth={1} />

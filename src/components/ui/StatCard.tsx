@@ -39,9 +39,9 @@ export function StatCard({ label, value, delta, icon: Icon, trend, className = '
   const isUp = typeof delta === 'number' && delta >= 0;
 
   return (
-    <Card className={['p-4', className].join(' ')}>
+    <Card className={['p-4 min-w-0', className].join(' ')}>
       <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium uppercase tracking-[0.04em] text-text-3">{label}</p>
+        <p className="min-w-0 truncate text-xs font-medium uppercase tracking-[0.04em] text-text-3" title={label}>{label}</p>
         {Icon && (
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary-soft text-primary">
             <Icon size={16} aria-hidden="true" />
@@ -49,7 +49,8 @@ export function StatCard({ label, value, delta, icon: Icon, trend, className = '
         )}
       </div>
       <div className="mt-2 flex items-end justify-between gap-3">
-        <p className="num text-[28px] font-bold leading-none text-text">{value}</p>
+        {/* Never wrap an amount across lines ("$" / "6,571.32"); scale down in narrow cards instead. */}
+        <p className="num min-w-0 truncate whitespace-nowrap text-[clamp(1.25rem,1.9vw,1.75rem)] font-bold leading-none text-text">{value}</p>
         {trend && <Sparkline values={trend} />}
       </div>
       {typeof delta === 'number' && (
