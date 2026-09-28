@@ -19,6 +19,7 @@ export interface ServerErrorLike {
   code?: string;
   field?: string;
   available?: number;
+  cost?: number;
 }
 
 const USD = { code: 'USD', symbol: '$' };
@@ -156,6 +157,14 @@ export function translateServerError(err: unknown, t: Translate): string {
       return t('err_uom_price_required', 'Enter a price for this unit.');
     case 'UOM_NAME_REQUIRED':
       return t('err_uom_name_required', 'Enter a name for this unit.');
+    case 'BELOW_COST':
+      return t('err_below_cost', 'The price is below the product cost.');
+    case 'INSUFFICIENT_STOCK':
+      return interpolate(t('err_insufficient_stock', 'Only {n} pcs in stock.'), {
+        n: String(Math.max(0, Math.floor((e.available ?? 0) * 1000) / 1000)),
+      });
+    case 'PRODUCT_DISABLED':
+      return t('err_product_disabled', 'This product is disabled.');
     case 'UOM_INVALID':
       return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
   }

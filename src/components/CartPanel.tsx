@@ -20,7 +20,7 @@ export default function CartPanel() {
     handleBarcodeSubmit, handleSuggestionClick, updateQuantity, setItemQuantity, applyItemDiscount, setItemUnit,
     calculateItemTotal, calculateItemTotalLBP, handleQuickCash, subtotalUSD, totalUSD, totalLBP,
     priceLevel, allowPriceOverride, enforceMinPrice, unitPriceUSD, setItemPriceOverride,
-    creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled,
+    creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled, belowCostOf, sellableProducts,
     selectedStakeholder, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
   } = pos as any;
 
@@ -84,7 +84,7 @@ export default function CartPanel() {
                 const val = e.target.value;
                 setBarcodeInput(val);
                 if (val.length > 1) {
-                  const fuse = new Fuse(products, {
+                  const fuse = new Fuse(sellableProducts || products, {
                     keys: ['name', 'barcode', 'barcodes', 'units.barcode'],
                     threshold: 0.3,
                   });
@@ -145,6 +145,7 @@ export default function CartPanel() {
             ) : (
               cart.map((item: any) => {
                 const belowMin = item.min_price && item.min_price > 0 && (item.unit_price ?? unitPriceUSD(item, item.quantity)) < item.min_price;
+                const belowCost = belowCostOf ? belowCostOf(item) : null;
                 return (
                 <motion.div
                   key={item.line_key}
@@ -199,6 +200,11 @@ export default function CartPanel() {
                             <option key={u.id} value={u.id}>{u.name} ×{u.factor}</option>
                           ))}
                         </select>
+                      )}
+                      {belowCost != null && (
+                        <p className="text-[10px] text-danger font-semibold mt-0.5">
+                          {t('pos_below_cost', 'Below cost ({cost}) - raise the price to sell this product.', { cost: formatMoney(belowCost, { code: 'USD', symbol: '$' }) })}
+                        </p>
                       )}
                       {belowMin && (
                         <p className="text-[10px] text-danger font-semibold mt-0.5">

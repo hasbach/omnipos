@@ -40,3 +40,6 @@ ALTER TABLE public.transaction_items ADD COLUMN IF NOT EXISTS uom_name TEXT;
 ALTER TABLE public.transaction_items ADD COLUMN IF NOT EXISTS uom_factor NUMERIC;
 ALTER TABLE public.transaction_items ADD COLUMN IF NOT EXISTS uom_qty NUMERIC;
 ALTER TABLE public.transaction_items ADD COLUMN IF NOT EXISTS original_item_id UUID;
+
+-- Stock / price guards: disabled products (1 = active, 0 = disabled).
+ALTER TABLE public.products ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1;

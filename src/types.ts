@@ -58,6 +58,7 @@ export interface Product {
   currency: string;
   unit: string;
   units?: ProductUnit[]; // extra units of measure (packs, cartons...)
+  active?: number; // 1 = active (default), 0 = disabled (can't be sold, hidden from the POS)
 }
 
 export interface Stakeholder {

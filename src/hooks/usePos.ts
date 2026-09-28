@@ -102,7 +102,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const enforceMinPrice = settings.enforce_min_price === '1';
   // enable_price_levels: '1' (or missing) = on, '0' = off — hides the level selector/tier badges
   // and forces every sale to retail pricing (see CartPanel/PosHeader/ProductGrid).
-  const { priceLevelsEnabled } = useSettings();
+  const { priceLevelsEnabled, allowBelowCost, allowNegativeStock, hideOutOfStock } = useSettings();
 
   // Price level (Retail / Wholesale / Super wholesale) for the CURRENT sale. Defaults from the
   // selected customer's own price_level, else the tenant's configured default, but the cashier can
@@ -500,13 +500,44 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStakeholder, stakeholders.length, settings.default_price_level, priceLevelsEnabled]);
 
+  // --- Stock guard (allow_negative_stock off) ------------------------------------------------
+  // Stock is in base pieces; a cart line consumes quantity x (uom_factor || 1) of its product.
+  const stockLimited = (p: any) => !allowNegativeStock && p.track_inventory !== 0;
+  const liveStock = (p: any) => Math.max(0, Number(products.find(x => x.id === p.id)?.stock ?? p.stock ?? 0));
+  const formatQty = (n: number) => String(Math.floor(n * 1000) / 1000);
+  const piecesInCart = (productId: number, excludeKey?: string) =>
+    cart.reduce((sum, i: any) => (i.id === productId && i.line_key !== excludeKey ? sum + i.quantity * (i.uom_factor || 1) : sum), 0);
+  /** Max quantity (in the line's unit) this line may hold given the other lines of the same product. */
+  const maxLineQty = (line: any, factor = line.uom_factor || 1) =>
+    Math.max(0, Math.floor(((liveStock(line) - piecesInCart(line.id, line.line_key)) / factor) * 1000) / 1000);
+  /** Clamp a requested quantity for a line; toasts when it had to be reduced. */
+  const clampLineQty = (line: any, desired: number): number => {
+    if (!stockLimited(line) || desired <= line.quantity) return desired;
+    const max = maxLineQty(line);
+    if (desired <= max + 1e-9) return desired;
+    toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(liveStock(line)) }));
+    return Math.max(line.quantity, max);
+  };
+
   const findUnit = (product: Product, uomId?: number | null) =>
     uomId != null ? (product.units || []).find(u => u.id === uomId) : undefined;
 
   /** Adds one unit of the product in the given unit of measure (null/undefined = base piece). */
   const addToCart = (product: Product, uomId?: number | null) => {
+    if (product.active === 0) {
+      toast.error(t('err_product_disabled', 'This product is disabled.'));
+      return;
+    }
     const unit = findUnit(product, uomId);
     const key = cartLineKey(product.id, unit ? unit.id : null);
+    // allow_negative_stock off: the product's total pieces in the cart may not exceed its stock.
+    if (stockLimited(product)) {
+      const stock = liveStock(product);
+      if (piecesInCart(product.id) + (unit ? unit.factor : 1) > stock + 1e-9) {
+        toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(stock) }));
+        return;
+      }
+    }
     setCart(prev => {
       const existing = prev.find(item => item.line_key === key);
       if (existing) {
@@ -533,12 +564,28 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       const res = await fetch(`/api/products/${encodeURIComponent(barcodeInput)}`);
       if (res.ok) {
         const product = await res.json();
+        if (product.active === 0) {
+          toast.error(t('err_product_disabled', 'This product is disabled.'));
+          setBarcodeInput('');
+          setSuggestions([]);
+          return;
+        }
         // A unit barcode (carton/pack) adds that unit; scanning it twice = 2 cartons.
         addToCart(product, product.matched_uom_id ?? null);
         setBarcodeInput('');
         setSuggestions([]);
       } else {
-        toast.error(t('product_not_found', 'Product Not Found'));
+        const err = await res.json().catch(() => ({}));
+        if (err?.code === 'PRODUCT_DISABLED') {
+          toast.error(translateServerError(err, t));
+          setBarcodeInput('');
+          setSuggestions([]);
+        } else {
+          toast.error(t('product_not_found', 'Product Not Found'));
+          // Keep a typed search editable, but select it so the next scan replaces it instead of
+          // being appended to the unknown code.
+          barcodeRef.current?.select();
+        }
       }
     } catch (err) {
       console.error(err);
@@ -553,9 +600,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   };
 
   const updateQuantity = (lineKey: string, delta: number) => {
+    const line = cart.find(i => i.line_key === lineKey);
+    const clamped = line && delta > 0 ? clampLineQty(line, line.quantity + delta) : null;
     setCart(prev => prev.map(item => {
       if (item.line_key === lineKey) {
-        const newQty = Math.max(0, item.quantity + delta);
+        const newQty = clamped != null ? clamped : Math.max(0, item.quantity + delta);
         return { ...item, quantity: newQty };
       }
       return item;
@@ -563,7 +612,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   };
 
   const setItemQuantity = (lineKey: string, qty: number) => {
-    setCart(prev => prev.map(item => item.line_key === lineKey ? { ...item, quantity: Math.max(0, qty) } : item)
+    const line = cart.find(i => i.line_key === lineKey);
+    const next = line ? clampLineQty(line, Math.max(0, qty)) : Math.max(0, qty);
+    setCart(prev => prev.map(item => item.line_key === lineKey ? { ...item, quantity: Math.max(0, next) } : item)
       .filter(item => item.quantity > 0));
   };
 
@@ -593,6 +644,18 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
   /** Switch a line to another unit of measure (null = base piece); merges into an existing line of that unit. */
   const setItemUnit = (lineKey: string, uomId: number | null) => {
+    // Stock guard: a bigger unit multiplies the pieces this line consumes.
+    let qtyOverride: number | null = null;
+    const cur = cart.find(i => i.line_key === lineKey);
+    if (cur && stockLimited(cur)) {
+      const newFactor = findUnit(cur, uomId)?.factor || 1;
+      const max = maxLineQty(cur, newFactor);
+      if (cur.quantity > max + 1e-9) {
+        toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(liveStock(cur)) }));
+        if (max <= 0) return;
+        qtyOverride = max;
+      }
+    }
     setCart(prev => {
       const line = prev.find(i => i.line_key === lineKey);
       if (!line) return prev;
@@ -607,11 +670,13 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         uom_factor: unit ? unit.factor : null,
       };
       delete moved.unit_price; // a per-unit override no longer applies to another unit
+      const movedQty = qtyOverride ?? line.quantity;
+      moved.quantity = movedQty;
       const target = prev.find(i => i.line_key === newKey);
       if (target) {
         return prev
           .filter(i => i.line_key !== lineKey)
-          .map(i => i.line_key === newKey ? { ...i, quantity: i.quantity + line.quantity } : i);
+          .map(i => i.line_key === newKey ? { ...i, quantity: i.quantity + movedQty } : i);
       }
       return prev.map(i => i.line_key === lineKey ? moved : i);
     });
@@ -672,6 +737,18 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const calculateItemTotal = (item: CartItem) => itemTotalIn(item as any, activeCode, activeRate) / activeRate;
   // Local-currency line total straight from the resolved LBP price (for the green "LL" line).
   const calculateItemTotalLBP = (item: CartItem) => itemTotalIn(item as any, localCode, lbpRate);
+
+  // allow_below_cost off: per-piece price after the line's own discount must not be under the product
+  // cost (the invoice-level discount is ignored, same as the server). Returns the cost per unit of the
+  // line's UoM when the line is below cost, else null.
+  const belowCostOf = (item: any): number | null => {
+    if (allowBelowCost) return null;
+    const cost = Number(item.cost) || 0;
+    if (cost <= 0 || !(item.quantity > 0)) return null;
+    const factor = item.uom_factor || 1;
+    const perPiece = itemTotalIn(item, 'USD', 1) / (item.quantity * factor);
+    return perPiece < cost - 1e-9 ? cost * factor : null;
+  };
 
   const subtotalActive = cart.reduce((sum, item) => sum + itemTotalIn(item as any, activeCode, activeRate), 0);
   const totalActive = applyGlobalDiscount(subtotalActive, activeRate);
@@ -796,10 +873,14 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
   const totalSelected = totalUSD * selectedCurrency.rate;
 
-  const categories = ['All', ...new Set(products.map(p => p.category))];
+  // POS catalog + search: never disabled products; optionally hide tracked products with no stock.
+  const sellableProducts = products.filter(p =>
+    p.active !== 0 && !(hideOutOfStock && p.track_inventory !== 0 && (p.stock ?? 0) <= 0));
+
+  const categories = ['All', ...new Set(sellableProducts.map(p => p.category))];
 
   const filteredProducts = (() => {
-    let result = products;
+    let result = sellableProducts;
 
     if (selectedCategory !== 'All') {
       result = result.filter(p => p.category === selectedCategory);
@@ -820,6 +901,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const handleCheckout = useCallback(async (paymentsArg: any[]) => {
+    const costly = cart.find(i => belowCostOf(i) != null);
+    if (costly) {
+      toast.error(t('pos_below_cost_blocked', '"{name}" is priced below its cost. Raise the price or remove the discount to continue.', { name: costly.name }));
+      return;
+    }
     // Credit-limit heads-up before submitting — the server is authoritative and will reject with
     // {code:'CREDIT_LIMIT'} if this check is stale or the setting changed server-side, but warning
     // up front saves the cashier a round trip.
@@ -896,7 +982,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     } finally {
       setIsProcessing(false);
     }
-  }, [selectedStakeholder, selectedStakeholderObj, creditLimit, cart, totalUSD, globalDiscount, fetchData, setShowCheckout, currentUser, showReceiptDialog, terminalId, priceLevel, confirm, t, toast]);
+  }, [allowBelowCost, selectedStakeholder, selectedStakeholderObj, creditLimit, cart, totalUSD, globalDiscount, fetchData, setShowCheckout, currentUser, showReceiptDialog, terminalId, priceLevel, confirm, t, toast]);
 
   const handleQuickCash = useCallback(() => {
     if (cart.length > 0 && !isProcessing) {
@@ -1205,6 +1291,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     setPriceLevel,
     allowPriceOverride,
     enforceMinPrice,
+    allowBelowCost,
+    allowNegativeStock,
+    hideOutOfStock,
+    belowCostOf,
+    sellableProducts,
     creditLimit,
     availableCredit,
     priceLevelsEnabled,

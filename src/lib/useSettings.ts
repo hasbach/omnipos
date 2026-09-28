@@ -58,7 +58,12 @@ export function useSettings() {
   // Default (key missing) = enabled, per spec.
   const priceLevelsEnabled = settings.enable_price_levels !== '0';
 
-  return { settings, loaded, priceLevelsEnabled };
+  // Stock / price guards (defaults reproduce the old behaviour).
+  const allowBelowCost = settings.allow_below_cost !== '0';
+  const allowNegativeStock = settings.allow_negative_stock !== '0';
+  const hideOutOfStock = settings.hide_out_of_stock === '1';
+
+  return { settings, loaded, priceLevelsEnabled, allowBelowCost, allowNegativeStock, hideOutOfStock };
 }
 
 export default useSettings;

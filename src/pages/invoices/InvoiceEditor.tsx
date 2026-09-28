@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Plus, Search, Trash2 } from 'lucide-react';
 import {
-  Modal, Button, Field, Input, Select, NumberInput, MoneyInput, Textarea, useToast, useConfirm,
+  Modal, Badge, Button, Field, Input, Select, NumberInput, MoneyInput, Textarea, useToast, useConfirm,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
@@ -223,6 +223,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     if (!q) return [] as Array<{ p: Product; unit: ProductUnit | null }>;
     const out: Array<{ p: Product; unit: ProductUnit | null }> = [];
     for (const p of products) {
+      if (!isPurchase && p.active === 0) continue; // disabled products can't be sold (purchases still allow them)
       const unitHit = (p.units || []).find((u) => (u.barcode || '').toLowerCase().includes(q));
       const baseHit = p.name.toLowerCase().includes(q)
         || (p.barcode || '').toLowerCase().includes(q)
@@ -232,7 +233,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       if (out.length >= 8) break;
     }
     return out;
-  }, [productSearch, products]);
+  }, [productSearch, products, isPurchase]);
 
   /** Switch a line to another unit of measure (null = base piece); reprices at the default for that unit. */
   const changeLineUnit = (key: string, uomId: number | null) => {
@@ -500,6 +501,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                         <span className="font-medium text-text">
                           {p.name}
                           {unit && <span className="ms-2 text-xs font-semibold text-primary">{unit.name} ×{unit.factor}</span>}
+                          {p.active === 0 && <Badge variant="neutral" className="ms-2">{t('prod_disabled_badge', 'Disabled')}</Badge>}
                         </span>
                         <span className="num text-xs text-text-3">{formatMoney(defaultLinePrice(p, unit, isPurchase, priceLevel, 1), USD)}</span>
                       </button>

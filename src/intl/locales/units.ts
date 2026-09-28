@@ -38,6 +38,9 @@ export default {
     err_uom_price_required: 'Enter a price for this unit.',
     err_uom_name_required: 'Enter a name for this unit.',
     err_uom_invalid: 'This unit is no longer available for the product. Reload and try again.',
+    err_below_cost: 'The price is below the product cost.',
+    err_insufficient_stock: 'Only {n} pcs in stock.',
+    err_product_disabled: 'This product is disabled.',
   },
   ar: {
     uom_piece: 'قطعة',
@@ -75,6 +78,9 @@ export default {
     err_uom_price_required: 'أدخل سعراً لهذه الوحدة.',
     err_uom_name_required: 'أدخل اسماً لهذه الوحدة.',
     err_uom_invalid: 'هذه الوحدة لم تعد متاحة لهذا المنتج. أعد التحميل وحاول مجدداً.',
+    err_below_cost: 'السعر أقل من تكلفة المنتج.',
+    err_insufficient_stock: 'المتوفر في المخزون {n} قطعة فقط.',
+    err_product_disabled: 'هذا المنتج معطَّل.',
   },
   fr: {
     uom_piece: 'Pièce',
@@ -112,5 +118,8 @@ export default {
     err_uom_price_required: 'Saisissez un prix pour cette unité.',
     err_uom_name_required: 'Saisissez un nom pour cette unité.',
     err_uom_invalid: "Cette unité n'est plus disponible pour ce produit. Rechargez et réessayez.",
+    err_below_cost: 'Le prix est inférieur au coût du produit.',
+    err_insufficient_stock: 'Seulement {n} pcs en stock.',
+    err_product_disabled: 'Ce produit est désactivé.',
   },
 };

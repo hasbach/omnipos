@@ -271,7 +271,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   const getProduct = (pid: number) => {
     if (!(pid in productCache)) {
       productCache[pid] = db.prepare(
-        "SELECT id, price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock FROM products WHERE id = ? AND tenant_id = ?"
+        "SELECT id, price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock, active FROM products WHERE id = ? AND tenant_id = ?"
       ).get(pid, tenantId) as any;
     }
     return productCache[pid];
@@ -303,6 +303,25 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     // Lines keep their old unit_cost for the same product (and unit); a newly-added product snapshots
     // the current cost (sale) or its own price (purchase — the cost paid IS this line's unit cost).
     const oldLine = oldByLine[`${item.product_id}:${uom ? uom.id : 'base'}`] ?? oldByProduct[item.product_id];
+
+    if (tx.type === 'sale') {
+      // A disabled product can't be ADDED to a sale (lines already on the invoice may stay).
+      if (product.active === 0 && !oldItems.some((oi) => oi.product_id === item.product_id)) {
+        throw new ValidationError(`Product ${item.product_id} is disabled.`, 400, { code: 'PRODUCT_DISABLED', field: `items.${idx}.product_id`, product_id: item.product_id });
+      }
+      // Optional guard: no sale line below cost (after the line's own discount; invoice-level discount ignored).
+      // Compared with the cost the line was SOLD at (its unit_cost snapshot), so a later cost increase
+      // doesn't make an old invoice uneditable; a newly-added line uses the current cost.
+      const refCost = oldLine ? (oldLine.unit_cost ?? 0) : (product.cost ?? 0);
+      if (settings.allow_below_cost === '0' && refCost > 0 && pieces > 0 && total / pieces < refCost - 1e-9) {
+        throw new ValidationError(
+          `Price for product ${item.product_id} is below its cost of ${refCost * factor}.`,
+          400,
+          { code: 'BELOW_COST', field: `items.${idx}.unit_price`, cost: refCost * factor }
+        );
+      }
+    }
+
     const unitCost = oldLine ? oldLine.unit_cost : (tx.type === 'purchase' ? unitPrice : (product.cost ?? null));
 
     return {
@@ -312,6 +331,32 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   });
 
   const finalTotal = computeTotals(lineTotals, body.discount, body.tax);
+
+  // Optional guard: an edit may not push a tracked product below zero stock. Only products whose stock goes
+  // DOWN because of this edit are checked, so an edit that doesn't worsen an already-negative product passes.
+  if (settings.allow_negative_stock === '0') {
+    const net = new Map<number, number>();
+    for (const old of oldItems) {
+      const product = getProduct(old.product_id);
+      if (!product || product.track_inventory === 0) continue;
+      net.set(old.product_id, (net.get(old.product_id) || 0) + (tx.type === 'sale' ? old.quantity : -old.quantity));
+    }
+    for (const item of processedItems) {
+      if (item.product.track_inventory === 0) continue;
+      net.set(item.product_id, (net.get(item.product_id) || 0) + (tx.type === 'sale' ? -item.pieces : item.pieces));
+    }
+    for (const [pid, delta] of net) {
+      const stock = getProduct(pid)?.stock || 0;
+      if (delta < -1e-9 && stock + delta < -1e-9) {
+        const lineIdx = processedItems.findIndex((it) => it.product_id === pid);
+        throw new ValidationError(
+          `Insufficient stock for product ${pid}: only ${stock} available.`,
+          409,
+          { code: 'INSUFFICIENT_STOCK', ...(lineIdx >= 0 ? { field: `items.${lineIdx}.quantity` } : {}), available: stock, product_id: pid }
+        );
+      }
+    }
+  }
 
   const run = db.transaction(() => {
     // --- Stock + WAC: reverse every OLD line's effect, then apply every NEW line's effect. ---

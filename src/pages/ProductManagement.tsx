@@ -31,6 +31,7 @@ import { ProductEditorDrawer } from './products/ProductEditorDrawer';
 import { BulkPriceModal } from './products/BulkPriceModal';
 
 type StockFilter = 'all' | 'low' | 'out' | 'service';
+type StatusFilter = 'all' | 'active' | 'disabled';
 
 function tf(str: string, vars: Record<string, string | number>): string {
   return str.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''));
@@ -50,6 +51,7 @@ export default function ProductManagement() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [showTiers, setShowTiers] = useState(true);
   // Multiple price levels can be turned off entirely (Settings → Sales & Pricing); when off the
   // wholesale/super-wholesale columns are hidden regardless of the "Show price levels" toggle.
@@ -94,12 +96,14 @@ export default function ProductManagement() {
         return false;
       }
       if (category && p.category !== category) return false;
+      if (statusFilter === 'active' && p.active === 0) return false;
+      if (statusFilter === 'disabled' && p.active !== 0) return false;
       if (stockFilter === 'service' && p.track_inventory !== 0) return false;
       if (stockFilter === 'low' && !(p.track_inventory !== 0 && p.stock > 0 && p.stock <= (p.reorder_point || 0))) return false;
       if (stockFilter === 'out' && !(p.track_inventory !== 0 && p.stock <= 0)) return false;
       return true;
     });
-  }, [products, search, category, stockFilter]);
+  }, [products, search, category, stockFilter, statusFilter]);
 
   const totalValueAtCost = useMemo(
     () => filtered.reduce((sum, p) => sum + (p.track_inventory !== 0 ? (p.stock || 0) * (p.cost || 0) : 0), 0),
@@ -186,6 +190,7 @@ export default function ProductManagement() {
             'Units/Pkg': p.units_per_package,
             Units: (p.units || []).map((u: any) => `${u.name} x${u.factor} @ ${u.price}${u.barcode ? ` [${u.barcode}]` : ''}`).join('; '),
             Stock: p.stock,
+            Active: p.active === 0 ? 'no' : 'yes',
           })),
         );
         const workbook = XLSX.utils.book_new();
@@ -221,8 +226,9 @@ export default function ProductManagement() {
     const cols: DataTableColumn<Product>[] = [
       { key: 'barcode', header: t('prod_col_barcode', 'Barcode'), sortable: true, render: (p) => <span className="font-mono text-xs text-text-3">{p.barcode || '—'}</span> },
       { key: 'name', header: t('prod_col_name', 'Name'), sortable: true, render: (p) => (
-        <div className="min-w-0">
-          <span className="font-medium text-text">{p.name}</span>
+        <div className={`min-w-0 ${p.active === 0 ? 'opacity-60' : ''}`}>
+          <span className={`font-medium ${p.active === 0 ? 'text-text-3' : 'text-text'}`}>{p.name}</span>
+          {p.active === 0 && <Badge variant="neutral" className="ms-2">{t('prod_disabled_badge', 'Disabled')}</Badge>}
           {p.units && p.units.length > 0 && (
             <div className="mt-0.5 flex flex-wrap gap-1">
               {p.units.map((u) => (
@@ -420,6 +426,17 @@ export default function ProductManagement() {
             { value: 'low', label: t('prod_filter_stock_low', 'Low stock') },
             { value: 'out', label: t('prod_filter_stock_out', 'Out of stock') },
             { value: 'service', label: t('prod_filter_stock_service', 'Service items') },
+          ]}
+          className="w-40"
+        />
+        <Select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          aria-label={t('prod_filter_status', 'Status')}
+          options={[
+            { value: 'all', label: t('prod_filter_status_all', 'All statuses') },
+            { value: 'active', label: t('prod_filter_status_active', 'Active') },
+            { value: 'disabled', label: t('prod_filter_status_disabled', 'Disabled') },
           ]}
           className="w-40"
         />

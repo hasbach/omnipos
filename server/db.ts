@@ -386,6 +386,8 @@ try { db.exec("ALTER TABLE archived_transactions ADD COLUMN terminal_id TEXT;");
 try { db.exec("ALTER TABLE archived_transactions ADD COLUMN terminal_sequence INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE users ADD COLUMN pin TEXT DEFAULT '0000';"); } catch {}
 try { db.exec("ALTER TABLE products ADD COLUMN track_inventory INTEGER DEFAULT 1;"); } catch {}
+// 1 = active, 0 = disabled (can't be sold; hidden from the POS; purchases/history keep working).
+try { db.exec("ALTER TABLE products ADD COLUMN active INTEGER DEFAULT 1;"); } catch {}
 try { db.exec("ALTER TABLE transactions ADD COLUMN idempotency_key TEXT;"); } catch {}
 // A refund needs to point back at the sale it's refunding — without it there's no way to verify
 // a refund's price/quantity against what was actually sold (see POST /api/transactions).

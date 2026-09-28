@@ -17,6 +17,9 @@ interface FormState {
   enforce_min_price: boolean;
   enforce_credit_limit: boolean;
   enable_price_levels: boolean;
+  allow_below_cost: boolean;
+  allow_negative_stock: boolean;
+  hide_out_of_stock: boolean;
 }
 
 function fromSettings(s: Record<string, string>): FormState {
@@ -28,6 +31,9 @@ function fromSettings(s: Record<string, string>): FormState {
     enforce_credit_limit: s.enforce_credit_limit === '1',
     // Missing key = enabled (default on), per spec.
     enable_price_levels: s.enable_price_levels !== '0',
+    allow_below_cost: s.allow_below_cost !== '0',
+    allow_negative_stock: s.allow_negative_stock !== '0',
+    hide_out_of_stock: s.hide_out_of_stock === '1',
   };
 }
 
@@ -51,6 +57,9 @@ export function SalesPricingSection({ settings, onSaved }: SalesPricingSectionPr
         enforce_min_price: form.enforce_min_price ? '1' : '0',
         enforce_credit_limit: form.enforce_credit_limit ? '1' : '0',
         enable_price_levels: form.enable_price_levels ? '1' : '0',
+        allow_below_cost: form.allow_below_cost ? '1' : '0',
+        allow_negative_stock: form.allow_negative_stock ? '1' : '0',
+        hide_out_of_stock: form.hide_out_of_stock ? '1' : '0',
       });
       toast.success(t('set_saved_toast'));
       invalidateSettingsCache();
@@ -122,6 +131,27 @@ export function SalesPricingSection({ settings, onSaved }: SalesPricingSectionPr
                 <p className="text-xs text-text-3">{t('set_enforce_credit_limit_help')}</p>
               </div>
               <Switch checked={form.enforce_credit_limit} onChange={(v) => setForm({ ...form, enforce_credit_limit: v })} />
+            </div>
+            <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+              <div className="pe-4">
+                <p className="text-sm font-medium text-text">{t('set_allow_below_cost')}</p>
+                <p className="text-xs text-text-3">{t('set_allow_below_cost_help')}</p>
+              </div>
+              <Switch checked={form.allow_below_cost} onChange={(v) => setForm({ ...form, allow_below_cost: v })} />
+            </div>
+            <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+              <div className="pe-4">
+                <p className="text-sm font-medium text-text">{t('set_allow_negative_stock')}</p>
+                <p className="text-xs text-text-3">{t('set_allow_negative_stock_help')}</p>
+              </div>
+              <Switch checked={form.allow_negative_stock} onChange={(v) => setForm({ ...form, allow_negative_stock: v })} />
+            </div>
+            <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+              <div className="pe-4">
+                <p className="text-sm font-medium text-text">{t('set_hide_out_of_stock')}</p>
+                <p className="text-xs text-text-3">{t('set_hide_out_of_stock_help')}</p>
+              </div>
+              <Switch checked={form.hide_out_of_stock} onChange={(v) => setForm({ ...form, hide_out_of_stock: v })} />
             </div>
           </div>
         </div>

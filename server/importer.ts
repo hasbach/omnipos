@@ -235,6 +235,7 @@ interface ProductPlanRow {
     stock: number;
     reorder_point: number;
     track_inventory: boolean;
+    active: boolean;
   };
   presentFields?: Set<string>;
 }
@@ -359,6 +360,9 @@ function planProducts(tenantId: number, rows: any[], mode: Mode): ImportBody {
     const trackInventoryParsed = parseBoolean(raw.track_inventory, true);
     if (trackInventoryParsed === INVALID) { errorOut("track_inventory must be yes/no.", "INVALID_VALUE", "track_inventory"); continue; }
 
+    const activeParsed = parseBoolean(raw.active, true);
+    if (activeParsed === INVALID) { errorOut("active must be yes/no.", "INVALID_VALUE", "active"); continue; }
+
     // --- barcodes ------------------------------------------------------
     const primaryBarcode = typeof raw.barcode === "string" ? raw.barcode.trim() : (raw.barcode != null ? String(raw.barcode).trim() : "");
     const extraBarcodesRaw = splitBarcodes(raw.barcodes);
@@ -456,6 +460,7 @@ function planProducts(tenantId: number, rows: any[], mode: Mode): ImportBody {
       stock,
       reorder_point: reorderPoint,
       track_inventory: trackInventoryParsed as boolean,
+      active: activeParsed as boolean,
     };
 
     // --- warnings ----------------------------------------------------------
@@ -482,6 +487,7 @@ function planProducts(tenantId: number, rows: any[], mode: Mode): ImportBody {
     if (present(raw, "package_barcode")) presentFields.add("package_barcode");
     if (present(raw, "reorder_point")) presentFields.add("reorder_point");
     if (present(raw, "track_inventory")) presentFields.add("track_inventory");
+    if (present(raw, "active")) presentFields.add("active");
     if (present(raw, "barcode")) presentFields.add("barcode");
     if (present(raw, "barcodes")) presentFields.add("barcodes");
     if (present(raw, "stock")) presentFields.add("stock");
@@ -527,8 +533,8 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
     INSERT INTO products (
       tenant_id, barcode, name, price, price_lbp, package_price, package_price_lbp, cost,
       units_per_package, stock, reorder_point, track_inventory, category, unit,
-      price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
   const insertAdjustment = db.prepare(
@@ -543,7 +549,7 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
       const result = insertProduct.run(
         tenantId, d.barcode, d.name, d.price, d.price_lbp, d.package_price, d.package_price_lbp, d.cost,
         d.units_per_package, d.stock, d.reorder_point, d.track_inventory ? 1 : 0, d.category, d.unit,
-        d.price_wholesale, d.price_wholesale_lbp, d.price_super_wholesale, d.price_super_wholesale_lbp, d.min_price
+        d.price_wholesale, d.price_wholesale_lbp, d.price_super_wholesale, d.price_super_wholesale_lbp, d.min_price, d.active ? 1 : 0
       );
       const productId = Number(result.lastInsertRowid);
       for (const bc of d.extraBarcodes) {
@@ -567,12 +573,12 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
         price_super_wholesale: "price_super_wholesale", price_super_wholesale_lbp: "price_super_wholesale_lbp",
         package_price: "package_price", package_price_lbp: "package_price_lbp",
         min_price: "min_price", category: "category", unit: "unit",
-        units_per_package: "units_per_package", reorder_point: "reorder_point", track_inventory: "track_inventory",
+        units_per_package: "units_per_package", reorder_point: "reorder_point", track_inventory: "track_inventory", active: "active",
       };
       for (const field of Object.keys(colFor)) {
         if (pf.has(field)) {
           sets.push(`${colFor[field]} = ?`);
-          params.push(field === "track_inventory" ? (d.track_inventory ? 1 : 0) : (d as any)[field]);
+          params.push(field === "track_inventory" ? (d.track_inventory ? 1 : 0) : field === "active" ? (d.active ? 1 : 0) : (d as any)[field]);
         }
       }
       if (pf.has("barcode")) {

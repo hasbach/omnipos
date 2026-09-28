@@ -49,6 +49,7 @@ const EXAMPLE_VALUES: Record<string, string | number> = {
   stock: 100,
   reorder_point: 20,
   track_inventory: 'yes',
+  active: 'yes',
   phone: '+961 70 123 456',
   email: 'contact@example.com',
   address: 'Beirut, Lebanon',

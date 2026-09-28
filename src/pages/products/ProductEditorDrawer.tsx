@@ -40,6 +40,7 @@ interface FormState {
   category: string;
   unit: string;
   track_inventory: 0 | 1;
+  active: 0 | 1;
   reorder_point: number;
   cost: number;
   cost_lbp: number;
@@ -63,6 +64,7 @@ function blankForm(): FormState {
     category: '',
     unit: 'pcs',
     track_inventory: 1,
+    active: 1,
     reorder_point: 0,
     cost: 0,
     cost_lbp: 0,
@@ -88,6 +90,7 @@ function fromProduct(p: Product): FormState {
     category: p.category || '',
     unit: p.unit || 'pcs',
     track_inventory: p.track_inventory === 0 ? 0 : 1,
+    active: p.active === 0 ? 0 : 1,
     reorder_point: p.reorder_point || 0,
     cost: p.cost || 0,
     cost_lbp: p.cost_lbp || 0,
@@ -206,6 +209,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
         category: form.category || 'General',
         unit: form.unit || 'pcs',
         track_inventory: form.track_inventory,
+        active: form.active,
         reorder_point: form.track_inventory === 0 ? 0 : form.reorder_point,
         cost: form.cost,
         cost_lbp: form.cost_lbp,
@@ -339,6 +343,14 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 <Field label={t('prod_unit', 'Unit')}>
                   <Input value={form.unit} onChange={(e) => update({ unit: e.target.value })} placeholder={t('prod_unit_placeholder')} />
                 </Field>
+              </div>
+
+              <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 px-4 py-3">
+                <div className="pe-4">
+                  <p className="text-sm font-medium text-text">{t('prod_active', 'Active')}</p>
+                  <p className="text-xs text-text-3">{t('prod_active_helper', "Disabled products can't be sold and are hidden from the POS; purchases and history keep working.")}</p>
+                </div>
+                <Switch checked={form.active === 1} onChange={(checked) => update({ active: checked ? 1 : 0 })} />
               </div>
 
               <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 px-4 py-3">

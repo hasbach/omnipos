@@ -875,13 +875,14 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.post("/api/products", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active } = req.body;
 
     try {
       const productId = db.transaction(() => {
         const result = db.prepare("INSERT INTO products (tenant_id, barcode, name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(tenantId, null, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, stock, reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null);
         const newId = Number(result.lastInsertRowid);
+        if (active !== undefined && active !== null) db.prepare("UPDATE products SET active = ? WHERE id = ? AND tenant_id = ?").run(active === 0 || active === false || active === '0' ? 0 : 1, newId, tenantId);
         saveProductBarcodesAndUnits(tenantId, newId, true, barcodes, units);
         return newId;
       })();
@@ -898,7 +899,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.put("/api/products/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { id } = req.params;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active } = req.body;
 
     try {
       db.transaction(() => {
@@ -911,6 +912,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         // Same tolerance as before for an unknown id (a no-op update), but never touch barcodes/units
         // of a product that isn't this tenant's.
         if (info.changes > 0) saveProductBarcodesAndUnits(tenantId, Number(id), false, barcodes, units);
+        // `active` is optional: absent leaves the product's enabled/disabled state unchanged.
+        if (info.changes > 0 && active !== undefined && active !== null) {
+          db.prepare("UPDATE products SET active = ? WHERE id = ? AND tenant_id = ?").run(active === 0 || active === false || active === '0' ? 0 : 1, id, tenantId);
+        }
       })();
 
       logAction(tenantId, 1, 'Product Updated', `ID: ${id}, Name: ${name}, Price: ${price}, Stock: ${stock}`);
@@ -1031,6 +1036,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
     if (!product) {
       product = db.prepare("SELECT * FROM products WHERE name LIKE ? AND tenant_id = ? COLLATE NOCASE LIMIT 1").get(`%${query}%`, tenantId);
+    }
+
+    if (product && product.active === 0) {
+      return res.status(404).json({ error: "This product is disabled.", code: 'PRODUCT_DISABLED', product_id: product.id, name: product.name });
     }
 
     if (product) {
@@ -1366,7 +1375,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const getProduct = (id: number) => {
         if (!(id in productCache)) {
           productCache[id] = db.prepare(
-            "SELECT price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock FROM products WHERE id = ? AND tenant_id = ?"
+            "SELECT price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock, active FROM products WHERE id = ? AND tenant_id = ?"
           ).get(id, tenantId) as any;
         }
         return productCache[id];
@@ -1402,6 +1411,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         let unitCost: number | null = null;
 
         if (type === 'sale' && product) {
+          if (product.active === 0) {
+            throw new ValidationError(`Product ${item.id} is disabled.`, 400, { code: 'PRODUCT_DISABLED', field: `items.${idx}.id`, product_id: item.id });
+          }
           // Price of ONE unit of the line's UoM (one piece for base lines, which also get the
           // automatic pack/carton break).
           let perUnit = uom
@@ -1432,6 +1444,15 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           // higher than the payments actually collected on any discounted line item, which
           // silently overstates recorded revenue in every report and end-of-day reconciliation.
           itemTotal = lineTotal(perUnit, item.quantity, { type: discountType as any, value: discountValue });
+          // Optional guard: no sale line below cost (after the line's own discount; the invoice-level
+          // discount is deliberately not considered).
+          if (settings.allow_below_cost === '0' && product.cost > 0 && pieces > 0 && itemTotal / pieces < product.cost - 1e-9) {
+            throw new ValidationError(
+              `Price for product ${item.id} is below its cost of ${product.cost * factor}.`,
+              400,
+              { code: 'BELOW_COST', field: `items.${idx}.unit_price`, cost: product.cost * factor }
+            );
+          }
           unitCost = product.cost ?? null; // USD cost snapshot for COGS (per piece)
         } else if (type === 'refund' && refundAlloc) {
           // Re-derive price AND discount from the original sale line (validated above) — never trust
@@ -1492,6 +1513,29 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           trackInventory: product ? product.track_inventory : 1, ...uomFields, originalItemId: null as number | null,
         }];
       });
+
+      // Optional guard: a sale may not leave a tracked product below zero stock (pieces summed across
+      // all of the request's lines for that product).
+      if (type === 'sale' && settings.allow_negative_stock === '0') {
+        const need = new Map<number, { total: number; firstIdx: number }>();
+        processedItems.forEach((pi: any, i: number) => {
+          if (pi.trackInventory === 0) return;
+          const e = need.get(pi.productId);
+          if (e) e.total += pi.pieces; else need.set(pi.productId, { total: pi.pieces, firstIdx: i });
+        });
+        for (const [pid, e] of need) {
+          const prod = getProduct(pid);
+          if (!prod) continue;
+          const available = prod.stock || 0;
+          if (available - e.total < -1e-9) {
+            throw new ValidationError(
+              `Insufficient stock for product ${pid}: only ${available} available.`,
+              409,
+              { code: 'INSUFFICIENT_STOCK', field: `items.${e.firstIdx}.quantity`, available, product_id: pid }
+            );
+          }
+        }
+      }
 
       // Apply global discount/tax if any (bounds validated above) — exactly the same math as
       // before, now shared with PUT /api/transactions/:id via server/pricing.ts.
@@ -1645,6 +1689,28 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tx = db.prepare("SELECT * FROM transactions WHERE id = ? AND tenant_id = ?").get(id, tenantId) as any;
     if (!tx) return res.status(404).json({ error: "Transaction not found" });
 
+    const assertDeleteAllowed = () => {
+      // Optional guard: deleting a purchase/refund takes its stock back out — refuse if that would leave a
+      // tracked product below zero.
+      if (tx.type !== 'sale' && getSettingsMap(tenantId).allow_negative_stock === '0') {
+        const lines = db.prepare(`
+          SELECT ti.product_id, ti.quantity, p.track_inventory, p.stock FROM transaction_items ti
+          JOIN products p ON p.id = ti.product_id WHERE ti.transaction_id = ?
+        `).all(id) as any[];
+        const removed = new Map<number, { total: number; stock: number }>();
+        for (const l of lines) {
+          if (l.track_inventory === 0) continue;
+          const en = removed.get(l.product_id);
+          if (en) en.total += l.quantity; else removed.set(l.product_id, { total: l.quantity, stock: l.stock || 0 });
+        }
+        for (const [pid, en] of removed) {
+          if (en.stock - en.total < -1e-9) {
+            throw new ValidationError(`Deleting this invoice would leave product ${pid} with negative stock.`, 409, { code: 'INSUFFICIENT_STOCK', available: en.stock, product_id: pid });
+          }
+        }
+      }
+    };
+
     const deleteTx = db.transaction(() => {
       // Restore stock
       const items = db.prepare(`
@@ -1683,6 +1749,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // concurrent sync pull can't re-insert the row we're removing. Best-effort: if the cloud
       // call fails (e.g. offline) we still delete locally so the app keeps working; the row may
       // resync later, which is the same offline limitation the settlement flow has.
+      assertDeleteAllowed(); // before touching the cloud copy
       let cloudDeleted = true;
       if (tx.global_id) {
         try {
@@ -1700,6 +1767,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       broadcast({ type: 'STAKEHOLDERS_UPDATED' }, tenantId);
       res.json({ success: true, cloudDeleted });
     } catch (error: any) {
+      if (error instanceof ValidationError) return res.status(error.status).json(validationErrorBody(error));
       res.status(500).json({ error: error.message });
     }
   });
@@ -2550,7 +2618,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const { product_id, new_qty, delta, reason } = req.body;
 
-    const product = db.prepare("SELECT id, stock, cost FROM products WHERE id = ? AND tenant_id = ?").get(product_id, tenantId) as any;
+    const product = db.prepare("SELECT id, stock, cost, track_inventory FROM products WHERE id = ? AND tenant_id = ?").get(product_id, tenantId) as any;
     if (!product) return res.status(404).json({ error: "Product not found." });
 
     const qtyBefore = product.stock || 0;
@@ -2565,6 +2633,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       return res.status(400).json({ error: "Provide either new_qty or delta." });
     }
     const appliedDelta = qtyAfter - qtyBefore;
+    // Optional guard: a manual correction may not push a tracked product below zero (an already
+    // negative product may still be corrected upwards).
+    if (getSettingsMap(tenantId).allow_negative_stock === '0' && product.track_inventory !== 0 && qtyAfter < -1e-9 && appliedDelta < 0) {
+      return res.status(409).json({
+        error: "Stock can't go below zero.",
+        code: 'INSUFFICIENT_STOCK',
+        field: (new_qty !== undefined && new_qty !== null) ? 'new_qty' : 'delta',
+        available: qtyBefore,
+        product_id: product.id,
+      });
+    }
     const userId = tenantUserId(tenantId, req.body.user_id);
 
     const run = db.transaction(() => {

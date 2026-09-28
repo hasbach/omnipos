@@ -28,6 +28,9 @@ export default {
 
     pos_override_price: 'Override unit price',
     pos_below_min_price: 'Price is below the minimum price ({min}) for this product.',
+    pos_below_cost: 'Below cost ({cost}) - raise the price to sell this product.',
+    pos_below_cost_blocked: '"{name}" is priced below its cost. Raise the price or remove the discount to continue.',
+    pos_only_n_in_stock: 'Only {n} pcs in stock',
 
     pos_edit_customer: 'Edit Customer',
     pos_add_customer: 'Quick Add Customer',
@@ -205,6 +208,9 @@ export default {
 
     pos_override_price: 'تعديل سعر الوحدة',
     pos_below_min_price: 'السعر أقل من الحد الأدنى ({min}) لهذا المنتج.',
+    pos_below_cost: 'أقل من التكلفة ({cost}) - ارفع السعر لبيع هذا المنتج.',
+    pos_below_cost_blocked: 'سعر "{name}" أقل من تكلفته. ارفع السعر أو أزل الخصم للمتابعة.',
+    pos_only_n_in_stock: 'المتوفر في المخزون {n} قطعة فقط',
 
     pos_edit_customer: 'تعديل العميل',
     pos_add_customer: 'إضافة عميل سريعة',
@@ -382,6 +388,9 @@ export default {
 
     pos_override_price: 'Modifier le prix unitaire',
     pos_below_min_price: 'Le prix est inférieur au prix minimum ({min}) pour ce produit.',
+    pos_below_cost: 'Sous le coût ({cost}) - augmentez le prix pour vendre ce produit.',
+    pos_below_cost_blocked: '« {name} » est vendu sous son coût. Augmentez le prix ou retirez la remise pour continuer.',
+    pos_only_n_in_stock: 'Seulement {n} pcs en stock',
 
     pos_edit_customer: 'Modifier le client',
     pos_add_customer: 'Ajout rapide de client',

@@ -15,7 +15,7 @@ const QUICK_CASH_STEPS = [5, 10, 20, 50, 100];
 export default function PaymentModal() {
   const pos = usePosContext();
   const {
-    products, cart, barcodeInput, setBarcodeInput, isProcessing,
+    products, sellableProducts, cart, barcodeInput, setBarcodeInput, isProcessing,
     currencies = CURRENCIES, selectedCurrency, showCheckout, setShowCheckout, payments, setPayments,
     paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency,
     showAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, setIsPriceChecker,
@@ -137,7 +137,7 @@ export default function PaymentModal() {
                       const val = e.target.value;
                       setBarcodeInput(val);
                       if (val.length > 1) {
-                        const fuse = new Fuse(products, { keys: ['name', 'barcode', 'barcodes', 'units.barcode'], threshold: 0.3 });
+                        const fuse = new Fuse(sellableProducts || products, { keys: ['name', 'barcode', 'barcodes', 'units.barcode'], threshold: 0.3 });
                         setSuggestions(fuse.search(val).map((r: any) => r.item).slice(0, 5));
                       } else {
                         setSuggestions([]);

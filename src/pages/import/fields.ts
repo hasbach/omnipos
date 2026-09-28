@@ -264,6 +264,20 @@ export const PRODUCT_FIELDS: FieldDef[] = [
       'suivre le stock', 'article de service', 'produit physique',
     ],
   },
+  {
+    key: 'active',
+    required: false,
+    type: 'boolean',
+    labelKey: 'imp_field_active',
+    labelFallback: 'Active?',
+    hintKey: 'imp_hint_yes_no',
+    hintFallback: 'Yes/No',
+    aliases: [
+      'active', 'enabled', 'status', 'is active', 'is enabled',
+      'نشط', 'فعال', 'مفعل', 'الحالة', 'مفعّل',
+      'actif', 'activé', 'statut',
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
