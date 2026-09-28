@@ -1,60 +1,23 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 
-import { 
-  LayoutDashboard, 
-  Package, 
-  Users, 
-  FileText, 
-  BarChart3, 
-  Settings as SettingsIcon,
-  Plus,
-  Edit2,
-  Trash2,
-  Save,
-  X,
-  Search,
-  ArrowLeft,
-  ShoppingCart,
-  Sun,
-  Moon,
-  Globe,
-  Coins,
-  ClipboardList,
-  Activity,
-  Zap,
-  Wallet,
-  CalendarCheck,
-  RotateCcw,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Printer,
-  Download,
-  Upload,
-  Shield,
-  Monitor,
-  RefreshCw,
-  Clock,
-  ArrowRight
-} from 'lucide-react';
+import { AlertCircle, ArrowRight, Clock, RefreshCw } from 'lucide-react';
 
 import { motion, AnimatePresence } from 'motion/react';
 
-import { Product, Stakeholder, Currency, Tenant } from './types';
+import { Tenant } from './types';
 
-import { Link, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Link, Routes, Route } from 'react-router-dom';
 
 import WindowFrame from './components/WindowFrame';
 
 import { useTheme } from './hooks/useTheme';
 
-import { translations, Language } from './i18n';
+import { I18nProvider, useI18n, type Language } from './intl/index';
+import { ToastProvider } from './components/ui/ToastProvider';
+import { ConfirmProvider } from './components/ui/ConfirmDialog';
+import { Sidebar } from './components/shell/Sidebar';
+import { TopBar } from './components/shell/TopBar';
 
-import * as XLSX from 'xlsx';
-
-import { jsPDF } from 'jspdf';
-
-import 'jspdf-autotable';
 import LiveMonitor from './pages/LiveMonitor';
 import DailySales from './pages/DailySales';
 import Overview from './pages/Overview';
@@ -69,11 +32,189 @@ import CashFlowRegister from './pages/CashFlowRegister';
 import Settlement from './pages/Settlement';
 import UserLogs from './pages/UserLogs';
 import Settings from './pages/Settings';
+import UiKit from './pages/UiKit';
 
+function DashboardShell({
+  tenant,
+  language,
+  onLanguageChange,
+  showUpdateModal,
+  setShowUpdateModal,
+  updateVersion,
+  isUpdating,
+  scheduleForm,
+  setScheduleForm,
+  handleInstallUpdate,
+  handleScheduleUpdate,
+}: {
+  tenant: Tenant | null;
+  language: Language;
+  onLanguageChange: (lang: Language) => void;
+  showUpdateModal: boolean;
+  setShowUpdateModal: (v: boolean) => void;
+  updateVersion: string;
+  isUpdating: boolean;
+  scheduleForm: { date: string; time: string };
+  setScheduleForm: React.Dispatch<React.SetStateAction<{ date: string; time: string }>>;
+  handleInstallUpdate: () => void;
+  handleScheduleUpdate: () => void;
+}) {
+  const { t } = useI18n();
+  const [isDarkMode, setIsDarkMode] = useTheme();
+
+  const isLicenseExpired = (type: string, expiry?: string) => {
+    if (type === 'lifetime') return false;
+    if (!expiry) return true;
+    return new Date(expiry) < new Date();
+  };
+
+  if (tenant && tenant.email !== 'hasbach' && isLicenseExpired(tenant.local_license_type, tenant.local_license_expiry)) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-bg p-6">
+        <div className="max-w-md w-full bg-surface border border-border rounded-2xl p-8 text-center space-y-6 shadow-xl">
+          <div className="w-20 h-20 bg-danger-soft text-danger rounded-full flex items-center justify-center mx-auto">
+            <AlertCircle size={40} />
+          </div>
+          <h2 className="text-2xl font-bold">{t('shell_license_expired_title')}</h2>
+          <p className="text-text-3 text-sm">{t('shell_license_expired_body')}</p>
+          <Link to="/" className="block w-full py-3 bg-primary text-on-primary rounded-xl font-semibold hover:bg-primary-hover transition-colors">
+            {t('shell_license_back_to_terminal')}
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full bg-bg text-text font-sans transition-colors duration-300">
+      <Sidebar />
+
+      <div className="flex flex-1 flex-col min-w-0">
+        <TopBar
+          isDarkMode={isDarkMode}
+          onToggleTheme={setIsDarkMode}
+          onOpenPos={() => window.open('/', '_blank')}
+        />
+
+        <main className="flex-1 overflow-y-auto p-6">
+          <Routes>
+            <Route path="/" element={<Overview />} />
+            <Route path="/live" element={<LiveMonitor />} />
+            <Route path="/daily-sales" element={<DailySales />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/products" element={<ProductManagement />} />
+            <Route path="/stock" element={<StockManagement />} />
+            <Route path="/purchases" element={<PurchaseManagement />} />
+            <Route path="/stakeholders" element={<StakeholderManagement />} />
+            <Route path="/users" element={<UserManagement />} />
+            <Route path="/invoices" element={<InvoiceManagement />} />
+            <Route path="/cash-flow" element={<CashFlowRegister />} />
+            <Route path="/settlement" element={<Settlement />} />
+            <Route path="/logs" element={<UserLogs />} />
+            <Route path="/settings" element={<Settings onShowUpdate={() => setShowUpdateModal(true)} />} />
+            <Route path="/ui-kit" element={<UiKit />} />
+          </Routes>
+        </main>
+      </div>
+
+      {/* Update Modal */}
+      <AnimatePresence>
+        {showUpdateModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => !isUpdating && setShowUpdateModal(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md bg-surface border border-border rounded-2xl overflow-hidden shadow-[var(--shadow-modal)]"
+            >
+              <div className="p-8 text-center space-y-6">
+                <div className="w-20 h-20 bg-primary-soft text-primary rounded-full flex items-center justify-center mx-auto">
+                  <RefreshCw size={40} className={isUpdating ? 'animate-spin' : ''} />
+                </div>
+
+                <div className="space-y-2">
+                  <h2 className="text-xl font-bold">{t('shell_update_available_title')}</h2>
+                  <p className="text-text-3 text-sm">
+                    {t('shell_update_available_body')
+                      .replace('{version}', updateVersion)
+                      .replace('{current}', tenant?.current_version || '')}
+                  </p>
+                </div>
+
+                {isUpdating ? (
+                  <div className="py-4 space-y-4">
+                    <div className="h-2 w-full bg-surface-2 rounded-full overflow-hidden">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: '100%' }}
+                        transition={{ duration: 2 }}
+                        className="h-full bg-primary"
+                      />
+                    </div>
+                    <p className="text-xs font-medium uppercase tracking-widest animate-pulse text-text-3">
+                      {t('shell_update_installing')}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <button
+                      onClick={handleInstallUpdate}
+                      className="w-full py-3 bg-primary text-on-primary rounded-xl font-semibold hover:bg-primary-hover transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      {t('shell_update_install_now')} <ArrowRight size={18} />
+                    </button>
+
+                    <div className="p-5 bg-surface-2 rounded-2xl border border-border space-y-4">
+                      <div className="flex items-center gap-2 text-xs font-medium uppercase text-text-3">
+                        <Clock size={14} /> {t('shell_update_schedule_for_later')}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="date"
+                          className="bg-surface border border-border rounded-lg p-2 text-xs outline-none focus:border-primary transition-colors"
+                          value={scheduleForm.date}
+                          onChange={(e) => setScheduleForm({ ...scheduleForm, date: e.target.value })}
+                        />
+                        <input
+                          type="time"
+                          className="bg-surface border border-border rounded-lg p-2 text-xs outline-none focus:border-primary transition-colors"
+                          value={scheduleForm.time}
+                          onChange={(e) => setScheduleForm({ ...scheduleForm, time: e.target.value })}
+                        />
+                      </div>
+                      <button
+                        onClick={handleScheduleUpdate}
+                        className="w-full py-2 border border-border rounded-lg text-xs font-semibold uppercase tracking-widest hover:bg-primary hover:text-on-primary hover:border-primary transition-colors cursor-pointer"
+                      >
+                        {t('shell_update_confirm_schedule')}
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => setShowUpdateModal(false)}
+                      className="text-xs font-medium uppercase tracking-widest text-text-3 hover:text-text transition-colors cursor-pointer"
+                    >
+                      {t('shell_update_remind_later')}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 export default function Dashboard() {
-  const navigate = useNavigate();
-  const location = useLocation();
   const [language, setLanguage] = useState<Language>('en');
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -116,15 +257,15 @@ export default function Dashboard() {
     // Real-time Sync
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(`${protocol}//${window.location.host}`);
-    
+
     socket.onopen = () => {
       fetch('/api/auth/me')
         .then(res => res.json())
         .then(tenant => {
-          socket.send(JSON.stringify({ 
-            type: 'IDENTIFY', 
+          socket.send(JSON.stringify({
+            type: 'IDENTIFY',
             tenantId: tenant.tenantId,
-            isMonitor: true 
+            isMonitor: true
           }));
         });
     };
@@ -151,7 +292,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!tenant) return;
-    
+
     const checkScheduledUpdate = () => {
       if (tenant.scheduled_update_at) {
         const scheduledTime = new Date(tenant.scheduled_update_at).getTime();
@@ -164,7 +305,7 @@ export default function Dashboard() {
 
     const interval = setInterval(checkScheduledUpdate, 60000);
     checkScheduledUpdate();
-    
+
     return () => clearInterval(interval);
   }, [tenant]);
 
@@ -200,194 +341,36 @@ export default function Dashboard() {
     }
   };
 
-  const t = translations[language];
-
-  const isLicenseExpired = (type: string, expiry?: string) => {
-    if (type === 'lifetime') return false;
-    if (!expiry) return true;
-    return new Date(expiry) < new Date();
+  const handleLanguageChange = (next: Language) => {
+    setLanguage(next);
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: next }),
+    }).catch((err) => console.error('Language save error:', err));
   };
 
-  if (tenant && tenant.email !== 'hasbach' && isLicenseExpired(tenant.local_license_type, tenant.local_license_expiry)) {
-    return (
-      <div className="h-screen w-screen flex items-center justify-center bg-app-bg p-6">
-        <div className="max-w-md w-full bg-app-surface border border-app-border rounded-2xl p-8 text-center space-y-6 shadow-xl">
-          <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto">
-            <AlertCircle size={40} />
-          </div>
-          <h2 className="text-2xl font-black uppercase tracking-tight">Software License Expired</h2>
-          <p className="opacity-50 text-sm">Your local software license has expired. Please contact the administrator to renew your subscription.</p>
-          <Link to="/" className="block w-full py-4 bg-app-ink text-app-bg rounded-xl font-black uppercase tracking-widest hover:opacity-90 transition-all">
-            Back to Terminal
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const navItems = [
-    { name: t.dashboard, icon: LayoutDashboard, path: '/dashboard' },
-    { name: 'Cash Flow', icon: Wallet, path: '/dashboard/cash-flow' },
-    { name: t.invoices, icon: FileText, path: '/dashboard/invoices' },
-    { name: 'Live Monitor', icon: Activity, path: '/dashboard/live' },
-    { name: 'Daily Sales', icon: BarChart3, path: '/dashboard/daily-sales' },
-    { name: 'Reports', icon: FileText, path: '/dashboard/reports' },
-    { name: t.products, icon: Package, path: '/dashboard/products' },
-    { name: 'Stock Management', icon: ClipboardList, path: '/dashboard/stock' },
-    { name: 'Purchases', icon: ShoppingCart, path: '/dashboard/purchases' },
-    { name: t.stakeholders, icon: Users, path: '/dashboard/stakeholders' },
-    { name: 'Team', icon: Shield, path: '/dashboard/users' },
-    { name: 'Settlement', icon: CalendarCheck, path: '/dashboard/settlement' },
-    { name: 'User Logs', icon: ClipboardList, path: '/dashboard/logs' },
-    { name: t.settings, icon: SettingsIcon, path: '/dashboard/settings' },
-  ];
-
   return (
-    <WindowFrame title="OmniPOS Admin Dashboard" icon={<LayoutDashboard size={14} />}>
-      <div className="flex h-full bg-app-bg text-app-ink font-sans transition-colors duration-300">
-        {/* Sidebar */}
-      <aside className="w-64 bg-app-surface border-r border-app-border flex flex-col transition-colors duration-300">
-        <div className="p-6 border-b border-app-border flex items-center gap-2">
-            <div className="w-8 h-8 bg-app-ink text-app-bg rounded flex items-center justify-center font-black">Ω</div>
-            <span className="font-black tracking-tighter text-xl">ADMIN</span>
-        </div>
-
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto min-h-0">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path || (item.path !== '/dashboard' && location.pathname.startsWith(item.path));
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                replace
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
-                  isActive 
-                    ? 'bg-app-ink text-app-bg shadow-lg' 
-                    : 'opacity-50 hover:opacity-100 hover:bg-app-bg'
-                }`}
-              >
-                <item.icon size={18} />
-                {item.name}
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="p-6 border-t border-app-border text-[10px] uppercase tracking-widest font-black opacity-30">
-          OmniPOS v2.5.0
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 overflow-y-auto bg-app-bg/50 p-8 flex flex-col">
-        <div className="flex-1 h-full">
-        <Routes>
-          <Route path="/" element={<Overview />} />
-          <Route path="/live" element={<LiveMonitor />} />
-          <Route path="/daily-sales" element={<DailySales />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/products" element={<ProductManagement />} />
-          <Route path="/stock" element={<StockManagement />} />
-          <Route path="/purchases" element={<PurchaseManagement />} />
-          <Route path="/stakeholders" element={<StakeholderManagement />} />
-          <Route path="/users" element={<UserManagement />} />
-          <Route path="/invoices" element={<InvoiceManagement />} />
-          <Route path="/cash-flow" element={<CashFlowRegister />} />
-          <Route path="/settlement" element={<Settlement />} />
-          <Route path="/logs" element={<UserLogs />} />
-          <Route path="/settings" element={<Settings onShowUpdate={() => setShowUpdateModal(true)} />} />
-        </Routes>
-        </div>
-      </main>
-    </div>
-
-    {/* Update Modal */}
-    <AnimatePresence>
-      {showUpdateModal && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-app-ink/80 backdrop-blur-sm"
-            onClick={() => !isUpdating && setShowUpdateModal(false)}
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="relative w-full max-w-md bg-app-surface border border-app-border rounded-3xl overflow-hidden shadow-2xl"
-          >
-            <div className="p-8 text-center space-y-6">
-              <div className="w-20 h-20 bg-app-ink text-app-bg rounded-full flex items-center justify-center mx-auto">
-                <RefreshCw size={40} className={isUpdating ? 'animate-spin' : ''} />
-              </div>
-              
-              <div className="space-y-2">
-                <h2 className="text-2xl font-black uppercase tracking-tight">Update Available</h2>
-                <p className="opacity-50 text-sm">A new version of OmniPOS ({updateVersion}) is ready to be installed. Your current version is {tenant?.current_version}.</p>
-              </div>
-
-              {isUpdating ? (
-                <div className="py-4 space-y-4">
-                  <div className="h-2 w-full bg-app-bg rounded-full overflow-hidden">
-                    <motion.div 
-                      initial={{ width: 0 }}
-                      animate={{ width: '100%' }}
-                      transition={{ duration: 2 }}
-                      className="h-full bg-app-ink"
-                    />
-                  </div>
-                  <p className="text-[10px] font-black uppercase tracking-widest animate-pulse">Installing updates... Please wait</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <button 
-                    onClick={handleInstallUpdate}
-                    className="w-full py-4 bg-app-ink text-app-bg rounded-xl font-black uppercase tracking-widest hover:opacity-90 transition-all flex items-center justify-center gap-2"
-                  >
-                    Install Now <ArrowRight size={18} />
-                  </button>
-                  
-                  <div className="p-6 bg-app-bg rounded-2xl border border-app-border/10 space-y-4">
-                    <div className="flex items-center gap-2 text-[10px] font-black uppercase opacity-40">
-                      <Clock size={14} /> Schedule for later
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input 
-                        type="date" 
-                        className="bg-app-surface border border-app-border rounded-lg p-2 text-xs outline-none focus:border-app-ink transition-all"
-                        value={scheduleForm.date}
-                        onChange={e => setScheduleForm({...scheduleForm, date: e.target.value})}
-                      />
-                      <input 
-                        type="time" 
-                        className="bg-app-surface border border-app-border rounded-lg p-2 text-xs outline-none focus:border-app-ink transition-all"
-                        value={scheduleForm.time}
-                        onChange={e => setScheduleForm({...scheduleForm, time: e.target.value})}
-                      />
-                    </div>
-                    <button 
-                      onClick={handleScheduleUpdate}
-                      className="w-full py-2 border border-app-border rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-app-ink hover:text-app-bg transition-all"
-                    >
-                      Confirm Schedule
-                    </button>
-                  </div>
-
-                  <button 
-                    onClick={() => setShowUpdateModal(false)}
-                    className="text-[10px] font-black uppercase tracking-widest opacity-30 hover:opacity-100 transition-opacity"
-                  >
-                    Remind me later
-                  </button>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    <WindowFrame title="OmniPOS Admin Dashboard">
+      <I18nProvider language={language} onLanguageChange={handleLanguageChange}>
+        <ToastProvider>
+          <ConfirmProvider>
+            <DashboardShell
+              tenant={tenant}
+              language={language}
+              onLanguageChange={handleLanguageChange}
+              showUpdateModal={showUpdateModal}
+              setShowUpdateModal={setShowUpdateModal}
+              updateVersion={updateVersion}
+              isUpdating={isUpdating}
+              scheduleForm={scheduleForm}
+              setScheduleForm={setScheduleForm}
+              handleInstallUpdate={handleInstallUpdate}
+              handleScheduleUpdate={handleScheduleUpdate}
+            />
+          </ConfirmProvider>
+        </ToastProvider>
+      </I18nProvider>
     </WindowFrame>
   );
 }

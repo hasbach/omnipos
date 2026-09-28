@@ -1,38 +1,144 @@
 @import "tailwindcss";
 
+@import "@fontsource-variable/inter";
+@import "@fontsource/ibm-plex-sans-arabic/400.css";
+@import "@fontsource/ibm-plex-sans-arabic/500.css";
+@import "@fontsource/ibm-plex-sans-arabic/600.css";
+@import "@fontsource/ibm-plex-sans-arabic/700.css";
+
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter Variable", "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  
+
+  /* ---- OmniPOS design-system tokens, exposed as Tailwind utilities ---- */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-soft: var(--primary-soft);
+  --color-on-primary: var(--on-primary);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-ring: var(--ring);
+
+  /* legacy aliases, still exposed as bg-app-* / text-app-* / border-app-* for un-migrated screens */
   --color-app-bg: var(--app-bg);
   --color-app-ink: var(--app-ink);
   --color-app-surface: var(--app-surface);
   --color-app-border: var(--app-border);
+
+  --radius-input: 6px;
+  --radius-card: 10px;
+  --radius-chip: 999px;
+
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06);
+  --shadow-modal: 0 10px 30px rgb(15 23 42 / 0.18);
 }
 
 :root {
-  --app-bg: #E4E3E0;
-  --app-ink: #141414;
-  --app-surface: #FFFFFF;
-  --app-border: #141414;
+  /* ---- Light tokens ---- */
+  --bg: #F4F6FA;
+  --surface: #FFFFFF;
+  --surface-2: #F8FAFC;
+  --border: #E2E8F0;
+  --border-strong: #CBD5E1;
+  --text: #0F172A;
+  --text-2: #475569;
+  --text-3: #64748B;
+  --primary: #1E40AF;
+  --primary-hover: #1E3A8A;
+  --primary-soft: #DBEAFE;
+  --on-primary: #FFFFFF;
+  --accent: #D97706;
+  --accent-soft: #FEF3C7;
+  --success: #047857;
+  --success-soft: #D1FAE5;
+  --danger: #DC2626;
+  --danger-soft: #FEE2E2;
+  --info: #0369A1;
+  --info-soft: #E0F2FE;
+  --ring: #2563EB;
+
+  /* legacy aliases mapped onto the new tokens so untouched screens keep working */
+  --app-bg: var(--bg);
+  --app-ink: var(--text);
+  --app-surface: var(--surface);
+  --app-border: var(--border);
 }
 
 .dark {
-  --app-bg: #0A0A0A;
-  --app-ink: #F5F5F5;
-  --app-surface: #141414;
-  --app-border: #F5F5F5;
+  --bg: #0B1220;
+  --surface: #111827;
+  --surface-2: #0F172A;
+  --border: #1F2937;
+  --border-strong: #334155;
+  --text: #F1F5F9;
+  --text-2: #CBD5E1;
+  --text-3: #94A3B8;
+  --primary: #3B82F6;
+  --primary-hover: #60A5FA;
+  --primary-soft: #1E3A8A55;
+  --on-primary: #FFFFFF;
+  --accent: #F59E0B;
+  --accent-soft: #F59E0B26;
+  --success: #34D399;
+  --success-soft: #34D39926;
+  --danger: #F87171;
+  --danger-soft: #F8717126;
+  --info: #38BDF8;
+  --info-soft: #38BDF826;
+  --ring: #3B82F6;
+
+  --app-bg: var(--bg);
+  --app-ink: var(--text);
+  --app-surface: var(--surface);
+  --app-border: var(--border);
 }
 
 @layer base {
+  html {
+    font-family: var(--font-sans);
+  }
+
   body {
     @apply bg-app-bg text-app-ink selection:bg-app-ink selection:text-app-bg transition-colors duration-300;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  h1 { font-size: 20px; font-weight: 600; }
+  h2 { font-size: 16px; font-weight: 600; }
+
+  /* Tabular numbers for money/qty columns */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* Visible focus ring on every interactive element */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -40,9 +146,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: currentColor;
-  opacity: 0.1;
+  /* opacity has no effect on scrollbar pseudo-elements — use a real token color instead */
+  background: var(--border-strong);
   border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
 }
 
 /* Hide number input arrows */
@@ -52,19 +161,28 @@ input::-webkit-inner-spin-button {
   margin: 0;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media print {
   @page {
     margin: 1cm;
   }
-  
+
   body * {
     visibility: hidden;
   }
-  
+
   #printable-report, #printable-report * {
     visibility: visible;
   }
-  
+
   #printable-report {
     position: absolute;
     left: 0;

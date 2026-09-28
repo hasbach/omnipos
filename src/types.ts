@@ -17,6 +17,8 @@ export interface Printer {
   enabled: number; // 1 = active
 }
 
+export type PriceLevel = 'retail' | 'wholesale' | 'super_wholesale';
+
 export interface Product {
   id: number;
   barcode: string;
@@ -29,6 +31,11 @@ export interface Product {
   cost?: number; // Cost Price USD
   cost_lbp?: number; // Cost Price LBP
   units_per_package?: number;
+  price_wholesale?: number; // Wholesale unit price USD (0/null = not set)
+  price_wholesale_lbp?: number;
+  price_super_wholesale?: number; // Super-wholesale unit price USD (0/null = not set)
+  price_super_wholesale_lbp?: number;
+  min_price?: number; // Optional floor price USD
   stock: number;
   reorder_point?: number;
   track_inventory?: number; // 1 = physical product (default), 0 = service/non-stock item
@@ -45,6 +52,8 @@ export interface Stakeholder {
   phone?: string;
   address?: string;
   balance: number;
+  price_level?: PriceLevel;
+  credit_limit?: number; // NULL/0 = unlimited
 }
 
 export interface Discount {
@@ -75,6 +84,23 @@ export interface Transaction {
   discount?: Discount;
   created_at?: string;
   stakeholder_name?: string;
+  price_level?: PriceLevel;
+  notes?: string;
+  reference?: string;
+  edited_at?: string;
+  edit_count?: number;
+  archived?: boolean;
+}
+
+export interface TransactionItem {
+  id?: number;
+  transaction_id?: number;
+  product_id: number;
+  name?: string;
+  quantity: number;
+  unit_price: number;
+  unit_cost?: number; // USD cost snapshot at time of the line (COGS)
+  discount?: Discount;
 }
 
 export interface Tenant {

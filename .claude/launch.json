@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "omnipos-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "scripts/preview-server.ts"],
+      "port": 3100
     }
   ]
 }
