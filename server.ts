@@ -84,6 +84,12 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const PORT = 3000;
 
+// The import wizard can post a whole spreadsheet (thousands of rows) in one request, well past
+// the default 100kb json body limit below. Mount a route-scoped parser with a bigger limit BEFORE
+// the global one — express.json() no-ops when req._body is already set (body-parser's own guard),
+// so the global app.use(express.json()) further down never re-parses (or rejects) this route.
+app.use('/api/import', express.json({ limit: '25mb' }));
+
 app.use(express.json());
 
 // Middleware to check authentication

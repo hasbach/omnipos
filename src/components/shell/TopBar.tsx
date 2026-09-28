@@ -20,6 +20,7 @@ const TITLE_ROUTES: { prefix: string; key: string; exact?: boolean }[] = [
   { prefix: '/dashboard/reports', key: 'shell_nav_reports' },
   { prefix: '/dashboard/users', key: 'shell_nav_users' },
   { prefix: '/dashboard/logs', key: 'shell_nav_user_logs' },
+  { prefix: '/dashboard/import', key: 'shell_nav_import' },
   { prefix: '/dashboard/settings', key: 'shell_nav_settings' },
   { prefix: '/dashboard/ui-kit', key: 'ui_kit_title' },
 ];

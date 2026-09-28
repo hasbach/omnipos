@@ -71,6 +71,9 @@ const suppliers = [
 ]
 
 const app = express();
+// See server.ts: the import wizard needs a bigger body limit than the global default, mounted
+// route-scoped and before the global parser (which no-ops once req._body is already set).
+app.use('/api/import', express.json({ limit: '25mb' }));
 app.use(express.json());
 app.use(session({ secret: "preview", resave: false, saveUninitialized: true }));
 app.use((req: any, _res, next) => { req.session.tenantId = tenantId; req.session.tenantName = "Beirut Wholesale Market"; next(); });

@@ -33,6 +33,7 @@ import Settlement from './pages/Settlement';
 import UserLogs from './pages/UserLogs';
 import Settings from './pages/Settings';
 import UiKit from './pages/UiKit';
+import ImportWizard from './pages/ImportWizard';
 
 function DashboardShell({
   tenant,
@@ -113,6 +114,7 @@ function DashboardShell({
             <Route path="/logs" element={<UserLogs />} />
             <Route path="/settings" element={<Settings onShowUpdate={() => setShowUpdateModal(true)} />} />
             <Route path="/ui-kit" element={<UiKit />} />
+            <Route path="/import" element={<ImportWizard />} />
           </Routes>
         </main>
       </div>

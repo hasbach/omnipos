@@ -15,6 +15,7 @@ import {
   Settings as SettingsIcon,
   ChevronsLeft,
   ChevronsRight,
+  UploadCloud,
   type LucideIcon,
 } from 'lucide-react';
 import { useI18n } from '../../intl/index';
@@ -68,6 +69,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { key: 'shell_nav_users', icon: Shield, path: '/dashboard/users' },
       { key: 'shell_nav_user_logs', icon: ClipboardList, path: '/dashboard/logs' },
+      { key: 'shell_nav_import', icon: UploadCloud, path: '/dashboard/import' },
       { key: 'shell_nav_settings', icon: SettingsIcon, path: '/dashboard/settings' },
     ],
   },

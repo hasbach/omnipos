@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -16,7 +17,6 @@ import {
   Badge,
   Button,
   IconButton,
-  Modal,
   useToast,
   useConfirm,
 } from '../components/ui';
@@ -32,30 +32,13 @@ import { BulkPriceModal } from './products/BulkPriceModal';
 
 type StockFilter = 'all' | 'low' | 'out' | 'service';
 
-const IMPORT_TEMPLATE_ROW = {
-  Barcode: '1001',
-  Barcodes: '1001, 1002',
-  Name: 'Sample Product',
-  Category: 'General',
-  Unit: 'pcs',
-  Cost: 5,
-  Price: 10.5,
-  'Price Wholesale': 9,
-  'Price Wholesale LBP': '',
-  'Price Super Wholesale': 8,
-  'Price Super Wholesale LBP': '',
-  'Min Price': '',
-  'Package Price': 100,
-  'Units/Pkg': 10,
-  Stock: 50,
-};
-
 function tf(str: string, vars: Record<string, string | number>): string {
   return str.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''));
 }
 
 export default function ProductManagement() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const toast = useToast();
   const confirm = useConfirm();
   const { priceLevelsEnabled } = useSettings();
@@ -78,10 +61,6 @@ export default function ProductManagement() {
   const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
   const [showLabelPrinter, setShowLabelPrinter] = useState(false);
   const [labelPreSelected, setLabelPreSelected] = useState<number[]>([]);
-  const [importOpen, setImportOpen] = useState(false);
-  const [importRows, setImportRows] = useState<any[] | null>(null);
-  const [importFileName, setImportFileName] = useState('');
-  const [importing, setImporting] = useState(false);
 
   const fetchProducts = useCallback(() => {
     setLoading(true);
@@ -236,82 +215,6 @@ export default function ProductManagement() {
     }
   };
 
-  // ---- Import ----
-  const handleFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const extension = file.name.split('.').pop()?.toLowerCase();
-    const reader = new FileReader();
-
-    reader.onload = (event) => {
-      try {
-        let rows: any[] = [];
-        if (extension === 'json') {
-          rows = JSON.parse(event.target?.result as string);
-        } else {
-          const data = new Uint8Array(event.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          const raw = XLSX.utils.sheet_to_json(sheet);
-          rows = raw.map((row: any) => {
-            const barcode = String(row.Barcode || row.barcode || '');
-            const rawBarcodes = row.Barcodes || row.barcodes;
-            const barcodes = rawBarcodes ? String(rawBarcodes).split(',').map((s: string) => s.trim()).filter(Boolean) : [barcode].filter(Boolean);
-            return {
-              barcode,
-              barcodes,
-              name: String(row.Name || row.name || 'Unnamed Product'),
-              category: String(row.Category || row.category || 'General'),
-              unit: String(row.Unit || row.unit || 'pcs'),
-              cost: parseFloat(String(row.Cost || row.cost || 0)) || 0,
-              price: parseFloat(String(row.Price || row.price || 0)) || 0,
-              price_wholesale: parseFloat(String(row['Price Wholesale'] || row.price_wholesale || 0)) || 0,
-              price_wholesale_lbp: parseFloat(String(row['Price Wholesale LBP'] || row.price_wholesale_lbp || 0)) || 0,
-              price_super_wholesale: parseFloat(String(row['Price Super Wholesale'] || row.price_super_wholesale || 0)) || 0,
-              price_super_wholesale_lbp: parseFloat(String(row['Price Super Wholesale LBP'] || row.price_super_wholesale_lbp || 0)) || 0,
-              min_price: parseFloat(String(row['Min Price'] || row.min_price || 0)) || 0,
-              package_price: parseFloat(String(row['Package Price'] || row.package_price || 0)) || 0,
-              units_per_package: parseInt(String(row['Units/Pkg'] || row.units_per_package || 1), 10) || 1,
-              stock: parseInt(String(row.Stock || row.stock || 0), 10) || 0,
-            };
-          });
-        }
-        setImportRows(rows);
-        setImportFileName(file.name);
-      } catch (err: any) {
-        toast.error(err.message || t('prod_import_error_toast', 'Import failed.'));
-      }
-    };
-
-    if (extension === 'json') reader.readAsText(file);
-    else reader.readAsArrayBuffer(file);
-
-    e.target.value = '';
-  };
-
-  const confirmImport = async () => {
-    if (!importRows) return;
-    setImporting(true);
-    try {
-      const res = await api.post<{ count: number }>('/api/products/bulk-import', importRows);
-      toast.success(tf(t('prod_import_success_toast', '{count} products imported.'), { count: res.count }));
-      setImportRows(null);
-      setImportOpen(false);
-      fetchProducts();
-    } catch (err: any) {
-      toast.error(err.message || t('prod_import_error_toast', 'Import failed.'));
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const handleDownloadTemplate = () => {
-    const worksheet = XLSX.utils.json_to_sheet([IMPORT_TEMPLATE_ROW]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Template');
-    XLSX.writeFile(workbook, 'product_import_template.xlsx');
-  };
-
   // ---- Columns ----
   const columns = useMemo<DataTableColumn<Product>[]>(() => {
     const cols: DataTableColumn<Product>[] = [
@@ -461,8 +364,8 @@ export default function ProductManagement() {
             <Button variant="secondary" onClick={() => { setLabelPreSelected([]); setShowLabelPrinter(true); }}>
               <Printer size={16} /> {t('prod_print_labels', 'Print labels')}
             </Button>
-            <Button variant="secondary" onClick={() => setImportOpen(true)}>
-              <Upload size={16} /> {t('prod_import', 'Import Excel')}
+            <Button variant="secondary" onClick={() => navigate('/dashboard/import?entity=products')}>
+              <Upload size={16} /> {t('prod_import_wizard', 'Import')}
             </Button>
             <Button variant="secondary" onClick={() => handleExport('xlsx')}>
               <Download size={16} /> {t('prod_export', 'Export Excel')}
@@ -558,64 +461,6 @@ export default function ProductManagement() {
         priceLevelsEnabled={priceLevelsEnabled}
         onApplied={fetchProducts}
       />
-
-      <Modal
-        open={importOpen}
-        onClose={() => { setImportOpen(false); setImportRows(null); }}
-        size="md"
-        title={t('prod_import_title', 'Import products')}
-        footer={
-          importRows ? (
-            <>
-              <Button variant="secondary" onClick={() => setImportRows(null)} disabled={importing}>
-                {t('prod_cancel', 'Cancel')}
-              </Button>
-              <Button variant="primary" onClick={confirmImport} loading={importing}>
-                {tf(t('prod_import_confirm', 'Import {count} products'), { count: importRows.length })}
-              </Button>
-            </>
-          ) : undefined
-        }
-      >
-        {!importRows ? (
-          <div className="space-y-3">
-            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-[var(--radius-card)] border-2 border-dashed border-border p-8 text-center hover:border-primary">
-              <Upload size={22} className="text-text-3" />
-              <span className="text-sm font-medium text-text">{t('prod_import_pick_file', 'JSON / CSV / Excel file')}</span>
-              <input type="file" accept=".json,.csv,.xlsx,.xls" className="hidden" onChange={handleFilePicked} />
-            </label>
-            <Button variant="ghost" onClick={handleDownloadTemplate} className="w-full">
-              <Download size={14} /> {t('prod_import_template', 'Download template')}
-            </Button>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <p className="text-sm text-text-2">{tf(t('prod_import_summary_desc', '{count} rows read from "{file}". Continue to import them.'), { count: importRows.length, file: importFileName })}</p>
-            <div className="max-h-56 overflow-y-auto rounded-[var(--radius-card)] border border-border">
-              <table className="w-full border-collapse text-xs">
-                <thead className="bg-surface-2 text-text-3">
-                  <tr>
-                    <th className="px-2 py-1.5 text-start">{t('prod_col_name', 'Name')}</th>
-                    <th className="px-2 py-1.5 text-start">{t('prod_col_category', 'Category')}</th>
-                    <th className="px-2 py-1.5 text-end">{t('prod_col_retail', 'Retail')}</th>
-                    <th className="px-2 py-1.5 text-end">{t('prod_col_stock', 'Stock')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {importRows.slice(0, 20).map((r, i) => (
-                    <tr key={i} className="border-t border-border">
-                      <td className="px-2 py-1.5">{r.name}</td>
-                      <td className="px-2 py-1.5 text-text-3">{r.category}</td>
-                      <td className="num px-2 py-1.5 text-end">{r.price}</td>
-                      <td className="num px-2 py-1.5 text-end">{r.stock}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </Modal>
 
       <AnimatePresence>
         {showLabelPrinter && <LabelPrinter products={products as any} preSelected={labelPreSelected} onClose={() => setShowLabelPrinter(false)} />}

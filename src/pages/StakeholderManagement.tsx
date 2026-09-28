@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Users, HandCoins, AlertTriangle, Plus, Edit2, Trash2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Users, HandCoins, AlertTriangle, Plus, Edit2, Trash2, Upload } from 'lucide-react';
 import {
   PageHeader,
   Tabs,
@@ -30,6 +31,7 @@ export default function StakeholderManagement() {
   const { t } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
+  const navigate = useNavigate();
   const { priceLevelsEnabled } = useSettings();
 
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
@@ -200,9 +202,14 @@ export default function StakeholderManagement() {
         title={t('stk_title')}
         subtitle={t('stk_subtitle')}
         actions={
-          <Button variant="primary" onClick={openNew}>
-            <Plus size={16} /> {tab === 'customer' ? t('stk_add_customer') : t('stk_add_supplier')}
-          </Button>
+          <>
+            <Button variant="secondary" onClick={() => navigate(`/dashboard/import?entity=${tab === 'customer' ? 'customers' : 'suppliers'}`)}>
+              <Upload size={16} /> {t('stk_import_wizard', 'Import')}
+            </Button>
+            <Button variant="primary" onClick={openNew}>
+              <Plus size={16} /> {tab === 'customer' ? t('stk_add_customer') : t('stk_add_supplier')}
+            </Button>
+          </>
         }
       />
 

@@ -14,6 +14,7 @@ import { EscPos } from "./printing/escpos.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
+import { setupImportRoutes } from "./importer.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, type PriceLevel } from "./pricing.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
@@ -344,6 +345,7 @@ async function establishLogin(
 
 export function setupRoutes(app: any, wss: any, broadcast: Function, authenticate: any) {
   setupReportRoutes(app, authenticate);
+  setupImportRoutes(app, authenticate, broadcast);
   // API Routes
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
