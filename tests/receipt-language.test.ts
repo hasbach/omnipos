@@ -119,7 +119,7 @@ test("payment method names are translated per language", () => {
   const tx = baseTx({ payments: [{ method: "credit", amount: 6, currency: "USD" }] });
   const en = buildReceiptBuffer({ storeName: "Acme", language: "en", transaction: tx }).toString("latin1");
   const fr = buildReceiptBuffer({ storeName: "Acme", language: "fr", transaction: tx }).toString("latin1");
-  assert.ok(en.includes("CREDIT"), "English keeps the plain uppercase method name");
+  assert.ok(en.includes("ON ACCOUNT"), "English prints a readable name for on-account (credit) payments");
   assert.ok(fr.includes("COMPTE CLIENT"), "French translates 'credit' (on-account) to its own term");
 });
 
