@@ -8,8 +8,8 @@ import { api } from '../../lib/api';
 import { formatMoney, formatBalance, partyDisplayName } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
-import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, type PriceLevel } from '../../lib/pricing';
-import type { Product, Stakeholder } from '../../types';
+import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, uomUnitPrice, type PriceLevel } from '../../lib/pricing';
+import type { Product, ProductUnit, Stakeholder } from '../../types';
 import {
   computeInvoiceTotals, lineDraftTotal, nextKey, paidFromPayments, realMoneyFromPayments,
   storeCreditFromPayments, postJson, putJson, ApiFieldError,
@@ -17,6 +17,20 @@ import {
 } from './types';
 
 type FieldErrors = Record<string, string>;
+
+/** Default price of ONE unit of the line's UoM: sale = tier price, purchase = product cost x factor. */
+// Strips float noise from a per-piece value scaled up to a unit (1.1 × 24 = 26.400000000000002).
+const scaled = (v: number) => Math.round(v * 1e6) / 1e6;
+
+function defaultLinePrice(p: Product, unit: ProductUnit | null | undefined, isPurchase: boolean, level: PriceLevel, qty: number): number {
+  if (isPurchase) return scaled((p.cost || 0) * (unit ? unit.factor : 1));
+  if (unit) return uomUnitPrice(p as any, unit, level);
+  return saleLineUnitPrice(p as any, level, qty, p.units);
+}
+function defaultCatalogPrice(p: Product, unit: ProductUnit | null | undefined, level: PriceLevel): number {
+  if (unit) return uomUnitPrice(p as any, unit, level);
+  return tierUnitPrice(p as any, level) ?? p.price;
+}
 
 export interface InvoiceEditorProps {
   open: boolean;
@@ -118,8 +132,11 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           _key: nextKey('l'),
           product_id: it.product_id,
           name: it.product_name,
-          quantity: it.quantity,
-          unit_price: Number(it.price),
+          quantity: it.display_qty ?? it.uom_qty ?? it.quantity,
+          unit_price: scaled(it.display_unit_price ?? Number(it.price) * (it.uom_factor || 1)),
+          uom_id: it.uom_id ?? null,
+          uom_name: it.uom_name ?? null,
+          uom_factor: it.uom_factor ?? null,
           unit_cost: it.unit_cost,
           discount: it.discount || { type: 'percentage', value: 0 },
         })));
@@ -169,24 +186,29 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     setLines((prev) => prev.map((l) => {
       const product = products.find((p) => p.id === l.product_id);
       if (!product) return l;
-      const price = saleLineUnitPrice(product as any, level, l.quantity);
-      return { ...l, unit_price: price, catalogPrice: tierUnitPrice(product as any, level) ?? product.price };
+      const unit = l.uom_id != null ? (product.units || []).find((u) => u.id === l.uom_id) : null;
+      if (l.uom_id != null && !unit) return l; // unit was removed from the product: keep the invoice's own price
+      const price = defaultLinePrice(product, unit, false, level, l.quantity);
+      return { ...l, unit_price: price, catalogPrice: defaultCatalogPrice(product, unit, level) };
     }));
     setDirty(true);
   };
 
-  const addProduct = (p: Product) => {
-    const unit_price = isPurchase ? (p.cost || 0) : saleLineUnitPrice(p as any, priceLevel, 1);
+  const addProduct = (p: Product, unit?: ProductUnit | null) => {
+    const unit_price = defaultLinePrice(p, unit, isPurchase, priceLevel, 1);
     setLines((prev) => [...prev, {
       _key: nextKey('l'),
       product_id: p.id,
       name: p.name,
-      barcode: p.barcode,
+      barcode: unit?.barcode || p.barcode,
       quantity: 1,
       unit_price,
+      uom_id: unit ? unit.id : null,
+      uom_name: unit ? unit.name : null,
+      uom_factor: unit ? unit.factor : null,
       unit_cost: p.cost ?? null,
       discount: { type: 'percentage', value: 0 },
-      catalogPrice: isPurchase ? undefined : (tierUnitPrice(p as any, priceLevel) ?? p.price),
+      catalogPrice: isPurchase ? undefined : defaultCatalogPrice(p, unit, priceLevel),
       minPrice: p.min_price ?? null,
     }]);
     setProductSearch('');
@@ -194,11 +216,42 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     setTimeout(() => searchRef.current?.focus(), 30);
   };
 
+  // Matches name, primary barcode, extra barcodes and unit barcodes. A unit-barcode hit adds that
+  // unit (carton/pack) rather than a single piece.
   const searchResults = useMemo(() => {
     const q = productSearch.trim().toLowerCase();
-    if (!q) return [];
-    return products.filter((p) => p.name.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q)).slice(0, 8);
+    if (!q) return [] as Array<{ p: Product; unit: ProductUnit | null }>;
+    const out: Array<{ p: Product; unit: ProductUnit | null }> = [];
+    for (const p of products) {
+      const unitHit = (p.units || []).find((u) => (u.barcode || '').toLowerCase().includes(q));
+      const baseHit = p.name.toLowerCase().includes(q)
+        || (p.barcode || '').toLowerCase().includes(q)
+        || (p.barcodes || []).some((b) => b.toLowerCase().includes(q));
+      if (baseHit) out.push({ p, unit: null });
+      else if (unitHit) out.push({ p, unit: unitHit });
+      if (out.length >= 8) break;
+    }
+    return out;
   }, [productSearch, products]);
+
+  /** Switch a line to another unit of measure (null = base piece); reprices at the default for that unit. */
+  const changeLineUnit = (key: string, uomId: number | null) => {
+    setLines((prev) => prev.map((l) => {
+      if (l._key !== key) return l;
+      const product = products.find((p) => p.id === l.product_id);
+      const unit = uomId != null ? (product?.units || []).find((u) => u.id === uomId) || null : null;
+      if (!product) return l;
+      return {
+        ...l,
+        uom_id: unit ? unit.id : null,
+        uom_name: unit ? unit.name : null,
+        uom_factor: unit ? unit.factor : null,
+        unit_price: defaultLinePrice(product, unit, isPurchase, priceLevel, l.quantity),
+        catalogPrice: isPurchase ? undefined : defaultCatalogPrice(product, unit, priceLevel),
+      };
+    }));
+    setDirty(true);
+  };
 
   const updateLine = (key: string, patch: Partial<LineDraft>) => {
     setLines((prev) => prev.map((l) => (l._key === key ? { ...l, ...patch } : l)));
@@ -280,7 +333,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       if (editingId) {
         const body = {
           stakeholder_id: partyId,
-          items: lines.map((l) => ({ product_id: l.product_id, quantity: l.quantity, unit_price: l.unit_price, discount: l.discount })),
+          items: lines.map((l) => ({ product_id: l.product_id, uom_id: l.uom_id ?? undefined, quantity: l.quantity, unit_price: l.unit_price, discount: l.discount })),
           payments: payments.filter((p) => !p.removed).map((p) => (p.id ? { id: p.id } : { amount: p.amount, method: p.method, currency: p.currency, exchange_rate: p.exchange_rate })),
           discount: globalDiscount,
           tax: globalTax,
@@ -303,7 +356,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           // unit_price + source let the server keep a back-office price the user typed (as PUT does);
           // `price` is still what a purchase line is costed at.
           source: 'backoffice',
-          items: lines.map((l) => ({ id: l.product_id, quantity: l.quantity, price: l.unit_price, unit_price: l.unit_price, discount: l.discount })),
+          items: lines.map((l) => ({ id: l.product_id, uom_id: l.uom_id ?? undefined, quantity: l.quantity, price: l.unit_price, unit_price: l.unit_price, discount: l.discount })),
           currency: 'USD',
           exchange_rate: 1,
           payments: payload,
@@ -434,7 +487,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                   placeholder={t('inv_editor_search_product')}
                   startAdornment={<Search size={14} />}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && searchResults.length > 0) { e.preventDefault(); addProduct(searchResults[0]); }
+                    if (e.key === 'Enter' && searchResults.length > 0) { e.preventDefault(); addProduct(searchResults[0].p, searchResults[0].unit); }
                     if (e.key === 'Escape') setProductSearch('');
                   }}
                 />
@@ -442,10 +495,13 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                   <div className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface shadow-[var(--shadow-modal)]">
                     {searchResults.length === 0 ? (
                       <p className="p-3 text-center text-xs text-text-3">{t('inv_editor_no_results')}</p>
-                    ) : searchResults.map((p) => (
-                      <button key={p.id} type="button" className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-surface-2 cursor-pointer" onClick={() => addProduct(p)}>
-                        <span className="font-medium text-text">{p.name}</span>
-                        <span className="num text-xs text-text-3">{formatMoney(isPurchase ? (p.cost || 0) : p.price, USD)}</span>
+                    ) : searchResults.map(({ p, unit }) => (
+                      <button key={`${p.id}:${unit?.id ?? 'base'}`} type="button" className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-surface-2 cursor-pointer" onClick={() => addProduct(p, unit)}>
+                        <span className="font-medium text-text">
+                          {p.name}
+                          {unit && <span className="ms-2 text-xs font-semibold text-primary">{unit.name} ×{unit.factor}</span>}
+                        </span>
+                        <span className="num text-xs text-text-3">{formatMoney(defaultLinePrice(p, unit, isPurchase, priceLevel, 1), USD)}</span>
                       </button>
                     ))}
                   </div>
@@ -475,6 +531,29 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                         <tr key={l._key} className="border-t border-border align-top">
                           <td className="px-2 py-2">
                             <p className="font-medium text-text">{l.name}</p>
+                            {(() => {
+                              const product = products.find((p) => p.id === l.product_id);
+                              const units = product?.units || [];
+                              // A line whose unit no longer exists on the product still shows (read-only) what was invoiced.
+                              const orphan = l.uom_id != null && !units.some((u) => u.id === l.uom_id);
+                              if (units.length === 0 && !orphan) return null;
+                              return (
+                                <Select
+                                  aria-label={t('uom_select_unit', 'Unit of measure')}
+                                  className="mt-1 !h-8 w-40 text-xs"
+                                  value={l.uom_id != null ? String(l.uom_id) : ''}
+                                  onChange={(e) => changeLineUnit(l._key, e.target.value === '' ? null : Number(e.target.value))}
+                                  options={[
+                                    { value: '', label: product?.unit || t('uom_piece', 'Piece') },
+                                    ...(orphan ? [{ value: String(l.uom_id), label: `${l.uom_name ?? ''} ×${l.uom_factor ?? ''}`, disabled: true }] : []),
+                                    ...units.map((u) => ({ value: String(u.id), label: `${u.name} ×${u.factor}` })),
+                                  ]}
+                                />
+                              );
+                            })()}
+                            {l.uom_id != null && l.uom_factor ? (
+                              <p className="text-xs text-text-3 num">= {l.quantity * l.uom_factor} {products.find((p) => p.id === l.product_id)?.unit || t('uom_piece_short', 'pcs')}</p>
+                            ) : null}
                             {!isPurchase && l.catalogPrice !== undefined && (
                               <p className="text-xs text-text-3">{t('inv_editor_tier_price_hint', 'Catalog price: {price}').replace('{price}', formatMoney(l.catalogPrice, USD))}</p>
                             )}

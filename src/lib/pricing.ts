@@ -65,48 +65,126 @@ export function tierUnitPriceLbp(product: PricingProduct, level: PriceLevel, rat
   return null;
 }
 
+/** A unit of measure as far as pricing is concerned (mirror of server/pricing.ts UomPricing). */
+export interface UomPricing {
+  factor: number;
+  price: number;
+  price_lbp?: number | null;
+  price_wholesale?: number | null;
+  price_wholesale_lbp?: number | null;
+  price_super_wholesale?: number | null;
+  price_super_wholesale_lbp?: number | null;
+}
+
+/** Price (USD) of ONE unit of measure at a level: unit tier -> product tier x factor -> ... -> unit retail. */
+export function uomUnitPrice(product: PricingProduct, uom: UomPricing, level: PriceLevel): number {
+  const f = uom.factor || 1;
+  const scaled = (v: number | null | undefined) => { const p = positive(v); return p != null ? p * f : null; };
+  if (level === 'super_wholesale') {
+    return (
+      positive(uom.price_super_wholesale) ??
+      scaled(product.price_super_wholesale) ??
+      positive(uom.price_wholesale) ??
+      scaled(product.price_wholesale) ??
+      uom.price
+    );
+  }
+  if (level === 'wholesale') {
+    return positive(uom.price_wholesale) ?? scaled(product.price_wholesale) ?? uom.price;
+  }
+  return uom.price;
+}
+
+/** Same chain against the LBP columns; each step falls back to its USD value x rate before moving on. */
+export function uomUnitPriceLbp(product: PricingProduct, uom: UomPricing, level: PriceLevel, rate: number): number {
+  const f = uom.factor || 1;
+  const step = (lbp: number | null | undefined, usd: number | null | undefined, mult: number): number | null => {
+    const l = positive(lbp);
+    if (l != null) return l * mult;
+    const u = positive(usd);
+    return u != null ? u * mult * rate : null;
+  };
+  const retail = positive(uom.price_lbp) ?? uom.price * rate;
+  if (level === 'super_wholesale') {
+    return (
+      step(uom.price_super_wholesale_lbp, uom.price_super_wholesale, 1) ??
+      step(product.price_super_wholesale_lbp, product.price_super_wholesale, f) ??
+      step(uom.price_wholesale_lbp, uom.price_wholesale, 1) ??
+      step(product.price_wholesale_lbp, product.price_wholesale, f) ??
+      retail
+    );
+  }
+  if (level === 'wholesale') {
+    return (
+      step(uom.price_wholesale_lbp, uom.price_wholesale, 1) ??
+      step(product.price_wholesale_lbp, product.price_wholesale, f) ??
+      retail
+    );
+  }
+  return retail;
+}
+
+/** Units that take part in the automatic pack break: whole-number factor > 1 and price > 0, largest first. */
+function breakUnits(product: PricingProduct, units?: UomPricing[] | null): UomPricing[] {
+  const live = (units || []).filter(u => u && Number.isInteger(u.factor) && u.factor > 1 && u.price > 0);
+  if (live.length > 0) return [...live].sort((x, y) => y.factor - x.factor);
+  const upp = product.units_per_package || 1;
+  if (product.package_price && product.package_price > 0 && upp > 1 && Number.isInteger(upp)) {
+    return [{ factor: upp, price: product.package_price, price_lbp: product.package_price_lbp }];
+  }
+  return [];
+}
+
 /**
- * Per-unit blended price (USD) for a retail sale line, honoring the package break:
- * packages at package_price + remainder at unit price.
+ * Per-piece blended price (USD) for a retail base-piece line: greedy, largest unit first
+ * (e.g. carton, then pack, then loose pieces).
  */
-function retailBlendedUnitPrice(product: PricingProduct, qty: number): number {
-  const unitsPerPackage = product.units_per_package || 1;
-  if (product.package_price && unitsPerPackage > 1 && qty > 0) {
-    const numPackages = Math.floor(qty / unitsPerPackage);
-    const remainder = qty % unitsPerPackage;
-    const packagedTotal = numPackages * product.package_price + remainder * product.price;
-    return packagedTotal / qty;
+function retailBlendedUnitPrice(product: PricingProduct, qty: number, units?: UomPricing[] | null): number {
+  const bu = breakUnits(product, units);
+  if (bu.length && qty > 0) {
+    let remaining = qty;
+    let total = 0;
+    for (const u of bu) {
+      const n = Math.floor(remaining / u.factor);
+      total += n * u.price;
+      remaining -= n * u.factor;
+    }
+    total += remaining * product.price;
+    return total / qty;
   }
   return product.price;
 }
 
-function retailBlendedUnitPriceLbp(product: PricingProduct, qty: number, rate: number): number {
-  const unitsPerPackage = product.units_per_package || 1;
+function retailBlendedUnitPriceLbp(product: PricingProduct, qty: number, rate: number, units?: UomPricing[] | null): number {
   const unitLbp = product.price_lbp || product.price * rate;
-  if (unitsPerPackage > 1 && qty > 0) {
-    const packageLbp = product.package_price_lbp || (product.package_price ? product.package_price * rate : null);
-    if (packageLbp) {
-      const numPackages = Math.floor(qty / unitsPerPackage);
-      const remainder = qty % unitsPerPackage;
-      const packagedTotal = numPackages * packageLbp + remainder * unitLbp;
-      return packagedTotal / qty;
+  const bu = breakUnits(product, units);
+  if (bu.length && qty > 0) {
+    let remaining = qty;
+    let total = 0;
+    for (const u of bu) {
+      const n = Math.floor(remaining / u.factor);
+      const uLbp = positive(u.price_lbp) ?? u.price * rate;
+      total += n * uLbp;
+      remaining -= n * u.factor;
     }
+    total += remaining * unitLbp;
+    return total / qty;
   }
   return unitLbp;
 }
 
-/** Per-unit USD price to use for a sale line at the given qty/level (package break included for retail). */
-export function saleLineUnitPrice(product: PricingProduct, level: PriceLevel, qty: number): number {
+/** Per-piece USD price to use for a base-piece sale line at the given qty/level (pack break included for retail). */
+export function saleLineUnitPrice(product: PricingProduct, level: PriceLevel, qty: number, units?: UomPricing[] | null): number {
   const flat = tierUnitPrice(product, level);
   if (flat != null) return flat;
-  return retailBlendedUnitPrice(product, qty);
+  return retailBlendedUnitPrice(product, qty, units);
 }
 
 /** Same, in LBP. */
-export function saleLineUnitPriceLbp(product: PricingProduct, level: PriceLevel, qty: number, rate: number): number {
+export function saleLineUnitPriceLbp(product: PricingProduct, level: PriceLevel, qty: number, rate: number, units?: UomPricing[] | null): number {
   const flat = tierUnitPriceLbp(product, level, rate);
   if (flat != null) return flat;
-  return retailBlendedUnitPriceLbp(product, qty, rate);
+  return retailBlendedUnitPriceLbp(product, qty, rate, units);
 }
 
 export interface LineDiscount {

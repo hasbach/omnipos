@@ -15,7 +15,11 @@ import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from 
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
 import { setupImportRoutes } from "./importer.js";
-import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, type PriceLevel } from "./pricing.js";
+import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
+import {
+  loadUnitsByProduct, loadUnitsForProduct, loadUnit, normalizeUnitsPayload, assertBarcodesFree, saveProductUnits,
+  legacyPackageColumns, refundLineStates, displayFields,
+} from "./uom.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
@@ -120,7 +124,7 @@ function findOriginalSale(tenantId: number, originalTransactionId: number): { tx
   }
   if (!tx) return null;
   const items = db.prepare(
-    `SELECT product_id, quantity, unit_price, discount_type, discount_value, unit_cost FROM ${itemsTable} WHERE transaction_id = ?`
+    `SELECT id, product_id, quantity, unit_price, discount_type, discount_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty FROM ${itemsTable} WHERE transaction_id = ? ORDER BY id`
   ).all(originalTransactionId) as any[];
   return { tx, items };
 }
@@ -152,26 +156,6 @@ function originalAdjustmentPcts(original: { tx: any; items: any[] }): { discount
     discountPct: (discAmt / subtotal) * 100,
     taxPct: afterDiscount > 0 ? (taxAmt / afterDiscount) * 100 : 0,
   };
-}
-
-// Quantity of each product already refunded against a given original sale, across both live and
-// archived refund transactions (an earlier refund of the same sale may itself have since been
-// archived) — caps how much of a line item is still eligible to be refunded.
-function refundedQuantityByProduct(tenantId: number, originalTransactionId: number): Record<number, number> {
-  const rows = db.prepare(`
-    SELECT ti.product_id, SUM(ti.quantity) as qty
-    FROM transaction_items ti JOIN transactions t ON ti.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'refund' AND t.original_transaction_id = ?
-    GROUP BY ti.product_id
-    UNION ALL
-    SELECT ti.product_id, SUM(ti.quantity) as qty
-    FROM archived_transaction_items ti JOIN archived_transactions t ON ti.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'refund' AND t.original_transaction_id = ?
-    GROUP BY ti.product_id
-  `).all(tenantId, originalTransactionId, tenantId, originalTransactionId) as any[];
-  const map: Record<number, number> = {};
-  for (const r of rows) map[r.product_id] = (map[r.product_id] || 0) + (r.qty || 0);
-  return map;
 }
 
 function getSettingsMap(tenantId: number): Record<string, string> {
@@ -598,8 +582,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       // Move transaction items
       db.prepare(`
-      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost)
-      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost
+      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id)
+      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id
       FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
@@ -771,20 +755,29 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     res.json(shifts);
   });
 
+  // Every product with its barcodes and units of measure. Extra barcodes and units are each loaded in
+  // ONE query and grouped in memory (no per-product queries).
+  function loadProductsWithBarcodesAndUnits(tenantId: number): any[] {
+    const products = db.prepare("SELECT * FROM products WHERE tenant_id = ?").all(tenantId) as any[];
+    const extraRows = db.prepare(
+      "SELECT pb.product_id, pb.barcode FROM product_barcodes pb JOIN products p ON p.id = pb.product_id WHERE p.tenant_id = ? ORDER BY pb.id"
+    ).all(tenantId) as any[];
+    const extraByProduct = new Map<number, string[]>();
+    for (const r of extraRows) {
+      const list = extraByProduct.get(r.product_id);
+      if (list) list.push(r.barcode); else extraByProduct.set(r.product_id, [r.barcode]);
+    }
+    const unitsByProduct = loadUnitsByProduct(tenantId);
+    return products.map(p => ({
+      ...p,
+      barcodes: [p.barcode, ...(extraByProduct.get(p.id) || [])].filter(Boolean),
+      units: unitsByProduct.get(p.id) || [],
+    }));
+  }
+
   app.get("/api/products/export", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const products = db.prepare("SELECT * FROM products WHERE tenant_id = ?").all(tenantId) as any[];
-    const getBarcodes = db.prepare("SELECT barcode FROM product_barcodes WHERE product_id = ?");
-
-    const productsWithBarcodes = products.map(p => {
-      const extraBarcodes = getBarcodes.all(p.id).map((b: any) => b.barcode);
-      return {
-        ...p,
-        barcodes: [p.barcode, ...extraBarcodes].filter(Boolean)
-      };
-    });
-
-    res.json(productsWithBarcodes);
+    res.json(loadProductsWithBarcodesAndUnits(tenantId));
   });
 
   app.post("/api/products/bulk-import", authenticate, (req: any, res) => {
@@ -855,71 +848,84 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   app.get("/api/products", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const products = db.prepare("SELECT * FROM products WHERE tenant_id = ?").all(tenantId) as any[];
-    const getBarcodes = db.prepare("SELECT barcode FROM product_barcodes WHERE product_id = ?");
-
-    const productsWithBarcodes = products.map(p => {
-      const extraBarcodes = getBarcodes.all(p.id).map((b: any) => b.barcode);
-      return {
-        ...p,
-        barcodes: [p.barcode, ...extraBarcodes].filter(Boolean)
-      };
-    });
-
-    res.json(productsWithBarcodes);
+    res.json(loadProductsWithBarcodesAndUnits(tenantId));
   });
+
+  // Shared by POST and PUT: validates the product's barcodes + units (BARCODE_TAKEN is tenant-wide
+  // across products.barcode, product_barcodes and product_units), saves them, and mirrors the
+  // smallest unit into the legacy package_* columns for older devices/the cloud. Runs INSIDE the
+  // caller's db.transaction so a failure changes nothing.
+  function saveProductBarcodesAndUnits(tenantId: number, productId: number, isNew: boolean, barcodes: any, unitsPayload: any) {
+    const ownBarcodes: string[] = Array.isArray(barcodes) ? barcodes.map((b: any) => String(b ?? '').trim()).filter(Boolean) : [];
+    const units = unitsPayload === undefined || unitsPayload === null ? null : normalizeUnitsPayload(unitsPayload);
+    assertBarcodesFree(tenantId, isNew ? null : productId, ownBarcodes, units || []);
+
+    db.prepare("UPDATE products SET barcode = ? WHERE id = ? AND tenant_id = ?").run(ownBarcodes[0] ?? null, productId, tenantId);
+    db.prepare("DELETE FROM product_barcodes WHERE product_id = ?").run(productId);
+    const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
+    for (let i = 1; i < ownBarcodes.length; i++) insertBarcode.run(productId, ownBarcodes[i]);
+
+    if (units) {
+      const saved = saveProductUnits(tenantId, productId, units);
+      const legacy = legacyPackageColumns(saved);
+      db.prepare("UPDATE products SET package_price = ?, package_price_lbp = ?, units_per_package = ? WHERE id = ? AND tenant_id = ?")
+        .run(legacy.package_price, legacy.package_price_lbp, legacy.units_per_package, productId, tenantId);
+    }
+  }
 
   app.post("/api/products", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
-    const primaryBarcode = barcodes && barcodes.length > 0 ? barcodes[0] : null;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
 
-    const result = db.prepare("INSERT INTO products (tenant_id, barcode, name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(tenantId, primaryBarcode, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, stock, reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null);
+    try {
+      const productId = db.transaction(() => {
+        const result = db.prepare("INSERT INTO products (tenant_id, barcode, name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(tenantId, null, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, stock, reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null);
+        const newId = Number(result.lastInsertRowid);
+        saveProductBarcodesAndUnits(tenantId, newId, true, barcodes, units);
+        return newId;
+      })();
 
-    const productId = result.lastInsertRowid;
-    logAction(tenantId, 1, 'Product Created', `Name: ${name}, Price: ${price}, Stock: ${stock}`);
-
-    if (barcodes && barcodes.length > 1) {
-      const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
-      for (let i = 1; i < barcodes.length; i++) {
-        insertBarcode.run(productId, barcodes[i]);
-      }
+      logAction(tenantId, 1, 'Product Created', `Name: ${name}, Price: ${price}, Stock: ${stock}`);
+      res.json({ id: productId });
+      broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+    } catch (error: any) {
+      if (error instanceof ValidationError) return res.status(error.status).json(validationErrorBody(error));
+      res.status(500).json({ error: error.message });
     }
-
-    res.json({ id: productId });
-    broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
   });
 
   app.put("/api/products/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { id } = req.params;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
-    const primaryBarcode = barcodes && barcodes.length > 0 ? barcodes[0] : null;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price } = req.body;
 
-    // `stock` is optional: the product editor no longer sends it (stock changes go through audited
-    // POST /api/stock/adjust), because a form holding a stale stock value would otherwise silently
-    // undo every sale made while it was open. COALESCE keeps the current value when it's omitted.
-    db.prepare("UPDATE products SET barcode = ?, name = ?, price = ?, price_lbp = ?, package_price = ?, package_price_lbp = ?, cost = ?, cost_lbp = ?, units_per_package = ?, stock = COALESCE(?, stock), reorder_point = ?, track_inventory = ?, category = ?, currency = ?, unit = ?, price_wholesale = ?, price_wholesale_lbp = ?, price_super_wholesale = ?, price_super_wholesale_lbp = ?, min_price = ? WHERE id = ? AND tenant_id = ?")
-      .run(primaryBarcode, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, (stock === undefined || stock === null || stock === '') ? null : Number(stock), reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null, id, tenantId);
+    try {
+      db.transaction(() => {
+        // `stock` is optional: the product editor no longer sends it (stock changes go through audited
+        // POST /api/stock/adjust), because a form holding a stale stock value would otherwise silently
+        // undo every sale made while it was open. COALESCE keeps the current value when it's omitted.
+        // Absent `units` leaves the product's units untouched.
+        const info = db.prepare("UPDATE products SET name = ?, price = ?, price_lbp = ?, package_price = ?, package_price_lbp = ?, cost = ?, cost_lbp = ?, units_per_package = ?, stock = COALESCE(?, stock), reorder_point = ?, track_inventory = ?, category = ?, currency = ?, unit = ?, price_wholesale = ?, price_wholesale_lbp = ?, price_super_wholesale = ?, price_super_wholesale_lbp = ?, min_price = ? WHERE id = ? AND tenant_id = ?")
+          .run(name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, (stock === undefined || stock === null || stock === '') ? null : Number(stock), reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null, id, tenantId);
+        // Same tolerance as before for an unknown id (a no-op update), but never touch barcodes/units
+        // of a product that isn't this tenant's.
+        if (info.changes > 0) saveProductBarcodesAndUnits(tenantId, Number(id), false, barcodes, units);
+      })();
 
-    logAction(tenantId, 1, 'Product Updated', `ID: ${id}, Name: ${name}, Price: ${price}, Stock: ${stock}`);
-
-    // Update barcodes
-    db.prepare("DELETE FROM product_barcodes WHERE product_id = ?").run(id);
-    if (barcodes && barcodes.length > 1) {
-      const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
-      for (let i = 1; i < barcodes.length; i++) {
-        insertBarcode.run(id, barcodes[i]);
-      }
+      logAction(tenantId, 1, 'Product Updated', `ID: ${id}, Name: ${name}, Price: ${price}, Stock: ${stock}`);
+      res.json({ success: true });
+      broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+    } catch (error: any) {
+      if (error instanceof ValidationError) return res.status(error.status).json(validationErrorBody(error));
+      res.status(500).json({ error: error.message });
     }
-
-    res.json({ success: true });
-    broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
   });
 
   app.delete("/api/products/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
+    // Units are soft-deleted (so the deletion syncs); barcodes and the product row are removed as before.
+    db.prepare("UPDATE product_units SET deleted_at = CURRENT_TIMESTAMP WHERE product_id IN (SELECT id FROM products WHERE id = ? AND tenant_id = ?) AND deleted_at IS NULL").run(req.params.id, tenantId);
     db.prepare("DELETE FROM product_barcodes WHERE product_id IN (SELECT id FROM products WHERE id = ? AND tenant_id = ?)").run(req.params.id, tenantId);
     db.prepare("DELETE FROM products WHERE id = ? AND tenant_id = ?").run(req.params.id, tenantId);
     logAction(tenantId, 1, 'Product Deleted', `ID: ${req.params.id}`);
@@ -1007,6 +1013,18 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       }
     }
 
+    // A carton/pack barcode resolves to its product AND the unit that was scanned.
+    let matchedUomId: number | null = null;
+    if (!product) {
+      const unitHit = db.prepare(
+        "SELECT pu.id, pu.product_id FROM product_units pu JOIN products p ON p.id = pu.product_id WHERE pu.barcode = ? AND pu.tenant_id = ? AND p.tenant_id = ? AND pu.deleted_at IS NULL"
+      ).get(query, tenantId, tenantId) as any;
+      if (unitHit) {
+        product = db.prepare("SELECT * FROM products WHERE id = ?").get(unitHit.product_id);
+        matchedUomId = unitHit.id;
+      }
+    }
+
     if (!product) {
       product = db.prepare("SELECT * FROM products WHERE name = ? AND tenant_id = ?").get(query, tenantId);
     }
@@ -1019,7 +1037,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const extraBarcodes = db.prepare("SELECT barcode FROM product_barcodes WHERE product_id = ?").all(product.id).map((b: any) => b.barcode);
       res.json({
         ...product,
-        barcodes: [product.barcode, ...extraBarcodes].filter(Boolean)
+        barcodes: [product.barcode, ...extraBarcodes].filter(Boolean),
+        units: loadUnitsForProduct(tenantId, product.id),
+        matched_uom_id: matchedUomId,
       });
     }
     else res.status(404).json({ error: "Product not found" });
@@ -1212,7 +1232,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     // client — or a modified client could submit an arbitrary refund amount. A purchase's price
     // is legitimately negotiated per order (there's no catalog price to check it against), but it
     // still has to be a real, non-negative number rather than whatever the client happened to send.
-    let refundLines: Record<number, { unitPrice: number; discountType: string | null; discountValue: number | null; originalQuantity: number; remaining: number; unitCost: number | null }> | null = null;
+    // A refund is resolved PER ORIGINAL SALE LINE (a product sold as pieces AND as a carton has two
+    // lines): each refund item names its line via original_item_id and its quantity is in that line's
+    // own unit. Items without original_item_id (older clients) are in base pieces and are allocated to
+    // that product's lines in id order. refundAlloc[itemIndex] = the line slices that item covers.
+    let refundAlloc: Record<number, Array<{ line: any; pieces: number }>> | null = null;
     let refundAdjust = { discountPct: 0, taxPct: 0 };
     let refundStakeholderId: number | null = null;
     if (type === 'refund') {
@@ -1223,33 +1247,48 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       if (!original || original.tx.type !== 'sale') {
         return res.status(400).json({ error: "The referenced sale could not be found." });
       }
-      const alreadyRefunded = refundedQuantityByProduct(tenantId, original_transaction_id);
+      const states = refundLineStates(tenantId, original_transaction_id, original.items);
       refundAdjust = originalAdjustmentPcts(original);
       refundStakeholderId = original.tx.stakeholder_id ?? null;
-      refundLines = {};
-      for (const oi of original.items) {
-        refundLines[oi.product_id] = {
-          unitPrice: oi.unit_price,
-          discountType: oi.discount_type,
-          discountValue: oi.discount_value,
-          originalQuantity: oi.quantity,
-          remaining: oi.quantity - (alreadyRefunded[oi.product_id] || 0),
-          unitCost: oi.unit_cost ?? null,
-        };
-      }
+      refundAlloc = {};
       for (let idx = 0; idx < items.length; idx++) {
         const item = items[idx];
         if (!(Number.isFinite(item.quantity) && item.quantity > 0)) {
           return res.status(400).json({ error: `Invalid refund quantity for product ${item.id}.`, field: `items.${idx}.quantity` });
         }
-        const line = refundLines[item.id];
-        if (!line) {
-          return res.status(400).json({ error: `Product ${item.id} was not part of the original sale.`, field: `items.${idx}.quantity` });
+        const alloc: Array<{ line: any; pieces: number }> = [];
+        if (item.original_item_id !== undefined && item.original_item_id !== null) {
+          const st = states.find((s) => s.item.id === Number(item.original_item_id));
+          if (!st || (item.id != null && st.item.product_id !== Number(item.id))) {
+            return res.status(400).json({ error: `Product ${item.id} was not part of the original sale.`, field: `items.${idx}.quantity` });
+          }
+          const factor = st.item.uom_factor || 1;
+          const pieces = item.quantity * factor;
+          if (pieces > st.remaining + 1e-9) {
+            return res.status(400).json({ error: `Cannot refund ${item.quantity} of product ${st.item.product_id} — only ${Math.max(0, st.remaining / factor)} remain eligible for refund.`, field: `items.${idx}.quantity` });
+          }
+          st.remaining -= pieces; // guards duplicate rows for the same line within one request
+          alloc.push({ line: st.item, pieces });
+        } else {
+          const candidates = states.filter((s) => s.item.product_id === Number(item.id));
+          if (!candidates.length) {
+            return res.status(400).json({ error: `Product ${item.id} was not part of the original sale.`, field: `items.${idx}.quantity` });
+          }
+          const available = candidates.reduce((sum, s) => sum + s.remaining, 0);
+          if (item.quantity > available + 1e-9) {
+            return res.status(400).json({ error: `Cannot refund ${item.quantity} of product ${item.id} — only ${Math.max(0, available)} remain eligible for refund.`, field: `items.${idx}.quantity` });
+          }
+          let left = item.quantity;
+          for (const st of candidates) {
+            if (left <= 1e-9) break;
+            const take = Math.min(left, st.remaining);
+            if (take <= 1e-9) continue;
+            alloc.push({ line: st.item, pieces: take });
+            st.remaining -= take;
+            left -= take;
+          }
         }
-        if (item.quantity > line.remaining + 1e-9) {
-          return res.status(400).json({ error: `Cannot refund ${item.quantity} of product ${item.id} — only ${Math.max(0, line.remaining)} remain eligible for refund.`, field: `items.${idx}.quantity` });
-        }
-        line.remaining -= item.quantity; // guards duplicate rows for the same product within one request
+        refundAlloc[idx] = alloc;
       }
     } else if (type === 'purchase') {
       for (let idx = 0; idx < items.length; idx++) {
@@ -1333,9 +1372,28 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         return productCache[id];
       };
 
+      const unitsCache: Record<number, any[]> = {};
+      const getUnits = (id: number) => (unitsCache[id] ||= loadUnitsForProduct(tenantId, id));
+
       let calculatedTotal = 0;
-      const processedItems = items.map((item: any, idx: number) => {
+      const processedItems = items.flatMap((item: any, idx: number) => {
         const product = getProduct(item.id);
+
+        // Units of measure: `quantity` in the payload is in the line's UNITS; everything stored (and
+        // every stock / WAC delta) is in base pieces, with the factor read from the DB — never trusted
+        // from the client. A refund takes its unit from the original line instead (below).
+        let uom: any = null;
+        if (type !== 'refund' && item.uom_id !== undefined && item.uom_id !== null) {
+          uom = product ? loadUnit(tenantId, item.id, item.uom_id) : null;
+          if (!uom) {
+            throw new ValidationError(`Unit ${item.uom_id} is not valid for product ${item.id}.`, 400, { code: 'UOM_INVALID', field: `items.${idx}.uom_id` });
+          }
+        }
+        const factor = uom ? uom.factor : 1;
+        const pieces = item.quantity * factor;
+        const uomFields = uom
+          ? { uomId: uom.id, uomName: uom.name, uomFactor: uom.factor, uomQty: item.quantity }
+          : { uomId: null, uomName: null, uomFactor: null, uomQty: null };
 
         let unitPrice = item.price; // Fallback to provided price (purchases — validated above)
         let itemTotal: number;
@@ -1344,7 +1402,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         let unitCost: number | null = null;
 
         if (type === 'sale' && product) {
-          unitPrice = saleLineUnitPrice(product, resolvedPriceLevel, item.quantity);
+          // Price of ONE unit of the line's UoM (one piece for base lines, which also get the
+          // automatic pack/carton break).
+          let perUnit = uom
+            ? uomUnitPrice(product, uom, resolvedPriceLevel)
+            : saleLineUnitPrice(product, resolvedPriceLevel, item.quantity, getUnits(item.id));
 
           // A manual price override (cashier types a different price on the line) is only
           // honored when the tenant explicitly turned it on, and only for a real, non-negative
@@ -1354,8 +1416,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           // at the POS a typed price needs the explicit tenant setting.
           const overrideAllowed = settings.allow_price_override === '1' || req.body.source === 'backoffice';
           if (overrideAllowed && Number.isFinite(item.unit_price) && item.unit_price >= 0) {
-            unitPrice = item.unit_price;
+            perUnit = item.unit_price; // per unit of the line's UoM
           }
+          unitPrice = perUnit / factor; // stored per base piece
           if (product.min_price && product.min_price > 0 && unitPrice < product.min_price && settings.enforce_min_price === '1') {
             throw new ValidationError(
               `Price for product ${item.id} is below its minimum price of ${product.min_price}.`,
@@ -1368,45 +1431,66 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           // when computing what the cashier actually charges — otherwise total_amount ends up
           // higher than the payments actually collected on any discounted line item, which
           // silently overstates recorded revenue in every report and end-of-day reconciliation.
-          itemTotal = lineTotal(unitPrice, item.quantity, { type: discountType as any, value: discountValue });
-          unitCost = product.cost ?? null; // USD cost snapshot for COGS
-        } else if (type === 'refund' && refundLines) {
-          // Re-derive price AND discount from the original sale (validated above) — never trust
+          itemTotal = lineTotal(perUnit, item.quantity, { type: discountType as any, value: discountValue });
+          unitCost = product.cost ?? null; // USD cost snapshot for COGS (per piece)
+        } else if (type === 'refund' && refundAlloc) {
+          // Re-derive price AND discount from the original sale line (validated above) — never trust
           // the client's for a refund. A fixed discount is prorated to how much of that original
           // line is actually being refunded, matching the client's own calculateRefundAmount
-          // (src/hooks/usePos.ts) so the two stay in agreement.
-          const line = refundLines[item.id];
-          unitPrice = line.unitPrice;
-          discountType = line.discountType;
-          discountValue = line.discountValue;
-          itemTotal = unitPrice * item.quantity;
-          if (discountType === 'percentage') {
-            itemTotal -= (itemTotal * (discountValue || 0)) / 100;
-          } else if (discountType === 'fixed') {
-            itemTotal -= (discountValue || 0) * (item.quantity / line.originalQuantity);
-          }
-          itemTotal = Math.max(0, itemTotal);
-          unitCost = line.unitCost; // a refund copies the ORIGINAL sale line's cost snapshot
+          // (src/hooks/usePos.ts) so the two stay in agreement. One request item can span several
+          // original lines (legacy items without original_item_id), hence one row per slice.
+          const rows = refundAlloc[idx].map(({ line, pieces: slicePieces }) => {
+            const lineFactor = line.uom_factor || 1;
+            let sliceTotal = line.unit_price * slicePieces;
+            if (line.discount_type === 'percentage') {
+              sliceTotal -= (sliceTotal * (line.discount_value || 0)) / 100;
+            } else if (line.discount_type === 'fixed') {
+              sliceTotal -= (line.discount_value || 0) * (slicePieces / line.quantity);
+            }
+            sliceTotal = Math.max(0, sliceTotal);
+            calculatedTotal += sliceTotal;
+            return {
+              productId: line.product_id,
+              pieces: slicePieces,
+              tax: item.tax,
+              unitPrice: line.unit_price,
+              discountType: line.discount_type as string | null,
+              discountValue: line.discount_value as number | null,
+              unitCost: (line.unit_cost ?? null) as number | null, // a refund copies the ORIGINAL sale line's cost snapshot
+              trackInventory: product ? product.track_inventory : 1,
+              uomId: line.uom_id ?? null,
+              uomName: line.uom_name ?? null,
+              uomFactor: line.uom_id ? lineFactor : null,
+              uomQty: line.uom_id ? slicePieces / lineFactor : null,
+              originalItemId: line.id as number,
+            };
+          });
+          return rows;
         } else {
           // Purchase (price/quantity validated above): the cost is legitimately entered per
           // order, but the discount, if any, is applied the same way as a sale.
+          // `price` is the cost of ONE unit of the line's UoM; costs/WAC are per base piece.
           itemTotal = lineTotal(unitPrice, item.quantity, { type: discountType as any, value: discountValue });
-          unitCost = unitPrice; // the purchase price paid IS this line's unit cost
+          unitPrice = unitPrice / factor;
+          unitCost = unitPrice; // the purchase price paid IS this line's unit cost (per piece)
 
           // Blend this line into the product's weighted-average cost BEFORE the stock increment
           // (below, once the transaction row exists) — using the running cache so multiple lines
           // for the same product within one invoice blend in the order they were entered.
           if (type === 'purchase' && product) {
-            const newCost = applyPurchaseCost(product.stock || 0, product.cost, item.quantity, unitPrice);
+            const newCost = applyPurchaseCost(product.stock || 0, product.cost, pieces, unitPrice);
             product.cost = newCost;
-            product.stock = (product.stock || 0) + item.quantity;
+            product.stock = (product.stock || 0) + pieces;
             db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, item.id, tenantId);
           }
         }
 
         calculatedTotal += itemTotal;
 
-        return { ...item, unitPrice, discountType, discountValue, unitCost, trackInventory: product ? product.track_inventory : 1 };
+        return [{
+          productId: item.id, pieces, tax: item.tax, unitPrice, discountType, discountValue, unitCost,
+          trackInventory: product ? product.track_inventory : 1, ...uomFields, originalItemId: null as number | null,
+        }];
       });
 
       // Apply global discount/tax if any (bounds validated above) — exactly the same math as
@@ -1449,8 +1533,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const transactionId = info.lastInsertRowid;
 
       const insertItem = db.prepare(`
-      INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
       let stockChange = '-';
@@ -1464,17 +1548,22 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       for (const item of processedItems) {
         insertItem.run(
           transactionId,
-          item.id,
-          item.quantity,
+          item.productId,
+          item.pieces,
           item.unitPrice,
           item.discountType,
           item.discountValue,
           item.tax?.type || null,
           item.tax?.value || null,
-          item.unitCost ?? null
+          item.unitCost ?? null,
+          item.uomId,
+          item.uomName,
+          item.uomFactor,
+          item.uomQty,
+          item.originalItemId
         );
         if (item.trackInventory !== 0) {
-          updateStock.run(item.quantity, item.id, tenantId);
+          updateStock.run(item.pieces, item.productId, tenantId);
         }
       }
 
@@ -1748,7 +1837,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // back to the product's current cost — the same best-available estimate the one-time
       // unit_cost_backfill_v1 migration used.
       unit_cost: item.unit_cost ?? item.cost ?? null,
-      discount: item.discount_type ? { type: item.discount_type, value: item.discount_value } : undefined
+      discount: item.discount_type ? { type: item.discount_type, value: item.discount_value } : undefined,
+      ...displayFields(item),
     }));
 
     transaction.discount = transaction.discount_type ? { type: transaction.discount_type, value: transaction.discount_value } : undefined;
@@ -1791,24 +1881,31 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     if (!original) return res.status(404).json({ error: "Transaction not found" });
     if (original.tx.type !== 'sale') return res.status(400).json({ error: "Only a sale can be refunded." });
     const factor = chargedFactor(original);
-    const refunded = refundedQuantityByProduct(tenantId, id);
+    const states = refundLineStates(tenantId, id, original.items);
     const archived = !db.prepare("SELECT 1 FROM transactions WHERE id = ? AND tenant_id = ?").get(id, tenantId);
     const productStmt = db.prepare("SELECT name, barcode FROM products WHERE id = ? AND tenant_id = ?");
-    const lines = original.items.map((oi) => {
+    // One entry per original sale LINE. Quantities and prices are expressed in the line's own unit
+    // (a carton line: sold_qty in cartons, unit_price / unit_refund per carton); base-unit lines have
+    // uom_id null and uom_factor 1, so they read exactly as before.
+    const lines = states.map(({ item: oi, refunded: refundedPieces, remaining }) => {
       const product = productStmt.get(oi.product_id, tenantId) as any;
-      const perUnitLine = lineTotal(oi.unit_price, oi.quantity, { type: oi.discount_type, value: oi.discount_value }) / (oi.quantity || 1);
-      const refundedQty = refunded[oi.product_id] || 0;
+      const perPieceLine = lineTotal(oi.unit_price, oi.quantity, { type: oi.discount_type, value: oi.discount_value }) / (oi.quantity || 1);
+      const uomFactor = oi.uom_factor || 1;
       return {
+        item_id: oi.id,
         product_id: oi.product_id,
         product_name: product?.name ?? `#${oi.product_id}`,
         barcode: product?.barcode ?? null,
-        sold_qty: oi.quantity,
-        refunded_qty: refundedQty,
-        remaining_qty: Math.max(0, oi.quantity - refundedQty),
-        unit_price: oi.unit_price,
+        uom_id: oi.uom_id ?? null,
+        uom_name: oi.uom_name ?? null,
+        uom_factor: uomFactor,
+        sold_qty: oi.quantity / uomFactor,
+        refunded_qty: refundedPieces / uomFactor,
+        remaining_qty: remaining / uomFactor,
+        unit_price: Math.round(oi.unit_price * uomFactor * 1e6) / 1e6,
         discount_type: oi.discount_type,
         discount_value: oi.discount_value,
-        unit_refund: perUnitLine * factor,
+        unit_refund: Math.round(perPieceLine * factor * uomFactor * 1e6) / 1e6,
       };
     });
     const paid = db.prepare(`SELECT IFNULL(SUM(amount / exchange_rate), 0) as p FROM ${archived ? 'archived_payments' : 'payments'} WHERE transaction_id = ? AND method != 'credit'`).get(id) as any;
@@ -2409,12 +2506,12 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     if (!purchase) return res.status(404).json({ error: "Purchase order not found" });
     purchase.archived = archived;
 
-    const items = db.prepare(`
+    const items = (db.prepare(`
     SELECT ti.*, p.name as product_name, p.barcode, p.category, p.unit, p.cost, p.cost_lbp
     FROM ${archived ? "archived_transaction_items" : "transaction_items"} ti
     JOIN products p ON ti.product_id = p.id
     WHERE ti.transaction_id = ?
-  `).all(id);
+  `).all(id) as any[]).map((item) => ({ ...item, ...displayFields(item) }));
 
     const payments = db.prepare(`
     SELECT * FROM ${archived ? "archived_payments" : "payments"} WHERE transaction_id = ? ORDER BY created_at ASC

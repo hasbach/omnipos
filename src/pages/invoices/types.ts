@@ -49,8 +49,14 @@ export interface LineDraft {
   product_id: number;
   name: string;
   barcode?: string;
+  /** Quantity in the line's unit of measure (pieces when uom_id is unset). */
   quantity: number;
+  /** Price per unit of the line's unit of measure (per piece when uom_id is unset). */
   unit_price: number;
+  /** Selected unit of measure (packs, cartons...); null/undefined = base piece. */
+  uom_id?: number | null;
+  uom_name?: string | null;
+  uom_factor?: number | null;
   unit_cost?: number | null;
   discount: LineDiscount;
   /** Catalog tier price at the moment this line was added/repriced — for the "tier price" hint. */

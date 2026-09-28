@@ -106,7 +106,12 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
             ? (Number(it.price) * it.quantity * it.discount.value) / 100
             : it.discount.value
           : 0);
-        return `<tr><td>${it.product_name}</td><td style="text-align:center">${it.quantity}</td><td style="text-align:end">${Number(it.price).toFixed(2)}</td><td style="text-align:end">${total.toFixed(2)}</td></tr>`;
+        // A unit-of-measure line prints "2 Carton (x24)" at the price of one carton; quantity and
+        // price on the row stay in the line's own unit.
+        const uom = it.uom_name ? ` - ${it.uom_name} x${it.uom_factor}` : '';
+        const qtyShown = it.display_qty ?? it.quantity;
+        const priceShown = it.display_unit_price ?? Number(it.price);
+        return `<tr><td>${it.product_name}${uom}</td><td style="text-align:center">${qtyShown}</td><td style="text-align:end">${Number(priceShown).toFixed(2)}</td><td style="text-align:end">${total.toFixed(2)}</td></tr>`;
       })
       .join('');
     win.document.write(`
@@ -250,9 +255,15 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
                       const profit = lineTot - cost;
                       return (
                         <tr key={item.id} className="border-t border-border">
-                          <td className="px-3 py-2 font-medium text-text">{item.product_name}</td>
-                          <td className="px-3 py-2 text-end num">{item.quantity}</td>
-                          <td className="px-3 py-2 text-end num">{formatMoney(Number(item.price), USD)}</td>
+                          <td className="px-3 py-2 font-medium text-text">
+                            {item.product_name}
+                            {item.uom_name && <span className="ms-2 text-xs font-semibold text-primary">{item.uom_name} ×{item.uom_factor}</span>}
+                          </td>
+                          <td className="px-3 py-2 text-end num">
+                            {item.display_qty ?? item.quantity}
+                            {item.uom_name && <span className="block text-[10px] text-text-3">= {item.quantity} {t('uom_piece_short', 'pcs')}</span>}
+                          </td>
+                          <td className="px-3 py-2 text-end num">{formatMoney(Number(item.display_unit_price ?? item.price), USD)}</td>
                           <td className="px-3 py-2 text-end num text-text-3">
                             {item.discount?.value ? (item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-${formatMoney(item.discount.value, USD)}`) : '—'}
                           </td>

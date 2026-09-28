@@ -416,6 +416,39 @@ for (const t of ['transactions', 'archived_transactions']) {
 try { db.exec("ALTER TABLE transaction_items ADD COLUMN unit_cost REAL;"); } catch {}
 try { db.exec("ALTER TABLE archived_transaction_items ADD COLUMN unit_cost REAL;"); } catch {}
 
+// Units of measure (packs/cartons with their own barcodes and prices). Quantity/unit_price/unit_cost
+// on transaction_items stay in BASE PIECES / per piece; these columns are a line-level snapshot of the
+// unit sold (uom_qty is in that unit) and, for refunds, the sale line being refunded.
+// product_units is created before the sync-metadata block below so it gets global_id/updated_at/
+// deleted_at + triggers like every other synced table (rows are soft-deleted).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_units (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    factor REAL NOT NULL,
+    barcode TEXT,
+    price REAL NOT NULL,
+    price_lbp REAL,
+    price_wholesale REAL,
+    price_wholesale_lbp REAL,
+    price_super_wholesale REAL,
+    price_super_wholesale_lbp REAL,
+    sort_order INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_product_units_tenant_product ON product_units(tenant_id, product_id);
+  CREATE INDEX IF NOT EXISTS idx_product_units_tenant_barcode ON product_units(tenant_id, barcode);
+`);
+// Same rule as unit_cost above: live column => archived twin => copied by settlement.
+for (const t of ['transaction_items', 'archived_transaction_items']) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN uom_id INTEGER;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN uom_name TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN uom_factor REAL;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN uom_qty REAL;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN original_item_id INTEGER;`); } catch {}
+}
+
 // Local-only audit/inventory tables (not in the sync PUSH/PULL lists).
 db.exec(`
   CREATE TABLE IF NOT EXISTS transaction_edits (
@@ -614,6 +647,26 @@ if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'unit_cost_backfill_v1'"
     console.error('unit_cost_backfill_v1 error:', e);
   }
 }
+
+// Legacy package pricing (package_price / units_per_package) becomes a real "Pack" unit so it can
+// carry its own barcode and be sold as a unit. Legacy columns are kept for older devices/cloud.
+// Exported so the regression suite can re-run it against a seeded legacy product.
+export function runUomFromPackageMigration() {
+  if (db.prepare("SELECT 1 FROM _migrations WHERE name = 'uom_from_package_v1'").get()) return;
+  try {
+    db.exec(`
+      INSERT INTO product_units (tenant_id, product_id, name, factor, price, price_lbp, sort_order)
+      SELECT p.tenant_id, p.id, 'Pack', p.units_per_package, p.package_price, p.package_price_lbp, 0
+      FROM products p
+      WHERE p.package_price > 0 AND p.units_per_package > 1 AND p.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM product_units u WHERE u.product_id = p.id AND u.deleted_at IS NULL)
+    `);
+    db.prepare("INSERT INTO _migrations (name) VALUES ('uom_from_package_v1')").run();
+  } catch (e) {
+    console.error('uom_from_package_v1 error:', e);
+  }
+}
+runUomFromPackageMigration();
 
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };

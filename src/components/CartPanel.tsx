@@ -9,6 +9,7 @@ import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Badge } from './ui';
 import { formatMoney, formatBalance, formatNumber } from '../lib/format';
+import { uomUnitPrice } from '../lib/pricing';
 
 export default function CartPanel() {
   const pos = usePosContext();
@@ -16,20 +17,20 @@ export default function CartPanel() {
     products, cart, barcodeInput, setBarcodeInput, isProcessing,
     currencies = CURRENCIES, selectedCurrency, setSelectedCurrency, setShowCheckout, setPaymentCurrency,
     globalDiscount, setGlobalDiscount, searchTerm, suggestions, setSuggestions,
-    handleBarcodeSubmit, handleSuggestionClick, updateQuantity, setItemQuantity, applyItemDiscount,
+    handleBarcodeSubmit, handleSuggestionClick, updateQuantity, setItemQuantity, applyItemDiscount, setItemUnit,
     calculateItemTotal, calculateItemTotalLBP, handleQuickCash, subtotalUSD, totalUSD, totalLBP,
     priceLevel, allowPriceOverride, enforceMinPrice, unitPriceUSD, setItemPriceOverride,
     creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled,
     selectedStakeholder, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
   } = pos as any;
 
-  const [discountEditorId, setDiscountEditorId] = useState<number | null>(null);
+  const [discountEditorId, setDiscountEditorId] = useState<string | null>(null);
   const [discountDraft, setDiscountDraft] = useState<{ type: 'percentage' | 'fixed'; value: string }>({ type: 'percentage', value: '0' });
-  const [priceEditorId, setPriceEditorId] = useState<number | null>(null);
+  const [priceEditorId, setPriceEditorId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState('');
 
   const openDiscountEditor = (item: any) => {
-    setDiscountEditorId(item.id);
+    setDiscountEditorId(item.line_key);
     setDiscountDraft({ type: item.discount?.type || 'percentage', value: String(item.discount?.value ?? 0) });
   };
 
@@ -40,7 +41,7 @@ export default function CartPanel() {
   };
 
   const openPriceEditor = (item: any) => {
-    setPriceEditorId(item.id);
+    setPriceEditorId(item.line_key);
     const usd = item.unit_price != null ? item.unit_price : unitPriceUSD(item, item.quantity);
     setPriceDraft((usd * (selectedCurrency?.rate || 1)).toFixed(selectedCurrency?.code === 'USD' ? 2 : 0));
   };
@@ -49,12 +50,12 @@ export default function CartPanel() {
     const raw = parseFloat(priceDraft);
     if (Number.isFinite(raw) && raw >= 0) {
       const usd = raw / (selectedCurrency?.rate || 1);
-      setItemPriceOverride(item.id, usd);
+      setItemPriceOverride(item.line_key, usd);
     }
     setPriceEditorId(null);
   };
 
-  const clearPriceOverride = (id: number) => setItemPriceOverride(id, null);
+  const clearPriceOverride = (key: string) => setItemPriceOverride(key, null);
 
   const tierLabel = !priceLevelsEnabled ? null : priceLevel === 'wholesale'
     ? t('pos_tier_wholesale', 'Wholesale')
@@ -84,7 +85,7 @@ export default function CartPanel() {
                 setBarcodeInput(val);
                 if (val.length > 1) {
                   const fuse = new Fuse(products, {
-                    keys: ['name', 'barcode', 'barcodes'],
+                    keys: ['name', 'barcode', 'barcodes', 'units.barcode'],
                     threshold: 0.3,
                   });
                   setSuggestions(fuse.search(val).map((r: any) => r.item).slice(0, 5));
@@ -105,22 +106,29 @@ export default function CartPanel() {
                 exit={{ opacity: 0, y: -10 }}
                 className="absolute start-4 end-4 top-full mt-1 bg-surface border border-border shadow-[var(--shadow-modal)] z-50 rounded-lg overflow-hidden"
               >
-                {suggestions.map((p: any) => (
+                {suggestions.map((p: any) => {
+                  // A typed unit barcode adds that unit (carton/pack) instead of a single piece.
+                  const mu = (p.units || []).find((u: any) => u.barcode && u.barcode === barcodeInput.trim());
+                  return (
                   <button
                     key={p.id}
-                    onClick={() => handleSuggestionClick(p)}
+                    onClick={() => handleSuggestionClick(p, mu ? mu.id : null)}
                     className="w-full flex items-center justify-between p-4 hover:bg-primary hover:text-on-primary transition-colors text-start border-b border-border last:border-none cursor-pointer"
                   >
                     <div>
-                      <div className="font-semibold">{p.name}</div>
-                      <div className="text-xs opacity-70 font-mono">{p.barcode}</div>
+                      <div className="font-semibold">
+                        {p.name}
+                        {mu && <span className="ms-2 text-xs font-bold opacity-80">{mu.name} ×{mu.factor}</span>}
+                      </div>
+                      <div className="text-xs opacity-70 font-mono">{mu ? mu.barcode : p.barcode}</div>
                     </div>
                     <div className="font-mono font-bold text-end num">
-                      <div>{formatMoney(unitPriceUSD(p, 1), { code: 'USD', symbol: '$' })}</div>
-                      <div className="text-[10px] text-success">{formatNumber(p.price_lbp || Math.round((p.price || 0) * 89500), { decimals: 0 })} LL</div>
+                      <div>{formatMoney(mu ? uomUnitPrice(p, mu, priceLevel) : unitPriceUSD(p, 1), { code: 'USD', symbol: '$' })}</div>
+                      {!mu && <div className="text-[10px] text-success">{formatNumber(p.price_lbp || Math.round((p.price || 0) * 89500), { decimals: 0 })} LL</div>}
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </motion.div>
             )}
           </AnimatePresence>
@@ -139,7 +147,7 @@ export default function CartPanel() {
                 const belowMin = item.min_price && item.min_price > 0 && (item.unit_price ?? unitPriceUSD(item, item.quantity)) < item.min_price;
                 return (
                 <motion.div
-                  key={item.id}
+                  key={item.line_key}
                   layout
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -159,9 +167,39 @@ export default function CartPanel() {
                           <Badge variant="info">{tierLabel}</Badge>
                         )}
                       </div>
-                      <p className="text-xs text-text-3 font-mono truncate">
-                        {item.barcode} • {formatMoney(item.unit_price != null ? item.unit_price : unitPriceUSD(item, item.quantity), { code: 'USD', symbol: '$' })}/unit
-                      </p>
+                      {(() => {
+                        const unit = item.uom_id != null ? (item.units || []).find((u: any) => u.id === item.uom_id) : null;
+                        const unitPrice = item.unit_price != null ? item.unit_price : unitPriceUSD(item, item.quantity);
+                        const baseLabel = item.unit || t('uom_piece', 'Piece');
+                        if (!unit) {
+                          return (
+                            <p className="text-xs text-text-3 font-mono truncate">
+                              {item.barcode} • {formatMoney(unitPrice, { code: 'USD', symbol: '$' })}/{t('uom_unit_short', 'unit')}
+                            </p>
+                          );
+                        }
+                        return (
+                          <>
+                            <p className="text-xs text-text-3 font-mono truncate">
+                              {formatNumber(item.quantity, { decimals: 0 })} × {unit.name} ({unit.factor} {baseLabel}) • {formatMoney(unitPrice, { code: 'USD', symbol: '$' })} / {unit.name}
+                            </p>
+                            <p className="text-[10px] text-text-3 font-mono">= {formatNumber(item.quantity * unit.factor, { decimals: 0 })} {baseLabel}{unit.barcode ? ` • ${unit.barcode}` : ''}</p>
+                          </>
+                        );
+                      })()}
+                      {Array.isArray(item.units) && item.units.length > 0 && (
+                        <select
+                          aria-label={t('uom_select_unit', 'Unit of measure')}
+                          value={item.uom_id ?? ''}
+                          onChange={(e) => setItemUnit(item.line_key, e.target.value === '' ? null : Number(e.target.value))}
+                          className="mt-1 h-8 max-w-full rounded-[var(--radius-input)] border border-border bg-surface px-2 text-xs font-semibold text-text outline-none focus:border-primary cursor-pointer"
+                        >
+                          <option value="">{item.unit || t('uom_piece', 'Piece')}</option>
+                          {item.units.map((u: any) => (
+                            <option key={u.id} value={u.id}>{u.name} ×{u.factor}</option>
+                          ))}
+                        </select>
+                      )}
                       {belowMin && (
                         <p className="text-[10px] text-danger font-semibold mt-0.5">
                           {t('pos_below_min_price', 'Price is below the minimum price ({min}) for this product.', { min: formatMoney(item.min_price, { code: 'USD', symbol: '$' }) })}
@@ -180,7 +218,7 @@ export default function CartPanel() {
                         </button>
                         {allowPriceOverride && (
                           item.unit_price != null ? (
-                            <button onClick={() => clearPriceOverride(item.id)} className="text-[10px] text-text-3 hover:text-danger cursor-pointer">
+                            <button onClick={() => clearPriceOverride(item.line_key)} className="text-[10px] text-text-3 hover:text-danger cursor-pointer">
                               {t('cancel', 'Cancel')} {t('pos_override_price', 'Override')}
                             </button>
                           ) : (
@@ -193,7 +231,7 @@ export default function CartPanel() {
 
                       <div className="flex items-center border border-border rounded-[var(--radius-input)] overflow-hidden h-11">
                         <button
-                          onClick={() => updateQuantity(item.id, -1)}
+                          onClick={() => updateQuantity(item.line_key, -1)}
                           className="h-11 w-11 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text"
                         >
                           <Minus size={16} />
@@ -202,11 +240,11 @@ export default function CartPanel() {
                           type="number"
                           className="w-14 text-center font-mono font-bold bg-transparent outline-none num text-text"
                           value={item.quantity}
-                          onChange={(e) => setItemQuantity(item.id, parseFloat(e.target.value) || 0)}
+                          onChange={(e) => setItemQuantity(item.line_key, parseFloat(e.target.value) || 0)}
                           onFocus={(e) => e.target.select()}
                         />
                         <button
-                          onClick={() => updateQuantity(item.id, 1)}
+                          onClick={() => updateQuantity(item.line_key, 1)}
                           className="h-11 w-11 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text"
                         >
                           <Plus size={16} />
@@ -217,7 +255,7 @@ export default function CartPanel() {
                         <div className="text-[10px] text-success">{formatNumber(Math.round(calculateItemTotalLBP(item)), { decimals: 0 })} LL</div>
                       </div>
                       <button
-                        onClick={() => updateQuantity(item.id, -item.quantity)}
+                        onClick={() => updateQuantity(item.line_key, -item.quantity)}
                         className="h-11 w-11 flex items-center justify-center text-danger opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                         aria-label={t('pos_remove_line', 'Remove line')}
                       >
@@ -227,7 +265,7 @@ export default function CartPanel() {
                   </div>
 
                   {/* Inline discount editor */}
-                  {discountEditorId === item.id && (
+                  {discountEditorId === item.line_key && (
                     <div className="mt-2 pt-2 border-t border-border flex items-center gap-2">
                       <button
                         onClick={() => setDiscountDraft(d => ({ ...d, type: d.type === 'percentage' ? 'fixed' : 'percentage' }))}
@@ -249,7 +287,7 @@ export default function CartPanel() {
                   )}
 
                   {/* Inline price-override editor */}
-                  {priceEditorId === item.id && (
+                  {priceEditorId === item.line_key && (
                     <div className="mt-2 pt-2 border-t border-border flex items-center gap-2">
                       <span className="text-xs text-text-3 shrink-0">{selectedCurrency.symbol}</span>
                       <input

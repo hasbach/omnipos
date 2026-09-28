@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Fuse from 'fuse.js';
-import { Product, CartItem, Stakeholder, Transaction, Payment, Discount, Tenant } from '../types';
+import { Product, CartItem, Stakeholder, Transaction, Payment, Discount, Tenant, cartLineKey } from '../types';
 import { useTheme } from './useTheme';
 import { useI18n } from '../intl/index';
 import { useToast } from '../components/ui/ToastProvider';
@@ -10,6 +10,8 @@ import {
   normalizeLevel,
   saleLineUnitPrice,
   saleLineUnitPriceLbp,
+  uomUnitPrice,
+  uomUnitPriceLbp,
 } from '../lib/pricing';
 import { useSettings } from '../lib/useSettings';
 import { translateServerError } from '../lib/serverErrors';
@@ -365,14 +367,19 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const handleRefund = async () => {
     if (!selectedHistoryTransaction) return;
 
-    const itemsToRefund = selectedHistoryTransaction.items
-      .filter((item: any) => refundQuantities[item.id] > 0)
-      .map((item: any) => ({
-        id: item.product_id,
-        quantity: refundQuantities[item.id],
-        price: item.unit_price,
-        discount: { type: item.discount_type, value: item.discount_value },
-        tax: { type: item.tax_type, value: item.tax_value }
+    // One entry per ORIGINAL LINE (a product sold as pieces and as a carton are separate lines).
+    // Quantities are in the line's unit; the server converts to pieces from the original line.
+    const refundLines: any[] = selectedHistoryTransaction.refund_lines || [];
+    const itemsToRefund = refundLines
+      .filter((l: any) => refundQuantities[l.item_id] > 0)
+      .map((l: any) => ({
+        id: l.product_id,
+        original_item_id: l.item_id,
+        uom_id: l.uom_id ?? undefined,
+        quantity: refundQuantities[l.item_id],
+        price: l.unit_price,
+        discount: { type: l.discount_type, value: l.discount_value },
+        unit_refund: l.unit_refund,
       }));
 
     if (itemsToRefund.length === 0) {
@@ -383,23 +390,20 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     setIsProcessing(true);
     try {
       // The refund amount actually charged back must come from the server's own math (per-unit
-      // price after the ORIGINAL invoice's whole-invoice discount/tax, via chargedFactor) — not
-      // just this line's own price/discount, which ignores that global adjustment and can pay
-      // back more than the server will record for this refund (see GET
-      // /api/transactions/:id/refundable + the type==='refund' branch of POST /api/transactions
-      // in server/routes.ts). Fetch it fresh right before submitting so the cash payment we send
-      // matches exactly what the server will total.
+      // refund after the ORIGINAL invoice's whole-invoice discount/tax, via chargedFactor) -- the
+      // /refundable lines were fetched when the refund dialog opened; refetch right before submitting
+      // so the cash payment we send matches exactly what the server will total.
       const refundableRes = await fetch(`/api/transactions/${selectedHistoryTransaction.id}/refundable`);
       if (!refundableRes.ok) {
         const err = await refundableRes.json().catch(() => ({}));
         throw new Error(err.error || t('pos_refund_failed', 'Failed to process refund.'));
       }
       const refundable = await refundableRes.json();
-      const unitRefundByProduct: Record<number, number> = {};
-      for (const line of refundable.lines || []) unitRefundByProduct[line.product_id] = line.unit_refund;
+      const unitRefundByItem: Record<number, number> = {};
+      for (const line of refundable.lines || []) unitRefundByItem[line.item_id] = line.unit_refund;
 
       const totalRefund = itemsToRefund.reduce((sum: number, item: any) => {
-        const unitRefund = unitRefundByProduct[item.id] ?? 0;
+        const unitRefund = unitRefundByItem[item.original_item_id] ?? item.unit_refund ?? 0;
         return sum + unitRefund * item.quantity;
       }, 0);
 
@@ -417,7 +421,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
           user_id: currentUser?.id || 1,
           type: 'refund',
           original_transaction_id: selectedHistoryTransaction.id,
-          items: itemsToRefund,
+          items: itemsToRefund.map(({ unit_refund: _u, ...rest }: any) => rest),
           total_amount: totalRefund,
           currency: selectedHistoryTransaction.currency,
           exchange_rate: selectedHistoryTransaction.exchange_rate,
@@ -496,15 +500,28 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStakeholder, stakeholders.length, settings.default_price_level, priceLevelsEnabled]);
 
-  const addToCart = (product: Product) => {
+  const findUnit = (product: Product, uomId?: number | null) =>
+    uomId != null ? (product.units || []).find(u => u.id === uomId) : undefined;
+
+  /** Adds one unit of the product in the given unit of measure (null/undefined = base piece). */
+  const addToCart = (product: Product, uomId?: number | null) => {
+    const unit = findUnit(product, uomId);
+    const key = cartLineKey(product.id, unit ? unit.id : null);
     setCart(prev => {
-      const existing = prev.find(item => item.id === product.id);
+      const existing = prev.find(item => item.line_key === key);
       if (existing) {
         return prev.map(item =>
-          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          item.line_key === key ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
-      return [...prev, { ...product, quantity: 1 }];
+      return [...prev, {
+        ...product,
+        line_key: key,
+        uom_id: unit ? unit.id : null,
+        uom_name: unit ? unit.name : null,
+        uom_factor: unit ? unit.factor : null,
+        quantity: 1,
+      }];
     });
   };
 
@@ -513,10 +530,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     if (!barcodeInput) return;
 
     try {
-      const res = await fetch(`/api/products/${barcodeInput}`);
+      const res = await fetch(`/api/products/${encodeURIComponent(barcodeInput)}`);
       if (res.ok) {
         const product = await res.json();
-        addToCart(product);
+        // A unit barcode (carton/pack) adds that unit; scanning it twice = 2 cartons.
+        addToCart(product, product.matched_uom_id ?? null);
         setBarcodeInput('');
         setSuggestions([]);
       } else {
@@ -527,16 +545,16 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     }
   };
 
-  const handleSuggestionClick = (product: Product) => {
-    addToCart(product);
+  const handleSuggestionClick = (product: Product, uomId?: number | null) => {
+    addToCart(product, uomId ?? null);
     setBarcodeInput('');
     setSuggestions([]);
     barcodeRef.current?.focus();
   };
 
-  const updateQuantity = (id: number, delta: number) => {
+  const updateQuantity = (lineKey: string, delta: number) => {
     setCart(prev => prev.map(item => {
-      if (item.id === id) {
+      if (item.line_key === lineKey) {
         const newQty = Math.max(0, item.quantity + delta);
         return { ...item, quantity: newQty };
       }
@@ -544,14 +562,14 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     }).filter(item => item.quantity > 0));
   };
 
-  const setItemQuantity = (id: number, qty: number) => {
-    setCart(prev => prev.map(item => item.id === id ? { ...item, quantity: Math.max(0, qty) } : item)
+  const setItemQuantity = (lineKey: string, qty: number) => {
+    setCart(prev => prev.map(item => item.line_key === lineKey ? { ...item, quantity: Math.max(0, qty) } : item)
       .filter(item => item.quantity > 0));
   };
 
-  const applyItemDiscount = (id: number, type: 'percentage' | 'fixed', value: number) => {
+  const applyItemDiscount = (lineKey: string, type: 'percentage' | 'fixed', value: number) => {
     setCart(prev => prev.map(item => {
-      if (item.id === id) {
+      if (item.line_key === lineKey) {
         return { ...item, discount: { type, value } };
       }
       return item;
@@ -559,10 +577,10 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   };
 
   // Manual per-line price override (only meaningful when Settings → allow_price_override is on).
-  // Stored in USD on the cart item ('unit_price'), same field the server accepts on checkout.
-  const setItemPriceOverride = (id: number, unitPriceUsd: number | null) => {
+  // Stored in USD PER UNIT OF THE LINE'S UOM on the cart item ('unit_price'), same field the server accepts on checkout.
+  const setItemPriceOverride = (lineKey: string, unitPriceUsd: number | null) => {
     setCart(prev => prev.map(item => {
-      if (item.id !== id) return item;
+      if (item.line_key !== lineKey) return item;
       const next: any = { ...item };
       if (unitPriceUsd === null) {
         delete next.unit_price;
@@ -571,6 +589,32 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       }
       return next;
     }));
+  };
+
+  /** Switch a line to another unit of measure (null = base piece); merges into an existing line of that unit. */
+  const setItemUnit = (lineKey: string, uomId: number | null) => {
+    setCart(prev => {
+      const line = prev.find(i => i.line_key === lineKey);
+      if (!line) return prev;
+      const unit = findUnit(line, uomId);
+      const newKey = cartLineKey(line.id, unit ? unit.id : null);
+      if (newKey === lineKey) return prev;
+      const moved: any = {
+        ...line,
+        line_key: newKey,
+        uom_id: unit ? unit.id : null,
+        uom_name: unit ? unit.name : null,
+        uom_factor: unit ? unit.factor : null,
+      };
+      delete moved.unit_price; // a per-unit override no longer applies to another unit
+      const target = prev.find(i => i.line_key === newKey);
+      if (target) {
+        return prev
+          .filter(i => i.line_key !== lineKey)
+          .map(i => i.line_key === newKey ? { ...i, quantity: i.quantity + line.quantity } : i);
+      }
+      return prev.map(i => i.line_key === lineKey ? moved : i);
+    });
   };
 
   // --- Currency + tier-aware pricing ------------------------------------------------------
@@ -585,18 +629,27 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const localCode = localCurrency?.code || 'LBP';
   const lbpRate = localCurrency?.rate || activeRate || 89500;
 
+  const cartUnit = (item: any) => (item.uom_id != null ? (item.units || []).find((u: any) => u.id === item.uom_id) : undefined);
+
+  // Price of ONE unit of the line's UoM (one piece for base lines; base lines get the automatic pack break).
   const unitPriceUSD = useCallback((item: any, qty: number): number => {
     if (item.unit_price != null && Number.isFinite(item.unit_price)) return item.unit_price;
-    return saleLineUnitPrice(item, priceLevel, qty);
+    const unit = cartUnit(item);
+    if (unit) return uomUnitPrice(item, unit, priceLevel);
+    return saleLineUnitPrice(item, priceLevel, qty, item.units);
   }, [priceLevel]);
 
   const unitPriceIn = useCallback((item: any, code: string, qty: number, rate: number): number => {
     if (item.unit_price != null && Number.isFinite(item.unit_price)) {
       return usesLocalPrice(code) ? item.unit_price * rate : item.unit_price;
     }
+    const unit = cartUnit(item);
+    if (unit) {
+      return usesLocalPrice(code) ? uomUnitPriceLbp(item, unit, priceLevel, rate) : uomUnitPrice(item, unit, priceLevel);
+    }
     return usesLocalPrice(code)
-      ? saleLineUnitPriceLbp(item, priceLevel, qty, rate)
-      : saleLineUnitPrice(item, priceLevel, qty);
+      ? saleLineUnitPriceLbp(item, priceLevel, qty, rate, item.units)
+      : saleLineUnitPrice(item, priceLevel, qty, item.units);
   }, [priceLevel]);
 
   // Item line total in a given currency, honouring tier/package pricing and the per-item discount.
@@ -754,7 +807,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
     if (searchTerm) {
       const fuse = new Fuse(result, {
-        keys: ['name', 'barcode', 'barcodes'],
+        keys: ['name', 'barcode', 'barcodes', 'units.barcode'],
         threshold: 0.3,
       });
       result = fuse.search(searchTerm).map(r => r.item);
@@ -788,7 +841,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     const transaction: any = {
       stakeholder_id: selectedStakeholder,
       user_id: currentUser?.id || 1,
-      items: cart,
+      items: cart.map(({ units: _units, ...c }: any) => c),
       total_amount: totalUSD,
       currency: 'USD',
       exchange_rate: 1,
@@ -814,6 +867,14 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         if (showReceiptDialog) {
           setLastTransaction({
             ...transaction,
+            // Resolved per-line figures for the browser-print fallback (unit name, qty in the line's
+            // unit, price per unit and the line total after discount).
+            items: cart.map((c: any) => ({
+              ...c,
+              display_qty: c.quantity,
+              display_unit_price: unitPriceUSD(c, c.quantity),
+              line_total: calculateItemTotal(c),
+            })),
             id: data.id,
             created_at: new Date().toISOString(),
             balance_before: data.balance_before,
@@ -937,10 +998,14 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     ];
 
     transaction.items.forEach((item: any) => {
-      const name = item.name.padEnd(15).substring(0, 15);
-      const qty = item.quantity.toString().padStart(5);
-      const price = `$${(item.price * item.quantity).toFixed(2)}`.padStart(8);
+      const qtyN = item.display_qty ?? item.quantity;
+      const unitN = item.display_unit_price ?? item.unit_price ?? item.price ?? 0;
+      const uomLabel = item.uom_name ? ` - ${item.uom_name}${item.uom_factor > 1 ? ` x${item.uom_factor}` : ''}` : '';
+      const name = `${item.name}${uomLabel}`.padEnd(15).substring(0, 15);
+      const qty = qtyN.toString().padStart(5);
+      const price = `$${(item.line_total ?? unitN * qtyN).toFixed(2)}`.padStart(8);
       lines.push(`${name} ${qty} ${price}`);
+      if (item.uom_name && (item.name + uomLabel).length > 15) lines.push(`  ${uomLabel.replace(/^ - /, '')}`);
       if (item.discount?.value > 0) {
         const disc = item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`;
         lines.push(`  (Discount: ${disc})`);
@@ -1173,6 +1238,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     calculateItemTotal,
     calculateItemTotalLBP,
     unitPriceUSD,
+    setItemUnit,
     totalUSD,
     filteredProducts,
     printReceipt,

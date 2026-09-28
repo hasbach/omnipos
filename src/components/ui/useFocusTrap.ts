@@ -10,6 +10,11 @@ const FOCUSABLE_SELECTOR =
 export function useFocusTrap<T extends HTMLElement>(active: boolean, onEscape?: () => void) {
   const ref = useRef<T | null>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // Callers pass inline handlers (a new function every render). Keeping it in a ref means the
+  // effect below only re-runs when `active` flips; re-running it on every render used to reset
+  // focus to the first field while the user was typing in another one.
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
 
   useEffect(() => {
     if (!active) return;
@@ -27,7 +32,7 @@ export function useFocusTrap<T extends HTMLElement>(active: boolean, onEscape?: 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onEscape?.();
+        onEscapeRef.current?.();
         return;
       }
       if (e.key !== 'Tab' || !container) return;
@@ -56,7 +61,7 @@ export function useFocusTrap<T extends HTMLElement>(active: boolean, onEscape?: 
       document.removeEventListener('keydown', handleKeyDown, true);
       previouslyFocused.current?.focus?.();
     };
-  }, [active, onEscape]);
+  }, [active]);
 
   return ref;
 }

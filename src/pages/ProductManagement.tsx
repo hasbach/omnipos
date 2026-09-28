@@ -90,7 +90,7 @@ export default function ProductManagement() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return products.filter((p) => {
-      if (q && !p.name.toLowerCase().includes(q) && !(p.barcode || '').includes(search) && !p.barcodes?.some((b) => b.includes(search))) {
+      if (q && !p.name.toLowerCase().includes(q) && !(p.barcode || '').includes(search) && !p.barcodes?.some((b) => b.includes(search)) && !p.units?.some((u) => (u.barcode || '').includes(search))) {
         return false;
       }
       if (category && p.category !== category) return false;
@@ -184,6 +184,7 @@ export default function ProductManagement() {
             'Min Price': p.min_price,
             'Package Price': p.package_price,
             'Units/Pkg': p.units_per_package,
+            Units: (p.units || []).map((u: any) => `${u.name} x${u.factor} @ ${u.price}${u.barcode ? ` [${u.barcode}]` : ''}`).join('; '),
             Stock: p.stock,
           })),
         );
@@ -219,7 +220,20 @@ export default function ProductManagement() {
   const columns = useMemo<DataTableColumn<Product>[]>(() => {
     const cols: DataTableColumn<Product>[] = [
       { key: 'barcode', header: t('prod_col_barcode', 'Barcode'), sortable: true, render: (p) => <span className="font-mono text-xs text-text-3">{p.barcode || '—'}</span> },
-      { key: 'name', header: t('prod_col_name', 'Name'), sortable: true, render: (p) => <span className="font-medium text-text">{p.name}</span> },
+      { key: 'name', header: t('prod_col_name', 'Name'), sortable: true, render: (p) => (
+        <div className="min-w-0">
+          <span className="font-medium text-text">{p.name}</span>
+          {p.units && p.units.length > 0 && (
+            <div className="mt-0.5 flex flex-wrap gap-1">
+              {p.units.map((u) => (
+                <span key={u.id} className="inline-flex items-center rounded-[var(--radius-chip)] bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-text-2" title={u.barcode || undefined}>
+                  {u.name} ×{u.factor}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      ) },
       { key: 'category', header: t('prod_col_category', 'Category'), sortable: true, render: (p) => <span className="text-text-3">{p.category}</span> },
       {
         key: 'stock',

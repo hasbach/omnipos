@@ -145,6 +145,21 @@ export function translateServerError(err: unknown, t: Translate): string {
     const amount = formatMoney(e.available || 0, USD);
     return interpolate(t('err_store_credit_exceeded', 'Exceeds the available account balance ({amount}).'), { amount });
   }
+  switch (e.code) {
+    case 'BARCODE_TAKEN':
+      return t('err_barcode_taken', 'This barcode is already used by another product or unit.');
+    case 'UOM_FACTOR_INVALID':
+      return t('err_uom_factor_invalid', 'A unit must contain more than 1 piece.');
+    case 'UOM_FACTOR_DUPLICATE':
+      return t('err_uom_factor_duplicate', 'Two units have the same size. Each unit needs a different quantity.');
+    case 'UOM_PRICE_REQUIRED':
+      return t('err_uom_price_required', 'Enter a price for this unit.');
+    case 'UOM_NAME_REQUIRED':
+      return t('err_uom_name_required', 'Enter a name for this unit.');
+    case 'UOM_INVALID':
+      return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
+  }
+
   if (e.code === 'CREDIT_LIMIT') {
     // The credit-limit amount isn't carried as a separate field — it's embedded in the server's
     // own message text, so fall through to the text-pattern match below to extract and reformat it.

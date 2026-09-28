@@ -137,7 +137,7 @@ export default function PaymentModal() {
                       const val = e.target.value;
                       setBarcodeInput(val);
                       if (val.length > 1) {
-                        const fuse = new Fuse(products, { keys: ['name', 'barcode', 'barcodes'], threshold: 0.3 });
+                        const fuse = new Fuse(products, { keys: ['name', 'barcode', 'barcodes', 'units.barcode'], threshold: 0.3 });
                         setSuggestions(fuse.search(val).map((r: any) => r.item).slice(0, 5));
                       } else {
                         setSuggestions([]);
@@ -154,19 +154,22 @@ export default function PaymentModal() {
                       exit={{ opacity: 0, y: 10 }}
                       className="absolute start-0 end-0 top-full mt-4 bg-surface text-text rounded-2xl shadow-[var(--shadow-modal)] overflow-hidden z-50"
                     >
-                      {suggestions.map((p: any) => (
+                      {suggestions.map((p: any) => {
+                        const mu = (p.units || []).find((u: any) => u.barcode && u.barcode === barcodeInput.trim());
+                        return (
                         <button
                           key={p.id}
-                          onClick={() => handleSuggestionClick(p)}
+                          onClick={() => handleSuggestionClick(p, mu ? mu.id : null)}
                           className="w-full flex items-center justify-between p-6 hover:bg-primary hover:text-on-primary transition-colors text-start border-b border-border last:border-none cursor-pointer"
                         >
-                          <div className="text-xl font-bold">{p.name}</div>
+                          <div className="text-xl font-bold">{p.name}{mu && <span className="ms-2 text-base opacity-80">{mu.name} ×{mu.factor}</span>}</div>
                           <div className="text-end">
-                            <div className="text-2xl font-mono font-black num">${(p.price || 0).toFixed(2)}</div>
-                            <div className="text-lg font-mono font-bold text-success num">{formatNumber(p.price_lbp || Math.round((p.price || 0) * 89500), { decimals: 0 })} LL</div>
+                            <div className="text-2xl font-mono font-black num">${(mu ? mu.price : (p.price || 0)).toFixed(2)}</div>
+                            {!mu && <div className="text-lg font-mono font-bold text-success num">{formatNumber(p.price_lbp || Math.round((p.price || 0) * 89500), { decimals: 0 })} LL</div>}
                           </div>
                         </button>
-                      ))}
+                        );
+                      })}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -288,12 +291,18 @@ export default function PaymentModal() {
                       size="sm"
                       variant="danger"
                       onClick={async () => {
-                        const res = await fetch(`/api/transactions/${selectedHistoryTransaction.id}`);
-                        if (res.ok) {
+                        const [res, refRes] = await Promise.all([
+                          fetch(`/api/transactions/${selectedHistoryTransaction.id}`),
+                          fetch(`/api/transactions/${selectedHistoryTransaction.id}/refundable`),
+                        ]);
+                        if (res.ok && refRes.ok) {
                           const full = await res.json();
+                          const refundable = await refRes.json();
+                          // One refund row per ORIGINAL LINE, in that line's unit (server /refundable).
+                          full.refund_lines = refundable.lines || [];
                           setSelectedHistoryTransaction(full);
                           const initialRefunds: Record<number, number> = {};
-                          full.items.forEach((item: any) => initialRefunds[item.id] = 0);
+                          full.refund_lines.forEach((l: any) => initialRefunds[l.item_id] = 0);
                           setRefundQuantities(initialRefunds);
                           setRefundMethod('cash');
                           setShowRefundModal(true);
@@ -315,7 +324,7 @@ export default function PaymentModal() {
 
       {/* Refund Modal */}
       <Modal
-        open={showRefundModal && !!selectedHistoryTransaction?.items}
+        open={showRefundModal && !!selectedHistoryTransaction?.refund_lines}
         onClose={() => setShowRefundModal(false)}
         size="lg"
         title={t('pos_process_refund', 'Process Refund')}
@@ -323,36 +332,44 @@ export default function PaymentModal() {
         {/* Children are evaluated even while the modal is closed, and a row picked from the history
             list has no `items` until the Refund button loads the full transaction — guard on items,
             not just on the selection, or selecting any history row crashes the POS. */}
-        {Array.isArray(selectedHistoryTransaction?.items) && (
+        {Array.isArray(selectedHistoryTransaction?.refund_lines) && (
           <>
             <p className="text-sm text-text-3 mb-4">
               {t('pos_refund_subtitle', 'Select items and quantities to return for Transaction #{id}', { id: selectedHistoryTransaction.id })}
             </p>
             <div className="space-y-3 max-h-[50vh] overflow-y-auto">
-              {selectedHistoryTransaction.items.map((item: any) => (
-                <div key={item.id} className="flex items-center justify-between p-3 bg-surface-2 rounded-xl border border-border">
+              {(selectedHistoryTransaction.refund_lines || []).map((line: any) => {
+                const qty = refundQuantities[line.item_id] || 0;
+                const unitLabel = line.uom_name ? `${line.uom_name}${line.uom_factor > 1 ? ` ×${line.uom_factor}` : ''}` : '';
+                return (
+                <div key={line.item_id} className="flex items-center justify-between p-3 bg-surface-2 rounded-xl border border-border">
                   <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-text truncate">{item.product_name || item.name || 'Product'}</h4>
+                    <h4 className="font-semibold text-text truncate">
+                      {line.product_name || 'Product'}
+                      {unitLabel && <span className="ms-2 text-xs font-bold text-primary">{unitLabel}</span>}
+                    </h4>
                     <p className="text-xs text-text-3 font-mono">
-                      {t('pos_purchased', 'Purchased: {qty} @ {price}', { qty: item.quantity, price: `$${item.unit_price.toFixed(2)}` })}
+                      {t('pos_purchased', 'Purchased: {qty} @ {price}', { qty: line.sold_qty, price: `$${Number(line.unit_price).toFixed(2)}` })}
+                      {line.refunded_qty > 0 && ` · ${t('pos_refund_already', 'already returned {qty}', { qty: line.refunded_qty })}`}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center border border-border rounded-xl overflow-hidden bg-surface">
-                      <button onClick={() => setRefundQuantities((prev: any) => ({ ...prev, [item.id]: Math.max(0, (prev[item.id] || 0) - 1) }))} className="h-9 w-9 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text">
+                      <button disabled={line.remaining_qty <= 0} onClick={() => setRefundQuantities((prev: any) => ({ ...prev, [line.item_id]: Math.max(0, (prev[line.item_id] || 0) - 1) }))} className="h-9 w-9 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text disabled:opacity-30">
                         <Minus size={14} />
                       </button>
-                      <span className="w-10 text-center font-mono font-bold num text-text">{refundQuantities[item.id] || 0}</span>
-                      <button onClick={() => setRefundQuantities((prev: any) => ({ ...prev, [item.id]: Math.min(item.quantity, (prev[item.id] || 0) + 1) }))} className="h-9 w-9 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text">
+                      <span className="w-10 text-center font-mono font-bold num text-text">{qty}</span>
+                      <button disabled={line.remaining_qty <= 0} onClick={() => setRefundQuantities((prev: any) => ({ ...prev, [line.item_id]: Math.min(line.remaining_qty, (prev[line.item_id] || 0) + 1) }))} className="h-9 w-9 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text disabled:opacity-30">
                         <Plus size={14} />
                       </button>
                     </div>
                     <div className="w-20 text-end font-mono font-bold num text-danger">
-                      -${refundLineAmount(item, refundQuantities[item.id] || 0, selectedHistoryTransaction).toFixed(2)}
+                      -${(line.unit_refund * qty).toFixed(2)}
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="mt-4 pt-4 border-t border-border flex flex-col gap-4">
@@ -379,16 +396,16 @@ export default function PaymentModal() {
               <div className="flex justify-between items-center">
                 <span className="text-sm font-bold text-text-3 uppercase">{t('pos_total_refund_amount', 'Total Refund Amount')}</span>
                 <span className="text-2xl font-black font-mono num text-danger">
-                  -${selectedHistoryTransaction.items.reduce((sum: number, item: any) =>
-                    sum + refundLineAmount(item, refundQuantities[item.id] || 0, selectedHistoryTransaction), 0).toFixed(2)}
+                  -${(selectedHistoryTransaction.refund_lines || []).reduce((sum: number, l: any) =>
+                    sum + l.unit_refund * (refundQuantities[l.item_id] || 0), 0).toFixed(2)}
                 </span>
               </div>
 
               {selectedHistoryTransaction.stakeholder_id !== 1 && (() => {
                 const s = stakeholders.find((x: any) => x.id === selectedHistoryTransaction.stakeholder_id);
                 if (!s || s.name === 'Walk-in Customer') return null;
-                const totalRefund = selectedHistoryTransaction.items.reduce((sum: number, item: any) =>
-                  sum + refundLineAmount(item, refundQuantities[item.id] || 0, selectedHistoryTransaction), 0);
+                const totalRefund = (selectedHistoryTransaction.refund_lines || []).reduce((sum: number, l: any) =>
+                    sum + l.unit_refund * (refundQuantities[l.item_id] || 0), 0);
                 const prevBal = s.balance || 0;
                 const newBal = refundMethod === 'credit' ? prevBal + totalRefund : prevBal;
                 const USD = { code: 'USD', symbol: '$' };
@@ -766,20 +783,4 @@ export default function PaymentModal() {
       </footer>
     </>
   );
-}
-
-// What refunding `qty` units of a line pays back — the same rule the server applies (see
-// chargedFactor / originalAdjustmentPcts in server/routes.ts, and GET /api/transactions/:id/refundable
-// which usePos uses for the amount actually submitted): the line's own discount prorated, then the
-// fraction of the invoice's line subtotal that was actually charged (invoice discount and tax).
-function discountedLine(item: any, qty: number): number {
-  let price = item.unit_price * qty;
-  if (item.discount_type === 'percentage') price -= (price * (item.discount_value || 0)) / 100;
-  else if (item.discount_type === 'fixed') price -= (item.discount_value || 0) * (qty / (item.quantity || 1));
-  return Math.max(0, price);
-}
-function refundLineAmount(item: any, qty: number, tx: any): number {
-  const subtotal = (tx.items || []).reduce((sum: number, i: any) => sum + discountedLine(i, i.quantity), 0);
-  const factor = subtotal > 0 ? (tx.total_amount || 0) / subtotal : 1;
-  return discountedLine(item, qty) * factor;
 }

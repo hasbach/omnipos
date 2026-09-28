@@ -203,6 +203,18 @@ export const PRODUCT_FIELDS: FieldDef[] = [
     ],
   },
   {
+    key: 'package_barcode',
+    required: false,
+    type: 'string',
+    labelKey: 'imp_field_package_barcode',
+    labelFallback: 'Package barcode',
+    aliases: [
+      'package barcode', 'carton barcode', 'box barcode', 'pack barcode',
+      'باركود الكرتون', 'باركود العبوة', 'باركود الصندوق',
+      'code-barres du carton', 'code barre carton', 'code-barres colis',
+    ],
+  },
+  {
     key: 'min_price',
     required: false,
     type: 'number',

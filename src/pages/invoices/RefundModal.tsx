@@ -8,7 +8,12 @@ import { translateServerError } from '../../lib/serverErrors';
 import { postJson, ApiFieldError, type CurrencyRow } from './types';
 
 export interface RefundableLine {
+  /** The ORIGINAL sale line (transaction_items.id) - refunds are tracked per line, not per product. */
+  item_id: number;
   product_id: number;
+  uom_id?: number | null;
+  uom_name?: string | null;
+  uom_factor?: number;
   product_name: string;
   barcode: string | null;
   sold_qty: number;
@@ -89,22 +94,22 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, invoiceId]);
 
-  const setLineQty = (productId: number, value: number, remaining: number) => {
+  const setLineQty = (itemId: number, value: number, remaining: number) => {
     const clamped = Math.max(0, Math.min(remaining, Number.isFinite(value) ? value : 0));
-    setQty((prev) => ({ ...prev, [productId]: clamped }));
+    setQty((prev) => ({ ...prev, [itemId]: clamped }));
   };
 
   const refundAll = () => {
     if (!data) return;
     const next: Record<number, number> = {};
-    for (const l of data.lines) if (l.remaining_qty > 0) next[l.product_id] = l.remaining_qty;
+    for (const l of data.lines) if (l.remaining_qty > 0) next[l.item_id] = l.remaining_qty;
     setQty(next);
   };
   const clearAll = () => setQty({});
 
   const totalUSD = useMemo(() => {
     if (!data) return 0;
-    return data.lines.reduce((sum, l) => sum + (qty[l.product_id] || 0) * l.unit_refund, 0);
+    return data.lines.reduce((sum, l) => sum + (qty[l.item_id] || 0) * l.unit_refund, 0);
   }, [data, qty]);
 
   const hasAnyQty = totalUSD > 0.0001 || Object.values(qty).some((q) => q > 0);
@@ -116,13 +121,13 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
 
   const handleSubmit = async () => {
     if (!data || !invoiceId) return;
-    const lines = data.lines.filter((l) => (qty[l.product_id] || 0) > 0);
+    const lines = data.lines.filter((l) => (qty[l.item_id] || 0) > 0);
     if (lines.length === 0) {
       toast.error(t('inv_refund_validation_no_qty', 'Enter a quantity to refund for at least one line.'));
       return;
     }
     for (const l of lines) {
-      if ((qty[l.product_id] || 0) > l.remaining_qty + 1e-9) {
+      if ((qty[l.item_id] || 0) > l.remaining_qty + 1e-9) {
         toast.error(t('inv_refund_validation_over', 'Cannot refund more than the remaining quantity for {name}.').replace('{name}', l.product_name));
         return;
       }
@@ -158,7 +163,8 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
         original_transaction_id: invoiceId,
         stakeholder_id: data.stakeholder?.id ?? null,
         user_id: currentUserId(),
-        items: lines.map((l) => ({ id: l.product_id, quantity: qty[l.product_id] })),
+        // One entry per original line; quantity is in that line's unit (carton, pack, piece).
+        items: lines.map((l) => ({ id: l.product_id, original_item_id: l.item_id, uom_id: l.uom_id ?? undefined, quantity: qty[l.item_id] })),
         currency: 'USD',
         exchange_rate: 1,
         payments,
@@ -245,10 +251,13 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
                 <tbody>
                   {data.lines.map((l) => {
                     const fractional = !Number.isInteger(l.sold_qty);
-                    const q = qty[l.product_id] || 0;
+                    const q = qty[l.item_id] || 0;
                     return (
-                      <tr key={l.product_id} className="border-t border-border">
-                        <td className="px-2 py-2 font-medium text-text">{l.product_name}</td>
+                      <tr key={l.item_id} className="border-t border-border">
+                        <td className="px-2 py-2 font-medium text-text">
+                          {l.product_name}
+                          {l.uom_name && <span className="ms-2 text-xs font-semibold text-primary">{l.uom_name}{(l.uom_factor || 1) > 1 ? ` ×${l.uom_factor}` : ''}</span>}
+                        </td>
                         <td className="px-2 py-2 text-end num">{l.sold_qty}</td>
                         <td className="px-2 py-2 text-end num text-text-3">{l.refunded_qty}</td>
                         <td className="px-2 py-2 text-end num">{l.remaining_qty}</td>
@@ -259,7 +268,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
                             max={l.remaining_qty}
                             step={fractional ? 0.01 : 1}
                             disabled={l.remaining_qty <= 0}
-                            onChange={(v) => setLineQty(l.product_id, v, l.remaining_qty)}
+                            onChange={(v) => setLineQty(l.item_id, v, l.remaining_qty)}
                             className="w-24"
                           />
                         </td>

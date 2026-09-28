@@ -15,8 +15,10 @@ import {
   useConfirm,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
-import { api } from '../../lib/api';
 import { Product } from '../../types';
+import { translateServerError } from '../../lib/serverErrors';
+import { putJson, postJson, ApiFieldError } from '../invoices/types';
+import { UnitsOfMeasureCard, unitToDraft, draftToPayload, validateUnits, type UnitDraft } from './UnitsOfMeasureCard';
 import { marginPct, markupPct, priceFromMarkup } from '../../lib/pricing';
 import { AdjustStockModal, AdjustStockTarget } from '../stock/AdjustStockModal';
 
@@ -47,9 +49,7 @@ interface FormState {
   price_wholesale_lbp: number;
   price_super_wholesale: number;
   price_super_wholesale_lbp: number;
-  package_price: number;
-  package_price_lbp: number;
-  units_per_package: number;
+  units: UnitDraft[];
   min_price: number;
   stock: number;
   initialStock: number;
@@ -72,9 +72,7 @@ function blankForm(): FormState {
     price_wholesale_lbp: 0,
     price_super_wholesale: 0,
     price_super_wholesale_lbp: 0,
-    package_price: 0,
-    package_price_lbp: 0,
-    units_per_package: 1,
+    units: [],
     min_price: 0,
     stock: 0,
     initialStock: 0,
@@ -99,9 +97,7 @@ function fromProduct(p: Product): FormState {
     price_wholesale_lbp: p.price_wholesale_lbp || 0,
     price_super_wholesale: p.price_super_wholesale || 0,
     price_super_wholesale_lbp: p.price_super_wholesale_lbp || 0,
-    package_price: p.package_price || 0,
-    package_price_lbp: p.package_price_lbp || 0,
-    units_per_package: p.units_per_package || 1,
+    units: (p.units || []).map(unitToDraft),
     min_price: p.min_price || 0,
     stock: p.stock || 0,
     initialStock: p.stock || 0,
@@ -129,6 +125,14 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
   const [barcodeInput, setBarcodeInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
+  // Inline server/validation errors keyed by the server's `field` (`barcodes`, `units.<i>.barcode`, ...).
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const clearFieldError = (key: string) => setFieldErrors((prev) => {
+    if (!(key in prev)) return prev;
+    const next = { ...prev };
+    delete next[key];
+    return next;
+  });
   const [markupDrafts, setMarkupDrafts] = useState<Record<TierKey, string>>({ retail: '', wholesale: '', super_wholesale: '' });
   const [showAdjust, setShowAdjust] = useState(false);
 
@@ -140,6 +144,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
     setTab('general');
     setBarcodeInput('');
     setNameError(null);
+    setFieldErrors({});
     setMarkupDrafts({ retail: '', wholesale: '', super_wholesale: '' });
   }, [open, product?.id]);
 
@@ -155,6 +160,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
       return;
     }
     update({ barcodes: [...form.barcodes, code] });
+    clearFieldError('barcodes');
     setBarcodeInput('');
   };
 
@@ -180,6 +186,12 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
       return false;
     }
     setNameError(null);
+    const unitErrors = validateUnits(form.units, t);
+    setFieldErrors(unitErrors);
+    if (Object.keys(unitErrors).length > 0) {
+      setTab('pricing');
+      return false;
+    }
     return true;
   };
 
@@ -203,9 +215,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
         price_wholesale_lbp: form.price_wholesale_lbp || null,
         price_super_wholesale: form.price_super_wholesale || null,
         price_super_wholesale_lbp: form.price_super_wholesale_lbp || null,
-        package_price: form.package_price,
-        package_price_lbp: form.package_price_lbp,
-        units_per_package: form.units_per_package || 1,
+        units: form.units.map(draftToPayload),
         min_price: form.min_price || null,
         currency: form.currency || 'USD',
       };
@@ -213,17 +223,23 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
       if (form.id) {
         // Never send `stock` on update — the server keeps the current value when it's omitted;
         // stock changes go exclusively through the audited /api/stock/adjust endpoint.
-        await api.put(`/api/products/${form.id}`, payload);
+        await putJson(`/api/products/${form.id}`, payload);
       } else {
         payload.stock = form.track_inventory === 0 ? 0 : form.initialStock || 0;
-        await api.post('/api/products', payload);
+        await postJson('/api/products', payload);
       }
 
       toast.success(t('prod_saved_toast', 'Product saved.'));
       onSaved();
       onClose();
     } catch (err: any) {
-      toast.error(err.message || t('prod_save_error_toast', 'Could not save product.'));
+      const translated = translateServerError(err, t) || err.message || t('prod_save_error_toast', 'Could not save product.');
+      toast.error(translated);
+      if (err instanceof ApiFieldError && err.field) {
+        // Show the message next to the offending input (barcodes live on General, units on Pricing).
+        setFieldErrors((prev) => ({ ...prev, [err.field as string]: translated }));
+        setTab(err.field.startsWith('units.') ? 'pricing' : err.field === 'barcodes' ? 'general' : tab);
+      }
     } finally {
       setSaving(false);
     }
@@ -275,7 +291,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 <Input value={form.name} onChange={(e) => update({ name: e.target.value })} autoFocus />
               </Field>
 
-              <Field label={t('prod_barcodes', 'Barcodes')} helper={t('prod_barcodes_helper')}>
+              <Field label={t('prod_barcodes', 'Barcodes')} helper={t('prod_barcodes_helper')} error={fieldErrors.barcodes}>
                 <div className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius-input)] border border-border bg-surface p-1.5">
                   {form.barcodes.map((code, i) => (
                     <span
@@ -430,18 +446,16 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 );
               })}
 
-              <div className="grid grid-cols-2 gap-3">
-                <Field label={t('prod_package_price', 'Package price (USD)')} helper={t('prod_package_break_helper')}>
-                  <MoneyInput
-                    currencySymbol="$"
-                    value={form.package_price}
-                    onChange={(v) => update({ package_price: v, package_price_lbp: Math.round(v * rate) })}
-                  />
-                </Field>
-                <Field label={t('prod_units_per_package', 'Units per package')}>
-                  <NumberInput value={form.units_per_package} onChange={(v) => update({ units_per_package: Math.max(1, v) })} min={1} />
-                </Field>
-              </div>
+              <UnitsOfMeasureCard
+                units={form.units}
+                onChange={(units) => update({ units })}
+                baseUnit={form.unit}
+                retailPrice={form.price}
+                rate={rate}
+                priceLevelsEnabled={priceLevelsEnabled}
+                errors={fieldErrors}
+                onClearError={clearFieldError}
+              />
 
               <Field label={t('prod_min_price', 'Minimum price (USD)')} helper={t('prod_min_price_helper')}>
                 <MoneyInput currencySymbol="$" value={form.min_price} onChange={(v) => update({ min_price: v })} />

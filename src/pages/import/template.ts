@@ -44,6 +44,7 @@ const EXAMPLE_VALUES: Record<string, string | number> = {
   package_price: 18,
   package_price_lbp: 1620000,
   units_per_package: 24,
+  package_barcode: '6001234567899',
   min_price: 0.55,
   stock: 100,
   reorder_point: 20,

@@ -8,6 +8,11 @@ interface ReceiptItem {
   price?: number;
   unit_price?: number;
   quantity: number;
+  // Unit of measure snapshot (quantity/price above stay per base piece; uom_qty is in the unit).
+  uom_id?: number | null;
+  uom_name?: string | null;
+  uom_factor?: number | null;
+  uom_qty?: number | null;
   discount?: { type: 'percentage' | 'fixed'; value: number };
 }
 
@@ -90,10 +95,16 @@ export function buildReceiptBuffer(opts: {
   p.hr();
 
   for (const item of tx.items || []) {
-    const name = item.name || item.product_name || 'Item';
-    const qty = item.quantity;
+    let name = item.name || item.product_name || 'Item';
+    // quantity/price are stored per base piece; a unit-of-measure line prints its own unit
+    // ("Water 0.5L - Carton x24", qty in cartons). The line total is the same either way.
     const unitPrice = item.price ?? item.unit_price ?? 0;
-    const lineTotal = (unitPrice * qty).toFixed(2);
+    const lineTotal = (unitPrice * item.quantity).toFixed(2);
+    let qty = item.quantity;
+    if (item.uom_id && item.uom_name) {
+      name = `${name} - ${item.uom_name} x${item.uom_factor}`;
+      qty = item.uom_qty ?? item.quantity / (item.uom_factor || 1);
+    }
     p.itemLine(name, qty, lineTotal);
     if (item.discount && item.discount.value > 0) {
       const disc = item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`;

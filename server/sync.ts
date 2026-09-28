@@ -11,10 +11,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const fkMap: Record<string, Record<string, string>> = {
   products: { tenant_id: 'tenants' },
   product_barcodes: { product_id: 'products' },
+  product_units: { tenant_id: 'tenants', product_id: 'products' },
   stakeholders: { tenant_id: 'tenants' },
   users: { tenant_id: 'tenants' },
   transactions: { tenant_id: 'tenants', stakeholder_id: 'stakeholders', user_id: 'users' },
-  transaction_items: { transaction_id: 'transactions', product_id: 'products' },
+  // uom_id / original_item_id are local ids too: they travel as global UUIDs so another register
+  // resolves them to ITS rows (an unresolvable original line falls back to per-product allocation).
+  transaction_items: { transaction_id: 'transactions', product_id: 'products', uom_id: 'product_units', original_item_id: 'transaction_items' },
   payments: { transaction_id: 'transactions' },
   currencies: { tenant_id: 'tenants' },
   settings: { tenant_id: 'tenants' },
@@ -61,18 +64,32 @@ async function upsertToCloud(client: SupabaseClient, tableName: string, payload:
   return { error: { message: `Too many unknown columns for ${tableName}` } };
 }
 
+// A table the cloud doesn't have yet (its Supabase migration hasn't been run, e.g. product_units):
+// PostgREST answers PGRST205 / Postgres 42P01 / a 404. Skip that table with ONE warning instead of
+// failing (or spamming) every sync cycle. Reset on restart, so it's re-probed after migrating.
+const cloudMissingTables = new Set<string>();
+function isMissingCloudTable(error: any): boolean {
+  if (!error) return false;
+  return error.code === 'PGRST205' || error.code === '42P01' || error.status === 404 || error.statusCode === 404;
+}
+function noteMissingCloudTable(tableName: string) {
+  if (cloudMissingTables.has(tableName)) return;
+  cloudMissingTables.add(tableName);
+  console.warn(`⚠️ [SYNC] Cloud has no '${tableName}' table yet — skipping it until the cloud schema is migrated.`);
+}
+
 // The tenants row is authoritative in the cloud (created at registration, license edited by the
 // super-admin) — the desktop only ever PULLS it, never pushes, so it can't stomp a freshly
 // activated license with a stale local copy.
 const PUSH_TABLES = [
-  'products', 'product_barcodes', 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow', 'daily_reports', 'cashier_shifts',
 ];
 
 const PULL_TABLES = [
   'tenants',
-  'products', 'product_barcodes', 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow', 'daily_reports', 'cashier_shifts',
 ];
@@ -87,6 +104,7 @@ function syncableTenant(email: string): boolean {
  */
 async function pushToCloud(client: SupabaseClient, localId: number) {
   for (const tableName of PUSH_TABLES) {
+    if (cloudMissingTables.has(tableName)) continue;
     try {
       let queryStr = `SELECT * FROM ${tableName} WHERE (last_synced_at IS NULL OR updated_at > last_synced_at)`;
       if (Object.keys(fkMap[tableName] || {}).includes('tenant_id')) {
@@ -117,6 +135,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
       const markSynced = db.prepare(`UPDATE ${tableName} SET last_synced_at = CURRENT_TIMESTAMP WHERE global_id = ?`);
 
       const { error } = await upsertToCloud(client, tableName, payload);
+      if (isMissingCloudTable(error)) { noteMissingCloudTable(tableName); continue; }
       if (!error) {
         const tx = db.transaction((records: any[]) => {
           for (const record of records) markSynced.run(record.global_id);
@@ -162,6 +181,7 @@ async function pullFromCloud(client: SupabaseClient, localId: number, globalId: 
   }
 
   for (const tableName of PULL_TABLES) {
+    if (cloudMissingTables.has(tableName)) continue;
     try {
       // Latest updated_at we already hold locally for this tenant (our pull cursor).
       let lastUpdateQuery = `SELECT MAX(updated_at) as last_update FROM ${tableName}`;
@@ -205,6 +225,7 @@ async function pullFromCloud(client: SupabaseClient, localId: number, globalId: 
         data = res.data; error = res.error;
       }
 
+      if (isMissingCloudTable(error)) { noteMissingCloudTable(tableName); continue; }
       if (error) {
         console.error(`❌ [SYNC] Failed to pull ${tableName}:`, JSON.stringify(error));
         continue;

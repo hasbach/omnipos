@@ -230,6 +230,7 @@ interface ProductPlanRow {
     package_price: number | null;
     package_price_lbp: number | null;
     units_per_package: number;
+    package_barcode: string | null;
     min_price: number | null;
     stock: number;
     reorder_point: number;
@@ -246,6 +247,37 @@ function findProductByBarcode(tenantId: number, barcode: string): any {
       "SELECT p.* FROM product_barcodes pb JOIN products p ON p.id = pb.product_id WHERE pb.barcode = ? AND p.tenant_id = ?"
     )
     .get(barcode, tenantId);
+}
+
+// A live unit-of-measure (pack/carton) row holding this barcode in the tenant, or undefined.
+function findUnitByBarcode(tenantId: number, barcode: string): any {
+  return db
+    .prepare("SELECT * FROM product_units WHERE tenant_id = ? AND barcode = ? AND deleted_at IS NULL")
+    .get(tenantId, barcode);
+}
+
+// package_price / units_per_package also maintain a unit named "Pack" (a live unit of the same factor
+// is updated, else one is inserted) on top of the legacy columns. Reads the product's CURRENT legacy
+// values so an update that only touched some of the columns still resolves the right factor/price.
+// `barcode` undefined leaves an existing unit's barcode untouched.
+function upsertPackUnit(tenantId: number, productId: number, barcode: string | null | undefined) {
+  const p = db.prepare("SELECT package_price, package_price_lbp, units_per_package FROM products WHERE id = ? AND tenant_id = ?").get(productId, tenantId) as any;
+  if (!(p && p.package_price > 0 && p.units_per_package > 1)) return;
+  const existing = db.prepare(
+    "SELECT id FROM product_units WHERE tenant_id = ? AND product_id = ? AND deleted_at IS NULL AND ABS(factor - ?) < 0.000000001"
+  ).get(tenantId, productId, p.units_per_package) as any;
+  if (existing) {
+    if (barcode !== undefined) {
+      db.prepare("UPDATE product_units SET price = ?, price_lbp = ?, barcode = ? WHERE id = ?").run(p.package_price, p.package_price_lbp ?? null, barcode, existing.id);
+    } else {
+      db.prepare("UPDATE product_units SET price = ?, price_lbp = ? WHERE id = ?").run(p.package_price, p.package_price_lbp ?? null, existing.id);
+    }
+  } else {
+    const count = (db.prepare("SELECT COUNT(*) as n FROM product_units WHERE tenant_id = ? AND product_id = ? AND deleted_at IS NULL").get(tenantId, productId) as any).n;
+    db.prepare(
+      "INSERT INTO product_units (tenant_id, product_id, name, factor, barcode, price, price_lbp, sort_order) VALUES (?, ?, 'Pack', ?, ?, ?, ?, ?)"
+    ).run(tenantId, productId, p.units_per_package, barcode ?? null, p.package_price, p.package_price_lbp ?? null, count);
+  }
 }
 
 function findProductByName(tenantId: number, name: string): any {
@@ -370,11 +402,37 @@ function planProducts(tenantId: number, rows: any[], mode: Mode): ImportBody {
         barcodeTaken = true;
         break;
       }
+      // A pack/carton barcode can never double as a product barcode.
+      if (findUnitByBarcode(tenantId, bc)) {
+        errorOut(`Barcode "${bc}" is already used by a pack/carton unit.`, "BARCODE_TAKEN", "barcode");
+        barcodeTaken = true;
+        break;
+      }
     }
     if (barcodeTaken) continue;
 
+    // --- pack barcode (the "Pack" unit created from package_price / units_per_package) --------------
+    const packBarcode = present(raw, "package_barcode") ? String(raw.package_barcode).trim() : "";
+    if (packBarcode) {
+      const packKey = packBarcode.toLowerCase();
+      if (seenBarcodes.has(packKey)) { errorOut(`Barcode "${packBarcode}" is duplicated in this file (row ${seenBarcodes.get(packKey)}).`, "DUPLICATE_IN_FILE", "package_barcode"); continue; }
+      if (allBarcodes.some((b) => b.toLowerCase() === packKey) || findProductByBarcode(tenantId, packBarcode)) {
+        errorOut(`Barcode "${packBarcode}" is already used by a product.`, "BARCODE_TAKEN", "package_barcode"); continue;
+      }
+      const unitOwner = findUnitByBarcode(tenantId, packBarcode);
+      if (unitOwner && !(existing && unitOwner.product_id === existing.id && Math.abs(unitOwner.factor - unitsPerPackage) < 1e-9)) {
+        errorOut(`Barcode "${packBarcode}" is already used by another pack/carton unit.`, "BARCODE_TAKEN", "package_barcode"); continue;
+      }
+      const effPackPrice = numericValues.package_price ?? existing?.package_price ?? null;
+      const effPerPack = unitsPerPackageParsed ? unitsPerPackage : (existing?.units_per_package ?? 1);
+      if (!(effPackPrice > 0 && effPerPack > 1)) {
+        errorOut("package_barcode needs a package price and units per package greater than 1.", "MISSING_REQUIRED", "package_barcode"); continue;
+      }
+    }
+
     // register file-level keys now that this row is otherwise valid
     for (const bc of allBarcodes) seenBarcodes.set(bc.toLowerCase(), rowNum);
+    if (packBarcode) seenBarcodes.set(packBarcode.toLowerCase(), rowNum);
     if (allBarcodes.length === 0 && name) seenNames.set(name.toLowerCase(), rowNum);
 
     const data = {
@@ -393,6 +451,7 @@ function planProducts(tenantId: number, rows: any[], mode: Mode): ImportBody {
       package_price: numericValues.package_price ?? null,
       package_price_lbp: numericValues.package_price_lbp ?? null,
       units_per_package: unitsPerPackage,
+      package_barcode: packBarcode || null,
       min_price: numericValues.min_price ?? null,
       stock,
       reorder_point: reorderPoint,
@@ -420,6 +479,7 @@ function planProducts(tenantId: number, rows: any[], mode: Mode): ImportBody {
     if (present(raw, "category")) presentFields.add("category");
     if (present(raw, "unit")) presentFields.add("unit");
     if (present(raw, "units_per_package")) presentFields.add("units_per_package");
+    if (present(raw, "package_barcode")) presentFields.add("package_barcode");
     if (present(raw, "reorder_point")) presentFields.add("reorder_point");
     if (present(raw, "track_inventory")) presentFields.add("track_inventory");
     if (present(raw, "barcode")) presentFields.add("barcode");
@@ -492,6 +552,7 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
       if (d.stock > 0) {
         insertAdjustment.run(tenantId, productId, userId, 0, d.stock, d.stock, "Import: opening stock", d.cost ?? null);
       }
+      upsertPackUnit(tenantId, productId, d.package_barcode);
       plan.existingId = productId;
       const rr = body.results.find((r) => r.row === plan.row);
       if (rr) rr.id = productId;
@@ -521,6 +582,9 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
       if (sets.length > 0) {
         params.push(plan.existingId, tenantId);
         db.prepare(`UPDATE products SET ${sets.join(", ")} WHERE id = ? AND tenant_id = ?`).run(...params);
+      }
+      if (["package_price", "package_price_lbp", "units_per_package", "package_barcode"].some((f) => pf.has(f))) {
+        upsertPackUnit(tenantId, plan.existingId, pf.has("package_barcode") ? d.package_barcode : undefined);
       }
       if (pf.has("barcodes")) {
         deleteBarcodes.run(plan.existingId);

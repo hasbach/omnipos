@@ -46,7 +46,9 @@ test("a settled invoice still appears in the recent/search list, flagged as arch
 });
 
 test("filtering by date range still finds a settled invoice", async () => {
-  const today = new Date().toISOString().split("T")[0];
+  // LOCAL date, like the server's filter (a UTC date is "yesterday" just after local midnight).
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const list = await app.api("GET", `/api/transactions/recent?date_from=${today}&date_to=${today}`, { tenantId });
   assert.equal(list.status, 200);
   assert.ok(list.body.some((t: any) => t.id === invoiceId), "date-range filter lost the settled invoice");

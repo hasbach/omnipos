@@ -47,19 +47,88 @@ function hasRealTier(product: TierProduct, level: PriceLevel): boolean {
   return false;
 }
 
-// Per-unit sale price for one line. A real (non-retail) tier price is flat, no package blending.
-// Otherwise this reproduces the existing retail logic: buying in whole packages blends the
-// package price for full packages with the per-unit price for the remainder.
-export function saleLineUnitPrice(product: TierProduct, level: PriceLevel, quantity: number): number {
+// A unit of measure (pack, carton...) of a product: `factor` base pieces per unit, with its own
+// prices. Same shape as the product_units row.
+export interface UomPricing {
+  factor: number;
+  price: number;
+  price_lbp?: number | null;
+  price_wholesale?: number | null;
+  price_wholesale_lbp?: number | null;
+  price_super_wholesale?: number | null;
+  price_super_wholesale_lbp?: number | null;
+}
+
+const pos = (n: any): n is number => typeof n === 'number' && n > 0;
+
+// Price of ONE unit of `uom` at a price level (USD). A value only counts when > 0. Chain:
+//   retail:          uom.price
+//   wholesale:       uom.price_wholesale -> product.price_wholesale * factor -> uom.price
+//   super_wholesale: uom.price_super_wholesale -> product.price_super_wholesale * factor
+//                    -> uom.price_wholesale -> product.price_wholesale * factor -> uom.price
+export function uomUnitPrice(product: TierProduct, uom: UomPricing, level: PriceLevel): number {
+  const f = uom.factor;
+  if (level === 'super_wholesale') {
+    if (pos(uom.price_super_wholesale)) return uom.price_super_wholesale;
+    if (pos(product.price_super_wholesale)) return product.price_super_wholesale * f;
+  }
+  if (level === 'super_wholesale' || level === 'wholesale') {
+    if (pos(uom.price_wholesale)) return uom.price_wholesale;
+    if (pos(product.price_wholesale)) return product.price_wholesale * f;
+  }
+  return uom.price;
+}
+
+// LBP variant of the same chain, on the _lbp columns (product _lbp columns x factor). Each step
+// falls back to its own USD value x rate before moving on to the next step.
+export function uomUnitPriceLbp(
+  product: TierProduct & { price_wholesale_lbp?: number | null; price_super_wholesale_lbp?: number | null },
+  uom: UomPricing,
+  level: PriceLevel,
+  rate: number,
+): number {
+  const f = uom.factor;
+  const step = (lbp: any, usd: number | null | undefined, mult: number) =>
+    pos(lbp) ? lbp * mult : (pos(usd) ? usd * mult * rate : null);
+  if (level === 'super_wholesale') {
+    const a = step(uom.price_super_wholesale_lbp, uom.price_super_wholesale, 1);
+    if (a !== null) return a;
+    const b = step(product.price_super_wholesale_lbp, product.price_super_wholesale, f);
+    if (b !== null) return b;
+  }
+  if (level === 'super_wholesale' || level === 'wholesale') {
+    const a = step(uom.price_wholesale_lbp, uom.price_wholesale, 1);
+    if (a !== null) return a;
+    const b = step(product.price_wholesale_lbp, product.price_wholesale, f);
+    if (b !== null) return b;
+  }
+  return step(uom.price_lbp, uom.price, 1) ?? uom.price * rate;
+}
+
+// Per-piece sale price for one BASE-PIECE line. A real (non-retail) tier price is flat, no pack
+// breaking. Otherwise (retail) buying in whole units blends the unit price for full units with the
+// per-piece price for the remainder: greedy, largest whole-number factor first, over `units`
+// (e.g. pack6 = 1.10, carton24 = 4.00, 31 pcs = 1 carton + 1 pack + 1 piece). A product with no
+// units but the legacy package_price / units_per_package uses that as a single unit.
+export function saleLineUnitPrice(product: TierProduct, level: PriceLevel, quantity: number, units?: UomPricing[] | null): number {
   if (hasRealTier(product, level)) {
     return tierUnitPrice(product, level);
   }
-  const unitsPerPackage = product.units_per_package || 1;
-  if (product.package_price && unitsPerPackage > 1 && quantity > 0) {
-    const numPackages = Math.floor(quantity / unitsPerPackage);
-    const remainder = quantity % unitsPerPackage;
-    const packagedTotal = (numPackages * product.package_price) + (remainder * product.price);
-    return packagedTotal / quantity;
+  let breakUnits = (units || []).filter(u => u && Number.isInteger(u.factor) && u.factor > 1 && u.price > 0);
+  if (!breakUnits.length) {
+    const unitsPerPackage = product.units_per_package || 1;
+    if (product.package_price && unitsPerPackage > 1) breakUnits = [{ factor: unitsPerPackage, price: product.package_price }];
+  }
+  if (breakUnits.length && quantity > 0) {
+    breakUnits = [...breakUnits].sort((a, b) => b.factor - a.factor);
+    let remaining = quantity;
+    let total = 0;
+    for (const u of breakUnits) {
+      const n = Math.floor(remaining / u.factor);
+      if (n > 0) { total += n * u.price; remaining -= n * u.factor; }
+    }
+    total += remaining * product.price;
+    return total / quantity;
   }
   return product.price;
 }
@@ -95,5 +164,8 @@ export function computeTotals(lineTotals: number[], discount?: LineAdjustment | 
   if (tax?.type === 'percentage') finalTotal += (finalTotal * ((tax.value || 0) / 100));
   else if (tax?.type === 'fixed') finalTotal += (tax.value || 0);
 
-  return Math.max(0, finalTotal);
+  // Rounded to 6 decimals only to strip float noise: unit lines are stored per piece, so e.g. a
+  // 32.40 carton comes back as 1.35 x 24 = 32.400000000000006, which would otherwise read as a
+  // sub-cent balance still owed against an exact payment.
+  return Math.max(0, Math.round(finalTotal * 1e6) / 1e6);
 }

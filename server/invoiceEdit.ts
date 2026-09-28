@@ -4,7 +4,8 @@
 import { db, logAction } from "./db.js";
 import { recomputeStakeholderBalance, transactionBalanceEffect } from "./balance.js";
 import { getActiveSession } from "./session.js";
-import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, type PriceLevel } from "./pricing.js";
+import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
+import { loadUnit, loadUnitsForProduct } from "./uom.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { ValidationError } from "./errors.js";
 import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
@@ -64,6 +65,7 @@ async function purgeCloudRows(table: 'payments' | 'transaction_items', globalIds
 
 interface EditItemInput {
   product_id: number;
+  uom_id?: number | null; // unit of measure; quantity and unit_price are in THIS unit (absent = base pieces)
   quantity: number;
   unit_price?: number;
   discount?: { type?: 'percentage' | 'fixed' | null; value?: number | null } | null;
@@ -131,6 +133,14 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     const discErr = invalidAdjustment(item.discount, 'line discount');
     if (discErr) throw new ValidationError(discErr, 400, { field: `items.${idx}.unit_price` });
   }
+  // Resolve each line's unit of measure from the DB (never trust a client factor). Quantities are
+  // converted to base pieces from here on; stored unit_price / unit_cost are per piece.
+  const lineUoms = items.map((item, idx) => {
+    if (item.uom_id === undefined || item.uom_id === null) return null;
+    const uom = loadUnit(tenantId, item.product_id, item.uom_id);
+    if (!uom) throw new ValidationError(`Unit ${item.uom_id} is not valid for product ${item.product_id}.`, 400, { code: 'UOM_INVALID', field: `items.${idx}.uom_id` });
+    return uom;
+  });
   for (const p of Array.isArray(body.payments) ? body.payments : []) {
     if (p.id !== undefined && p.id !== null) continue; // existing payment, kept as-is
     if (!(Number.isFinite(p.amount) && (p.amount as number) > 0)) throw new ValidationError("Invalid payment amount.", 400, { field: 'payments' });
@@ -152,14 +162,20 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
 
   const oldItems = db.prepare(`SELECT * FROM ${itemsTable} WHERE transaction_id = ?`).all(id) as any[];
   const oldByProduct: Record<number, any> = {};
-  for (const oi of oldItems) oldByProduct[oi.product_id] = oi;
+  const oldByLine: Record<string, any> = {};
+  for (const oi of oldItems) {
+    oldByProduct[oi.product_id] = oi;
+    oldByLine[`${oi.product_id}:${oi.uom_id ?? 'base'}`] ??= oi;
+  }
 
   // A sale can't drop a product's quantity below however much of it has already been refunded,
   // and can't remove a product entirely if any of it was refunded.
   if (tx.type === 'sale') {
     const refunded = refundedQuantityByProduct(tenantId, id);
     const newQtyByProduct: Record<number, number> = {};
-    for (const it of items) newQtyByProduct[it.product_id] = (newQtyByProduct[it.product_id] || 0) + it.quantity;
+    items.forEach((it, i) => {
+      newQtyByProduct[it.product_id] = (newQtyByProduct[it.product_id] || 0) + it.quantity * (lineUoms[i]?.factor || 1);
+    });
     for (const [productIdStr, refundedQty] of Object.entries(refunded)) {
       const productId = Number(productIdStr);
       if ((refundedQty as number) <= 0) continue;
@@ -264,26 +280,35 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   // Recompute each new line's price/discount/total/cost-snapshot, using the pricing math shared
   // with POST /api/transactions.
   const lineTotals: number[] = [];
-  const processedItems = items.map((item) => {
+  const processedItems = items.map((item, idx) => {
     const product = getProduct(item.product_id);
     if (!product) throw new ValidationError(`Product ${item.product_id} not found.`);
 
-    let unitPrice = item.unit_price;
-    if (unitPrice === undefined || unitPrice === null) {
-      if (tx.type === 'sale') unitPrice = saleLineUnitPrice(product, priceLevel, item.quantity);
+    const uom = lineUoms[idx];
+    const factor = uom ? uom.factor : 1;
+    const pieces = item.quantity * factor;
+
+    // `perUnit` is the price of ONE unit of the line's UoM (one piece for base lines).
+    let perUnit = item.unit_price;
+    if (perUnit === undefined || perUnit === null) {
+      if (tx.type === 'sale') perUnit = uom ? uomUnitPrice(product, uom, priceLevel) : saleLineUnitPrice(product, priceLevel, item.quantity, loadUnitsForProduct(tenantId, product.id));
       else throw new ValidationError(`Unit price is required for product ${item.product_id}.`);
     }
     const discountType = item.discount?.type ?? null;
     const discountValue = item.discount?.value ?? null;
-    const total = lineTotal(unitPrice as number, item.quantity, { type: discountType, value: discountValue });
+    const total = lineTotal(perUnit as number, item.quantity, { type: discountType, value: discountValue });
     lineTotals.push(total);
+    const unitPrice = (perUnit as number) / factor; // stored per base piece
 
-    // Lines keep their old unit_cost for the same product; a newly-added product snapshots the
-    // current cost (sale) or its own price (purchase — the cost paid IS this line's unit cost).
-    const oldLine = oldByProduct[item.product_id];
+    // Lines keep their old unit_cost for the same product (and unit); a newly-added product snapshots
+    // the current cost (sale) or its own price (purchase — the cost paid IS this line's unit cost).
+    const oldLine = oldByLine[`${item.product_id}:${uom ? uom.id : 'base'}`] ?? oldByProduct[item.product_id];
     const unitCost = oldLine ? oldLine.unit_cost : (tx.type === 'purchase' ? unitPrice : (product.cost ?? null));
 
-    return { ...item, unitPrice: unitPrice as number, discountType, discountValue, unitCost, product };
+    return {
+      ...item, unitPrice, discountType, discountValue, unitCost, product, pieces,
+      uomId: uom ? uom.id : null, uomName: uom ? uom.name : null, uomFactor: uom ? uom.factor : null, uomQty: uom ? item.quantity : null,
+    };
   });
 
   const finalTotal = computeTotals(lineTotals, body.discount, body.tax);
@@ -307,12 +332,12 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     for (const item of processedItems) {
       const product = item.product;
       if (tx.type === 'purchase') {
-        const newCost = applyPurchaseCost(product.stock || 0, product.cost, item.quantity, item.unitPrice);
+        const newCost = applyPurchaseCost(product.stock || 0, product.cost, item.pieces, item.unitPrice);
         product.cost = newCost;
         db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, product.id, tenantId);
       }
       if (product.track_inventory !== 0) {
-        const delta = tx.type === 'sale' ? -item.quantity : item.quantity;
+        const delta = tx.type === 'sale' ? -item.pieces : item.pieces;
         db.prepare("UPDATE products SET stock = stock + ? WHERE id = ? AND tenant_id = ?").run(delta, product.id, tenantId);
         product.stock = (product.stock || 0) + delta;
       }
@@ -324,10 +349,27 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     // Both tables use a plain INTEGER PRIMARY KEY (not AUTOINCREMENT for the archived twin, since
     // settlement inserts explicit ids carried over from the live table) — omitting the id column
     // lets SQLite assign the next rowid itself, exactly like AUTOINCREMENT would.
-    const insertItem = db.prepare(`INSERT INTO ${itemsTable} (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insertItem = db.prepare(`INSERT INTO ${itemsTable} (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const newItemIds: number[] = [];
     for (const item of processedItems) {
       const rowId = archived ? reserveSharedId('transaction_items', 'archived_transaction_items') : null;
-      insertItem.run(rowId, id, item.product_id, item.quantity, item.unitPrice, item.discountType, item.discountValue, null, null, item.unitCost);
+      const info = insertItem.run(rowId, id, item.product_id, item.pieces, item.unitPrice, item.discountType, item.discountValue, null, null, item.unitCost, item.uomId, item.uomName, item.uomFactor, item.uomQty);
+      newItemIds.push(Number(rowId ?? info.lastInsertRowid));
+    }
+    // Lines were just replaced with new ids: re-point refunds that reference the old sale lines
+    // (original_item_id) at the equivalent new line (same product + unit, in order). Refunds whose
+    // line no longer exists simply fall back to per-product allocation (see refundLineStates).
+    if (tx.type === 'sale') {
+      const claimed = new Set<number>();
+      for (const old of oldItems) {
+        const j = processedItems.findIndex((it, k) => !claimed.has(k) && it.product_id === old.product_id && (it.uomId ?? null) === (old.uom_id ?? null));
+        if (j < 0) continue;
+        claimed.add(j);
+        for (const [rItems, rTx] of [['transaction_items', 'transactions'], ['archived_transaction_items', 'archived_transactions']]) {
+          db.prepare(`UPDATE ${rItems} SET original_item_id = ? WHERE original_item_id = ? AND transaction_id IN (SELECT id FROM ${rTx} WHERE tenant_id = ? AND type = 'refund' AND original_transaction_id = ?)`)
+            .run(newItemIds[j], old.id, tenantId, id);
+        }
+      }
     }
 
     // --- Payments: keep-by-id, delete omitted, insert new. ---

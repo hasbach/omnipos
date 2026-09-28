@@ -19,6 +19,21 @@ export interface Printer {
 
 export type PriceLevel = 'retail' | 'wholesale' | 'super_wholesale';
 
+export interface ProductUnit {
+  id: number;
+  product_id?: number;
+  name: string;
+  factor: number; // base pieces in one unit (> 1)
+  barcode?: string | null;
+  price: number; // retail price of ONE unit, USD
+  price_lbp?: number | null;
+  price_wholesale?: number | null;
+  price_wholesale_lbp?: number | null;
+  price_super_wholesale?: number | null;
+  price_super_wholesale_lbp?: number | null;
+  sort_order?: number;
+}
+
 export interface Product {
   id: number;
   barcode: string;
@@ -42,6 +57,7 @@ export interface Product {
   category: string;
   currency: string;
   unit: string;
+  units?: ProductUnit[]; // extra units of measure (packs, cartons...)
 }
 
 export interface Stakeholder {
@@ -62,6 +78,13 @@ export interface Discount {
 }
 
 export interface CartItem extends Product {
+  /** `${productId}:${uomId ?? 'base'}` - identifies the cart line. */
+  line_key: string;
+  /** Selected unit of measure (null/undefined = base piece). */
+  uom_id?: number | null;
+  uom_name?: string | null;
+  uom_factor?: number | null;
+  /** Quantity in the line's unit (pieces for base lines). */
   quantity: number;
   discount?: Discount;
 }
@@ -115,6 +138,12 @@ export interface TransactionItem {
   name?: string;
   quantity: number;
   unit_price: number;
+  uom_id?: number | null;
+  uom_name?: string | null;
+  uom_factor?: number | null;
+  uom_qty?: number | null;
+  display_qty?: number;
+  display_unit_price?: number;
   unit_cost?: number; // USD cost snapshot at time of the line (COGS)
   discount?: Discount;
 }
@@ -128,6 +157,7 @@ export interface Tenant {
   online_license_type: 'monthly' | 'lifetime';
   online_license_expiry?: string;
   current_version: string;
+  global_id?: string;
   available_version: string;
   scheduled_update_at?: string;
 }
@@ -163,3 +193,5 @@ declare global {
     };
   }
 }
+
+export const cartLineKey = (productId: number, uomId?: number | null): string => `${productId}:${uomId ?? 'base'}`;
