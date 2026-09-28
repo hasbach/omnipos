@@ -181,6 +181,14 @@ export function translateServerError(err: unknown, t: Translate): string {
       return t('err_reset_cloud_failed', 'The cloud copy could not be deleted. Nothing was deleted on this computer. Check the connection and retry.');
     case 'RESET_IN_PROGRESS':
       return t('err_reset_in_progress', 'A reset is already running.');
+    case 'CORRECTION_REASON_REQUIRED':
+      return t('err_correction_reason_required', 'Enter a reason of at least 3 characters.');
+    case 'CORRECTION_PIN_INVALID':
+      return t('err_correction_pin_invalid', 'Incorrect admin PIN.');
+    case 'CORRECTION_KIND_INVALID':
+      return t('err_correction_kind_invalid', 'Choose what kind of correction to make.');
+    case 'CORRECTION_AMOUNT_INVALID':
+      return t('err_correction_amount_invalid', 'Enter a valid amount.');
     case 'UOM_INVALID':
       return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
   }

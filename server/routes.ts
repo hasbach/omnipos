@@ -24,6 +24,10 @@ import {
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
+import {
+  lastRegisterClose, computeRegisterSummary, parseSettlementBody, beginSettlement, finishSettlement,
+  listDailyReports, setupSettlementRoutes,
+} from "./settlement.js";
 import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
 
 // The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
@@ -63,20 +67,8 @@ function localToday(): string {
 // instead of silently resetting at local midnight the way a `date = today` filter used to. This
 // finds that boundary: the most recent close of either kind, and the cash counted at it (which
 // becomes the next period's opening balance). No prior close ever ⇒ everything since the beginning.
-function lastRegisterClose(tenantId: number): { actualBalance: number; since: string } {
-  const lastClose = db.prepare(`
-    SELECT actual_balance, created_at FROM (
-      SELECT actual_balance, created_at FROM daily_reports WHERE tenant_id = ?
-      UNION ALL
-      SELECT actual_cash as actual_balance, created_at FROM cashier_shifts WHERE tenant_id = ?
-    )
-    ORDER BY created_at DESC LIMIT 1
-  `).get(tenantId, tenantId) as any;
-  return {
-    actualBalance: lastClose ? lastClose.actual_balance : 0,
-    since: lastClose ? lastClose.created_at : '0000-01-01 00:00:00'
-  };
-}
+// (Implementation lives in server/settlement.ts, together with the settlement detail logic; a
+// counted-cash correction on the latest close makes the corrected count the opening balance.)
 
 // End-of-Day settlement moves rows out of `transactions`/`transaction_items`/`payments` into
 // `archived_transactions`/`archived_transaction_items`/`archived_payments` and deletes them from
@@ -332,6 +324,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   setupReportRoutes(app, authenticate);
   setupImportRoutes(app, authenticate, broadcast);
   setupTenantResetRoutes(app, authenticate, broadcast, { purgeCloudTransactionalData });
+  setupSettlementRoutes(app, authenticate, broadcast);
   // API Routes
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
@@ -561,6 +554,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/tenant/settlement", authenticate, async (req: any, res) => {
     const tenantId = req.session.tenantId;
 
+    // New flow: body { user_id, counted: [{currency, amount, rate}], notes } — the report, its
+    // snapshot and the archive links are all written inside the one transaction below
+    // (server/settlement.ts). No `counted` = legacy client (report posted first): still links.
+    let settlementInput: ReturnType<typeof parseSettlementBody>;
+    try {
+      settlementInput = parseSettlementBody(tenantId, req.body);
+    } catch (err: any) {
+      if (err instanceof ValidationError) return res.status(err.status).json(validationErrorBody(err));
+      return res.status(500).json({ error: err.message });
+    }
+    const settlementUserId = tenantUserId(tenantId, req.body?.user_id);
+    let settlementReportId: number | null = null;
+
     const settleData = db.transaction(() => {
       // Before archiving, fix any potential overlap caused by previous sequence resets
       const maxArchived = db.prepare("SELECT MAX(id) as max_id FROM archived_transactions").get() as any;
@@ -574,6 +580,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           db.prepare("UPDATE payments SET transaction_id = transaction_id + ?").run(offset);
         }
       }
+
+      // Snapshot the live breakdown + write/complete the daily report BEFORE any row is moved.
+      const settlementCtx = beginSettlement(tenantId, settlementUserId, localToday(), settlementInput);
+      settlementReportId = settlementCtx.reportId;
 
       // Move payments
       db.prepare(`
@@ -629,6 +639,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // the Settlement page. The just-created report (dated today) is excluded from the opening
       // balance by /api/cash-flow/summary, so today still zeroes out while the record persists.
 
+      // Point every archived row this settlement moved back at its daily report.
+      finishSettlement(tenantId, settlementCtx);
+
       // Clear cashier shifts as the day is closed
       db.prepare("DELETE FROM cashier_shifts WHERE tenant_id = ?").run(tenantId);
     });
@@ -650,7 +663,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       logAction(
         tenantId,
-        1,
+        settlementUserId,
         'End of Day Settlement',
         cloudPurged
           ? 'Archived transactions and reset counters (local + cloud)'
@@ -662,12 +675,14 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       if (!cloudPurged) {
         return res.status(207).json({
           success: true,
+          report_id: settlementReportId,
           cloudPurged: false,
           warning: 'Local settlement complete, but the cloud copy could not be cleared. Reconnect and settle again, or the settled sales may reappear.'
         });
       }
-      res.json({ success: true, cloudPurged: true });
+      res.json({ success: true, report_id: settlementReportId, cloudPurged: true });
     } catch (err: any) {
+      if (err instanceof ValidationError) return res.status(err.status).json(validationErrorBody(err));
       res.status(500).json({ error: err.message });
     }
   });
@@ -2313,58 +2328,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
   // Cash Flow & Reports
   app.get("/api/cash-flow/summary", authenticate, (req: any, res) => {
-    const tenantId = req.session.tenantId;
-
     // The register spans from the last close (Cash Out or Settlement) through now — see
-    // lastRegisterClose() — not a calendar "today", so it stays open across any number of days
-    // until the owner closes it.
-    const { actualBalance: openingBalance, since } = lastRegisterClose(tenantId);
-
-    const cashSales = db.prepare(`
-    SELECT SUM(p.amount / p.exchange_rate) as total
-    FROM payments p
-    JOIN transactions t ON p.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'sale' AND p.method = 'cash' AND p.created_at > ?
-  `).get(tenantId, since) as any;
-
-    const cashRefunds = db.prepare(`
-    SELECT SUM(p.amount / p.exchange_rate) as total
-    FROM payments p
-    JOIN transactions t ON p.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'refund' AND p.method = 'cash' AND p.created_at > ?
-  `).get(tenantId, since) as any;
-
-    const cashPurchases = db.prepare(`
-    SELECT SUM(p.amount / p.exchange_rate) as total
-    FROM payments p
-    JOIN transactions t ON p.transaction_id = t.id
-    WHERE t.tenant_id = ? AND t.type = 'purchase' AND p.method = 'cash' AND p.created_at > ?
-  `).get(tenantId, since) as any;
-
-    const cashFlow = db.prepare(`
-    SELECT
-      SUM(CASE WHEN type = 'in' THEN amount / exchange_rate ELSE 0 END) as total_in,
-      SUM(CASE WHEN type = 'out' THEN amount / exchange_rate ELSE 0 END) as total_out
-    FROM cash_flow
-    WHERE tenant_id = ? AND created_at > ?
-  `).get(tenantId, since) as any;
-
-    const totalSales = cashSales?.total || 0;
-    const totalRefunds = cashRefunds?.total || 0;
-    const totalPurchases = cashPurchases?.total || 0;
-    const totalIn = cashFlow?.total_in || 0;
-    const totalOut = cashFlow?.total_out || 0;
-    const expectedBalance = openingBalance + totalSales - totalRefunds - totalPurchases + totalIn - totalOut;
-
-    res.json({
-      openingBalance,
-      totalSales,
-      totalRefunds,
-      totalPurchases,
-      totalIn,
-      totalOut,
-      expectedBalance
-    });
+    // lastRegisterClose() — not a calendar "today". The computation lives in server/settlement.ts
+    // so the settlement snapshot and this live view can never drift apart.
+    res.json(computeRegisterSummary(req.session.tenantId));
   });
 
   app.post("/api/cash-flow", authenticate, (req: any, res) => {
@@ -2466,9 +2433,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   });
 
   app.get("/api/reports/daily", authenticate, (req: any, res) => {
-    const tenantId = req.session.tenantId;
-    const reports = db.prepare("SELECT r.*, u.name as user_name FROM daily_reports r LEFT JOIN users u ON r.user_id = u.id WHERE r.tenant_id = ? ORDER BY r.date DESC").all(tenantId);
-    res.json(reports);
+    // Every column plus effective_actual/expected/difference, corrections_count, changed_after_close.
+    res.json(listDailyReports(req.session.tenantId));
   });
 
   app.post("/api/reports/yearly", authenticate, (req: any, res) => {

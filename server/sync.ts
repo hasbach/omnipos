@@ -24,6 +24,7 @@ const fkMap: Record<string, Record<string, string>> = {
   cash_flow: { tenant_id: 'tenants', user_id: 'users' },
   daily_reports: { tenant_id: 'tenants', user_id: 'users' },
   cashier_shifts: { tenant_id: 'tenants', user_id: 'users' },
+  settlement_corrections: { tenant_id: 'tenants', report_id: 'daily_reports', user_id: 'users' },
 };
 
 function getGlobalId(tableName: string, localId: number) {
@@ -106,14 +107,14 @@ function noteMissingCloudTable(tableName: string) {
 const PUSH_TABLES = [
   'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
-  'currencies', 'settings', 'cash_flow', 'daily_reports', 'cashier_shifts',
+  'currencies', 'settings', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
 ];
 
 const PULL_TABLES = [
   'tenants',
   'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
-  'currencies', 'settings', 'cash_flow', 'daily_reports', 'cashier_shifts',
+  'currencies', 'settings', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
 ];
 
 // Should the active tenant sync at all? Seed/super-admin accounts have no cloud business data.

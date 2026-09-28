@@ -12,6 +12,7 @@ import {
   Zap,
 } from 'lucide-react';
 import {
+  Badge,
   Button,
   DataTable,
   type DataTableColumn,
@@ -29,6 +30,9 @@ import { formatMoney, formatDate, userRoleLabel } from '../lib/format';
 import { translateServerError } from '../lib/serverErrors';
 import { api } from '../lib/api';
 import { DenominationCounter } from './finance/DenominationCounter';
+import { SettlementDetailDrawer } from './settlement/SettlementDetailDrawer';
+import { printXReport as printXReportDoc } from './settlement/printXReport';
+import { effectiveOf } from './settlement/types';
 
 interface Currency {
   id?: number;
@@ -86,6 +90,14 @@ interface DailyReport {
   total_cash_in?: number;
   total_cash_out?: number;
   notes?: string;
+  // Added by the settlement-detail API (effective = after admin corrections).
+  adjustments_total?: number;
+  corrected_actual_balance?: number | null;
+  effective_actual?: number;
+  effective_expected?: number;
+  effective_difference?: number;
+  corrections_count?: number;
+  changed_after_close?: boolean;
 }
 
 interface YearlyReport {
@@ -132,6 +144,7 @@ export default function Settlement() {
   const [yearlyNotes, setYearlyNotes] = useState('');
   const [submittingCashOut, setSubmittingCashOut] = useState(false);
   const [submittingSettlement, setSubmittingSettlement] = useState(false);
+  const [detailId, setDetailId] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -274,19 +287,17 @@ export default function Settlement() {
       total_cash_out: summary.totalOut,
       closing_balance: summary.expectedBalance,
       actual_balance: totalActualUSD,
-      notes: buildNotesWithBreakdown(),
+      notes,
     };
+
+    // Per-currency counted cash; the server computes and stores the whole closing atomically.
+    const counted = currencies
+      .filter((c) => actualBalances[c.code])
+      .map((c) => ({ currency: c.code, amount: parseFloat(actualBalances[c.code]) || 0, rate: c.rate || 1 }));
 
     setSubmittingSettlement(true);
     try {
-      await api.post('/api/reports/daily', report);
-      // Also trigger the transaction archival/reset (local + cloud purge)
-      let settleData: any = null;
-      try {
-        settleData = await api.post<any>('/api/tenant/settlement');
-      } catch (settleErr: any) {
-        toast.error(translateServerError(settleErr, t) || String(settleErr));
-      }
+      const settleData = await api.post<any>('/api/tenant/settlement', { user_id: selectedUserId, counted, notes });
 
       setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {} as Record<string, string>));
       setNotes('');
@@ -329,47 +340,19 @@ export default function Settlement() {
     }
   };
 
-  const printXReport = (report: any, title: string = t('fin_xr_daily_report', 'DAILY X-REPORT')) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
+  const printXReport = (report: any, title: string = t('fin_xr_daily_report', 'DAILY X-REPORT'), corrections?: any[]) =>
+    printXReportDoc(report, { t, lang, title, businessName, corrections });
 
-    const diff = report.actual_balance - report.closing_balance;
-
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>${title} - ${report.date}</title>
-          <style>
-            body { font-family: 'Courier New', Courier, monospace; padding: 20px; width: 300px; }
-            h1 { text-align: center; font-size: 18px; margin-bottom: 5px; }
-            .meta { text-align: center; font-size: 12px; margin-bottom: 20px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 14px; }
-            .total { border-top: 1px solid #000; margin-top: 10px; padding-top: 10px; font-weight: bold; }
-            .diff { color: ${diff < 0 ? 'red' : 'green'}; }
-            .footer { margin-top: 30px; text-align: center; font-size: 10px; opacity: 0.5; }
-          </style>
-        </head>
-        <body>
-          <h1>${title}</h1>
-          <div class="meta">
-            ${t('fin_xr_date', 'Date')}: ${formatDate(report.date, lang)}<br>
-            ${t('fin_xr_time', 'Time')}: ${new Date().toLocaleTimeString(lang === 'ar' ? 'ar-LB' : lang === 'fr' ? 'fr-FR' : 'en-US')}
-          </div>
-          <div class="row"><span>${t('fin_xr_opening_bal', 'Opening Bal:')}</span> <span>$${(report.opening_balance || 0).toFixed(2)}</span></div>
-          <div class="row"><span>${t('fin_xr_cash_sales', 'Cash Sales:')}</span> <span>+$${(report.total_sales || 0).toFixed(2)}</span></div>
-          ${(report.total_refunds || 0) > 0 ? `<div class="row"><span>${t('fin_xr_cash_refunds', 'Cash Refunds:')}</span> <span>-$${report.total_refunds.toFixed(2)}</span></div>` : ''}
-          <div class="row"><span>${t('fin_xr_cash_purchases', 'Cash Purchases:')}</span> <span>-$${(report.total_purchases || 0).toFixed(2)}</span></div>
-          <div class="row"><span>${t('fin_xr_manual_in', 'Manual In:')}</span> <span>+$${(report.total_cash_in || 0).toFixed(2)}</span></div>
-          <div class="row"><span>${t('fin_xr_manual_out', 'Manual Out:')}</span> <span>-$${(report.total_cash_out || 0).toFixed(2)}</span></div>
-          <div class="row total"><span>${t('fin_xr_expected_bal', 'Expected Bal:')}</span> <span>$${(report.closing_balance || 0).toFixed(2)}</span></div>
-          <div class="row"><span>${t('fin_xr_actual_bal', 'Actual Bal:')}</span> <span>$${(report.actual_balance || 0).toFixed(2)}</span></div>
-          <div class="row total"><span>${t('fin_xr_difference', 'Difference:')}</span> <span class="diff">${diff >= 0 ? '+' : ''}${diff.toFixed(2)}</span></div>
-          ${report.notes ? `<div style="margin-top: 15px; font-size: 12px; border-top: 1px dashed #000; padding-top: 5px;"><strong>${t('fin_xr_notes', 'Notes:')}</strong><br>${report.notes}</div>` : ''}
-          <div class="footer">${businessName || t('fin_xr_business_fallback', 'Business')}<br>${title}</div>
-          <script>window.print(); window.close();<\/script>
-        </body>
-      </html>
-    `);
+  // History-row print: fetch the corrections so the receipt lists them alongside the effective totals.
+  const printHistoryRow = async (r: DailyReport) => {
+    let corrections: any[] = [];
+    try {
+      const d = await api.get<any>(`/api/settlements/${r.id}`);
+      corrections = d?.corrections || [];
+    } catch {
+      /* print without the corrections list */
+    }
+    printXReport(r, undefined, corrections);
   };
 
   const shiftColumns: DataTableColumn<CashierShift>[] = [
@@ -400,26 +383,49 @@ export default function Settlement() {
   ];
 
   const historyColumns: DataTableColumn<DailyReport>[] = [
-    { key: 'date', header: t('fin_today', 'Date'), sortable: true },
-    { key: 'closing_balance', header: t('fin_stl_expected', 'Expected'), align: 'end', render: (r) => <span className="num">{formatMoney(r.closing_balance, { code: 'USD', symbol: '$' })}</span> },
-    { key: 'actual_balance', header: t('fin_stl_actual', 'Actual'), align: 'end', render: (r) => <span className="num">{formatMoney(r.actual_balance, { code: 'USD', symbol: '$' })}</span> },
+    {
+      key: 'date',
+      header: t('fin_today', 'Date'),
+      sortable: true,
+      render: (r) => (
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span>{r.date}</span>
+          {(r.corrections_count ?? 0) > 0 && <Badge variant="primary">{t('sd_badge_corrected', 'Corrected')}</Badge>}
+          {r.changed_after_close && <Badge variant="warning">{t('sd_badge_changed', 'Changed after closing')}</Badge>}
+        </span>
+      ),
+    },
+    { key: 'closing_balance', header: t('fin_stl_expected', 'Expected'), align: 'end', sortValue: (r) => effectiveOf(r).expected, render: (r) => <span className="num">{formatMoney(effectiveOf(r).expected, { code: 'USD', symbol: '$' })}</span> },
+    { key: 'actual_balance', header: t('fin_stl_actual', 'Actual'), align: 'end', sortValue: (r) => effectiveOf(r).actual, render: (r) => <span className="num">{formatMoney(effectiveOf(r).actual, { code: 'USD', symbol: '$' })}</span> },
     {
       key: 'difference',
       header: t('fin_stl_diff', 'Difference'),
       align: 'end',
-      render: (r) => (
-        <span className={['num font-semibold', r.difference === 0 ? 'text-text-3' : r.difference > 0 ? 'text-success' : 'text-danger'].join(' ')}>
-          {r.difference > 0 ? '+' : ''}
-          {formatMoney(r.difference, { code: 'USD', symbol: '$' })}
-        </span>
-      ),
+      sortValue: (r) => effectiveOf(r).difference,
+      render: (r) => {
+        const d = effectiveOf(r).difference;
+        return (
+          <span className={['num font-semibold', Math.abs(d) < 0.005 ? 'text-text-3' : d > 0 ? 'text-success' : 'text-danger'].join(' ')}>
+            {d > 0 ? '+' : ''}
+            {formatMoney(d, { code: 'USD', symbol: '$' })}
+          </span>
+        );
+      },
     },
     { key: 'user_name', header: t('fin_user', 'User') },
     {
       key: 'action',
       header: t('fin_action', 'Action'),
       render: (r) => (
-        <Button variant="ghost" size="sm" onClick={() => printXReport(r)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={t('sd_print', 'Print X-Report')}
+          onClick={(e) => {
+            e.stopPropagation();
+            printHistoryRow(r);
+          }}
+        >
           <Printer size={14} />
         </Button>
       ),
@@ -635,7 +641,7 @@ export default function Settlement() {
             </div>
             <div>
               <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_history_title', 'Settlement History')}</h3>
-              <DataTable columns={historyColumns} data={dailyReports} rowKey={(r) => r.id} loading={loading} searchable emptyTitle={t('fin_stl_history_empty', 'No reports found')} />
+              <DataTable columns={historyColumns} data={dailyReports} rowKey={(r) => r.id} loading={loading} searchable onRowClick={(r) => setDetailId(r.id)} emptyTitle={t('fin_stl_history_empty', 'No reports found')} />
             </div>
           </div>
         </div>
@@ -660,6 +666,8 @@ export default function Settlement() {
           </div>
         </div>
       )}
+
+      <SettlementDetailDrawer reportId={detailId} onClose={() => setDetailId(null)} onChanged={fetchData} businessName={businessName} />
 
       <Modal
         open={yearlyModalOpen}

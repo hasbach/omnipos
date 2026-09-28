@@ -20,6 +20,16 @@ const chunk = <T,>(arr: T[], size: number): T[][] => {
   return out;
 };
 
+// The admin of THIS tenant whose PIN matches (or null). No SUPER_ADMIN_PIN backdoor here. Same
+// comparison as POST /api/auth/verify-pin: PINs are stored and compared as plain text. Shared with
+// the settlement corrections (server/settlement.ts).
+export function findAdminByPin(tenantId: number, rawPin: unknown): { id: number; pin: string } | null {
+  const pin = typeof rawPin === "string" || typeof rawPin === "number" ? String(rawPin) : "";
+  if (!pin) return null;
+  const adminRows = db.prepare("SELECT id, pin FROM users WHERE tenant_id = ? AND role = 'admin'").all(tenantId) as any[];
+  return adminRows.find((u) => u.pin === pin) || null;
+}
+
 // The tenant's default Walk-in customer: the same lookup the POS uses to default the customer
 // (tenantStakeholderId in server/routes.ts) — the row literally named 'Walk-in Customer' (the name
 // is only translated for DISPLAY, the stored name never changes), else the first customer.
@@ -100,6 +110,8 @@ async function purgeCloudScopes(
   if (scopes.includes("transactions")) {
     // payments, items, transactions, cash_flow, cashier_shifts (same routine End-of-Day uses)
     await purgeCloudTransactionalData();
+    const { error: scErr } = await client.from("settlement_corrections").delete().eq("tenant_id", tg);
+    if (scErr && !isMissingTable(scErr)) throw scErr;
     const { error } = await client.from("daily_reports").delete().eq("tenant_id", tg);
     if (error) throw error;
   }
@@ -139,6 +151,7 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
     db.prepare("DELETE FROM archived_transactions WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM cash_flow WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM archived_cash_flow WHERE tenant_id = ?").run(t);
+    db.prepare("DELETE FROM settlement_corrections WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM daily_reports WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM yearly_reports WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM cashier_shifts WHERE tenant_id = ?").run(t);
@@ -196,12 +209,7 @@ export function setupTenantResetRoutes(
       if (body.confirm !== "DELETE") {
         throw new ValidationError("Type DELETE to confirm.", 400, { code: "RESET_CONFIRM_REQUIRED", field: "confirm" });
       }
-      const pin = typeof body.admin_pin === "string" || typeof body.admin_pin === "number" ? String(body.admin_pin) : "";
-      const adminRows = pin
-        ? (db.prepare("SELECT id, pin FROM users WHERE tenant_id = ? AND role = 'admin'").all(tenantId) as any[])
-        : [];
-      // Same comparison as POST /api/auth/verify-pin: PINs are stored and compared as plain text.
-      const admin = adminRows.find((u) => u.pin === pin);
+      const admin = findAdminByPin(tenantId, body.admin_pin);
       if (!admin) {
         throw new ValidationError("Incorrect admin PIN.", 403, { code: "RESET_PIN_INVALID", field: "admin_pin" });
       }

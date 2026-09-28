@@ -206,6 +206,12 @@ export interface DailyReportRow {
   difference: number;
   notes: string | null;
   user_name: string | null;
+  // Settlement-detail API: effective values include admin corrections.
+  effective_actual?: number;
+  effective_expected?: number;
+  effective_difference?: number;
+  corrections_count?: number;
+  changed_after_close?: boolean;
 }
 
 export interface YearlyReportRow {

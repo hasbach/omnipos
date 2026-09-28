@@ -249,9 +249,22 @@ export function DataTable<T>({
                   <tr
                     key={key}
                     onClick={() => onRowClick?.(row)}
+                    tabIndex={onRowClick ? 0 : undefined}
+                    onKeyDown={
+                      onRowClick
+                        ? (e) => {
+                            // Keyboard activation, but never hijack keys typed into a control inside the row.
+                            if (e.target !== e.currentTarget) return;
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              onRowClick(row);
+                            }
+                          }
+                        : undefined
+                    }
                     className={[
                       'border-b border-border last:border-b-0 transition-colors duration-150',
-                      onRowClick ? 'cursor-pointer hover:bg-surface-2' : '',
+                      onRowClick ? 'cursor-pointer hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary' : '',
                       selected.has(key) ? 'bg-primary-soft/40' : '',
                     ].join(' ')}
                   >

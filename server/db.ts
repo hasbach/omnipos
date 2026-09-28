@@ -490,6 +490,39 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_atx_stakeholder ON archived_transactions(stakeholder_id);
 `);
 
+// Settlement detail (docs/plans/2026-09-29-settlement-detail.md): a daily_report becomes the full
+// record of one End-of-Day close (snapshot + counted cash per currency), the archived rows point
+// back at the settlement that moved them, and admin corrections are appended (never edited in place).
+for (const col of [
+  "settled_at DATETIME", "period_start DATETIME", "total_refunds REAL DEFAULT 0", "counted_json TEXT",
+  "snapshot_json TEXT", "corrected_actual_balance REAL", "adjustments_total REAL DEFAULT 0",
+]) {
+  try { db.exec(`ALTER TABLE daily_reports ADD COLUMN ${col};`); } catch {}
+}
+try { db.exec("ALTER TABLE archived_transactions ADD COLUMN settlement_id INTEGER;"); } catch {}
+try { db.exec("ALTER TABLE archived_cash_flow ADD COLUMN settlement_id INTEGER;"); } catch {}
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_atx_settlement ON archived_transactions(settlement_id);
+  CREATE INDEX IF NOT EXISTS idx_acf_settlement ON archived_cash_flow(settlement_id);
+  CREATE TABLE IF NOT EXISTS settlement_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    report_id INTEGER NOT NULL,
+    user_id INTEGER,
+    kind TEXT CHECK(kind IN ('counted', 'adjustment')) NOT NULL,
+    currency TEXT,
+    old_value REAL,
+    new_value REAL,
+    amount_usd REAL,
+    reason TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY(report_id) REFERENCES daily_reports(id),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_scorr_report ON settlement_corrections(report_id);
+`);
+
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
 for (const table of allTables) {
@@ -673,6 +706,44 @@ export function runUomFromPackageMigration() {
   }
 }
 runUomFromPackageMigration();
+
+// Rows archived by settlements that predate settlement_id: the old client POSTed the daily report
+// seconds BEFORE calling the settlement, so a report belongs to the rows archived just after it.
+// Attach each unlinked archived row to the tenant's latest report created no later than
+// archived_at + 120s (and not more than 10 minutes before it — an older report is a different
+// close). Rows with no such report stay unlinked. Exported so the suite can re-run it.
+export function runSettlementLinkBackfill() {
+  if (db.prepare("SELECT 1 FROM _migrations WHERE name = 'settlement_link_backfill_v1'").get()) return;
+  try {
+    for (const t of ['archived_transactions', 'archived_cash_flow']) {
+      db.exec(`
+        UPDATE ${t} SET settlement_id = (
+          SELECT r.id FROM daily_reports r
+          WHERE r.tenant_id = ${t}.tenant_id
+            AND r.created_at <= datetime(${t}.archived_at, '+120 seconds')
+            AND r.created_at >= datetime(${t}.archived_at, '-600 seconds')
+          ORDER BY r.created_at DESC, r.id DESC LIMIT 1
+        ) WHERE settlement_id IS NULL AND archived_at IS NOT NULL
+      `);
+    }
+    db.exec(`
+      UPDATE daily_reports SET settled_at = (
+        SELECT MAX(a) FROM (
+          SELECT archived_at AS a FROM archived_transactions WHERE settlement_id = daily_reports.id
+          UNION ALL
+          SELECT archived_at AS a FROM archived_cash_flow WHERE settlement_id = daily_reports.id
+        )
+      ) WHERE settled_at IS NULL AND (
+        EXISTS (SELECT 1 FROM archived_transactions WHERE settlement_id = daily_reports.id)
+        OR EXISTS (SELECT 1 FROM archived_cash_flow WHERE settlement_id = daily_reports.id)
+      )
+    `);
+    db.prepare("INSERT INTO _migrations (name) VALUES ('settlement_link_backfill_v1')").run();
+  } catch (e) {
+    console.error('settlement_link_backfill_v1 error:', e);
+  }
+}
+runSettlementLinkBackfill();
 
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };

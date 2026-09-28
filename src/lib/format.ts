@@ -207,8 +207,26 @@ function dateLocaleFor(lang: string): string {
   return DATE_LOCALE[lang] || 'en-US';
 }
 
+/**
+ * Parses a date value coming from the server. SQLite's CURRENT_TIMESTAMP is UTC but carries no zone
+ * ("2026-09-28 22:59:00"), and `new Date()` would read that as LOCAL time — shifting every timestamp by
+ * the UTC offset (3 h in Lebanon, which also moves late-night sales to the previous day). A bare
+ * "YYYY-MM-DD" is a calendar date (e.g. a report's local date) and is read as local midnight so it never
+ * moves to the previous day west of UTC. Anything with an explicit zone / ISO "T" is left to Date.
+ */
+export function parseServerDate(value: string | Date): Date {
+  if (value instanceof Date) return value;
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) return new Date(s.replace(' ', 'T') + 'Z');
+  return new Date(s);
+}
+
 export function formatDate(value: string | Date, lang: string = 'en'): string {
-  const d = typeof value === 'string' ? new Date(value) : value;
+  const d = parseServerDate(value);
   if (Number.isNaN(d.getTime())) return '';
   return new Intl.DateTimeFormat(dateLocaleFor(lang), {
     year: 'numeric',
@@ -219,7 +237,7 @@ export function formatDate(value: string | Date, lang: string = 'en'): string {
 }
 
 export function formatDateTime(value: string | Date, lang: string = 'en'): string {
-  const d = typeof value === 'string' ? new Date(value) : value;
+  const d = parseServerDate(value);
   if (Number.isNaN(d.getTime())) return '';
   return new Intl.DateTimeFormat(dateLocaleFor(lang), {
     year: 'numeric',
@@ -234,7 +252,7 @@ export function formatDateTime(value: string | Date, lang: string = 'en'): strin
 /** Time-only formatter (e.g. POS daily-history time column, receipt timestamps) — same locale-aware
  * month/period naming as formatDate/formatDateTime, Western digits, optionally with seconds. */
 export function formatTime(value: string | Date, lang: string = 'en', opts: { seconds?: boolean } = {}): string {
-  const d = typeof value === 'string' ? new Date(value) : value;
+  const d = parseServerDate(value);
   if (Number.isNaN(d.getTime())) return '';
   return new Intl.DateTimeFormat(dateLocaleFor(lang), {
     hour: '2-digit',
