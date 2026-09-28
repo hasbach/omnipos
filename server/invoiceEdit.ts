@@ -170,6 +170,16 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
 
   const priceLevel: PriceLevel = normalizeLevel(body.price_level ?? tx.price_level);
 
+  // created_at is stored the way SQLite's CURRENT_TIMESTAMP writes it ('YYYY-MM-DD HH:MM:SS', UTC):
+  // every date filter and string ORDER BY across live/archived tables assumes that exact format, so
+  // an ISO string from the browser ('...T...Z') is normalized rather than stored as-is.
+  let createdAt: string | null = null;
+  if (body.created_at) {
+    const d = new Date(body.created_at);
+    if (isNaN(d.getTime())) throw new ValidationError("Invalid invoice date.");
+    createdAt = d.toISOString().replace('T', ' ').slice(0, 19);
+  }
+
   const productCache: Record<number, any> = {};
   const getProduct = (pid: number) => {
     if (!(pid in productCache)) {
@@ -307,7 +317,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       body.notes ?? tx.notes ?? null,
       body.reference ?? tx.reference ?? null,
       priceLevel,
-      body.created_at || null,
+      createdAt,
       id,
       tenantId
     );

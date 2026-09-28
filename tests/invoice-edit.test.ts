@@ -348,3 +348,29 @@ test("a newly added payment is validated", async () => {
   });
   assert.equal(bad.status, 400);
 });
+
+test("an edit normalizes a browser ISO date to SQLite's UTC format, and leaves it alone when omitted", async () => {
+  const productId = seedProduct(app.db, tenantId, { barcode: "EDIT-DATE", name: "Dated", price: 5, stock: 10 });
+  const sale = await app.api("POST", "/api/transactions", {
+    tenantId, body: { type: "sale", items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1, payments: [] },
+  });
+  const before = (app.db.prepare("SELECT created_at FROM transactions WHERE id = ?").get(sale.body.id) as any).created_at;
+  await app.api("PUT", `/api/transactions/${sale.body.id}`, { tenantId, body: { items: [{ product_id: productId, quantity: 2, unit_price: 5 }] } });
+  assert.equal((app.db.prepare("SELECT created_at FROM transactions WHERE id = ?").get(sale.body.id) as any).created_at, before);
+  await app.api("PUT", `/api/transactions/${sale.body.id}`, { tenantId, body: { items: [{ product_id: productId, quantity: 2, unit_price: 5 }], created_at: "2026-03-05T10:30:00.000Z" } });
+  assert.equal((app.db.prepare("SELECT created_at FROM transactions WHERE id = ?").get(sale.body.id) as any).created_at, "2026-03-05 10:30:00");
+});
+
+test("a back-office sale invoice keeps the price typed in the editor", async () => {
+  const productId = seedProduct(app.db, tenantId, { barcode: "BO-PRICE", name: "Negotiated", price: 10, stock: 10 });
+  const res = await app.api("POST", "/api/transactions", {
+    tenantId, body: { type: "sale", source: "backoffice", items: [{ id: productId, quantity: 3, price: 8, unit_price: 8 }], currency: "USD", exchange_rate: 1, payments: [] },
+  });
+  assert.equal(res.status, 200);
+  assert.equal((app.db.prepare("SELECT total_amount FROM transactions WHERE id = ?").get(res.body.id) as any).total_amount, 24);
+  // Without the back-office flag (a POS client) and with the setting off, the catalog price wins.
+  const pos = await app.api("POST", "/api/transactions", {
+    tenantId, body: { items: [{ id: productId, quantity: 3, price: 8, unit_price: 8 }], currency: "USD", exchange_rate: 1, payments: [] },
+  });
+  assert.equal((app.db.prepare("SELECT total_amount FROM transactions WHERE id = ?").get(pos.body.id) as any).total_amount, 30);
+});

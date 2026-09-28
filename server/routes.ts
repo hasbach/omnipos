@@ -1270,7 +1270,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           // A manual price override (cashier types a different price on the line) is only
           // honored when the tenant explicitly turned it on, and only for a real, non-negative
           // number — never trust a garbled/absent client value.
-          if (settings.allow_price_override === '1' && Number.isFinite(item.unit_price) && item.unit_price >= 0) {
+          // The back-office invoice editor is an admin screen whose typed prices are honored the same
+          // way PUT /api/transactions/:id honors them on edit (and are visible in the invoice itself);
+          // at the POS a typed price needs the explicit tenant setting.
+          const overrideAllowed = settings.allow_price_override === '1' || req.body.source === 'backoffice';
+          if (overrideAllowed && Number.isFinite(item.unit_price) && item.unit_price >= 0) {
             unitPrice = item.unit_price;
           }
           if (product.min_price && product.min_price > 0 && unitPrice < product.min_price && settings.enforce_min_price === '1') {

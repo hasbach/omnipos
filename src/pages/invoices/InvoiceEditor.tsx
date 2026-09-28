@@ -56,6 +56,9 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const [partyOpen, setPartyOpen] = useState(false);
   const [priceLevel, setPriceLevel] = useState<PriceLevel>('retail');
   const [dateTime, setDateTime] = useState(nowLocalDateTime());
+  // What the loaded invoice's date looked like — only send created_at when the user changed it,
+  // so a routine edit never rewrites the original timestamp.
+  const [initialDateTime, setInitialDateTime] = useState('');
   const [reference, setReference] = useState('');
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([]);
@@ -80,7 +83,9 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
         setArchived(!!tx.archived);
         setPartyId(tx.stakeholder_id || '');
         setPriceLevel(normalizeLevel(tx.price_level));
-        setDateTime(tx.created_at ? toLocalInput(tx.created_at) : nowLocalDateTime());
+        const loaded = tx.created_at ? toLocalInput(tx.created_at) : nowLocalDateTime();
+        setDateTime(loaded);
+        setInitialDateTime(loaded);
         setReference(tx.reference || '');
         setNotes(tx.notes || '');
         setGlobalDiscount(tx.discount || { type: 'percentage', value: 0 });
@@ -227,7 +232,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           notes,
           reference,
           price_level: priceLevel,
-          created_at: fromLocalInput(dateTime),
+          created_at: dateTime !== initialDateTime ? fromLocalInput(dateTime) : undefined,
           reason,
           user_id: currentUserId(),
         };
@@ -240,7 +245,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           stakeholder_id: partyId,
           user_id: currentUserId(),
           type: txType,
-          items: lines.map((l) => ({ id: l.product_id, quantity: l.quantity, price: l.unit_price, discount: l.discount })),
+          // unit_price + source let the server keep a back-office price the user typed (as PUT does);
+          // `price` is still what a purchase line is costed at.
+          source: 'backoffice',
+          items: lines.map((l) => ({ id: l.product_id, quantity: l.quantity, price: l.unit_price, unit_price: l.unit_price, discount: l.discount })),
           currency: 'USD',
           exchange_rate: 1,
           payments: payload,
