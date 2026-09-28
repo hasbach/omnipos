@@ -123,6 +123,35 @@ function findOriginalSale(tenantId: number, originalTransactionId: number): { tx
   return { tx, items };
 }
 
+// What fraction of an invoice's line subtotal was actually charged: total_amount (after the
+// whole-invoice discount and tax) divided by the sum of its line totals (after per-line discounts).
+// A refund of some lines pays back the same fraction — otherwise refunding one item from an invoice
+// that had a 10% global discount would return more than the customer paid for it.
+function chargedFactor(original: { tx: any; items: any[] }): number {
+  const subtotal = original.items.reduce(
+    (sum, oi) => sum + lineTotal(oi.unit_price, oi.quantity, { type: oi.discount_type, value: oi.discount_value }), 0);
+  return subtotal > 0 ? (original.tx.total_amount || 0) / subtotal : 1;
+}
+
+// The original invoice's whole-invoice discount and tax expressed as the percentages they actually
+// came to. A refund stores THESE as its own discount/tax, so (a) its total is exactly the charged
+// fraction of the refunded lines (subtotal x (1-d) x (1+t) = chargedFactor x subtotal), and (b) every
+// report that allocates an invoice's own discount to its lines treats refunds consistently too.
+function originalAdjustmentPcts(original: { tx: any; items: any[] }): { discountPct: number; taxPct: number } {
+  const subtotal = original.items.reduce(
+    (sum, oi) => sum + lineTotal(oi.unit_price, oi.quantity, { type: oi.discount_type, value: oi.discount_value }), 0);
+  if (subtotal <= 0) return { discountPct: 0, taxPct: 0 };
+  const t = original.tx;
+  const discAmt = !t.discount_value ? 0
+    : t.discount_type === 'percentage' ? subtotal * (t.discount_value / 100) : Math.min(t.discount_value, subtotal);
+  const afterDiscount = subtotal - discAmt;
+  const taxAmt = (t.total_amount || 0) - afterDiscount;
+  return {
+    discountPct: (discAmt / subtotal) * 100,
+    taxPct: afterDiscount > 0 ? (taxAmt / afterDiscount) * 100 : 0,
+  };
+}
+
 // Quantity of each product already refunded against a given original sale, across both live and
 // archived refund transactions (an earlier refund of the same sale may itself have since been
 // archived) — caps how much of a line item is still eligible to be refunded.
@@ -1162,7 +1191,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     // Always store user_id AND stakeholder_id that belong to THIS tenant (never the old hard-coded
     // 1 defaults, which point at a seed tenant's rows and break the cloud FKs, blocking sync).
     const resolvedUserId = tenantUserId(tenantId, user_id);
-    const resolvedStakeholderId = tenantStakeholderId(tenantId, stakeholder_id);
+    let resolvedStakeholderId = tenantStakeholderId(tenantId, stakeholder_id);
     const settings = getSettingsMap(tenantId);
     const stakeholderRow = resolvedStakeholderId
       ? db.prepare("SELECT price_level, credit_limit, balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
@@ -1178,6 +1207,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     // is legitimately negotiated per order (there's no catalog price to check it against), but it
     // still has to be a real, non-negative number rather than whatever the client happened to send.
     let refundLines: Record<number, { unitPrice: number; discountType: string | null; discountValue: number | null; originalQuantity: number; remaining: number; unitCost: number | null }> | null = null;
+    let refundAdjust = { discountPct: 0, taxPct: 0 };
+    let refundStakeholderId: number | null = null;
     if (type === 'refund') {
       if (!original_transaction_id) {
         return res.status(400).json({ error: "A refund must reference the sale it's refunding." });
@@ -1187,6 +1218,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         return res.status(400).json({ error: "The referenced sale could not be found." });
       }
       const alreadyRefunded = refundedQuantityByProduct(tenantId, original_transaction_id);
+      refundAdjust = originalAdjustmentPcts(original);
+      refundStakeholderId = original.tx.stakeholder_id ?? null;
       refundLines = {};
       for (const oi of original.items) {
         refundLines[oi.product_id] = {
@@ -1235,6 +1268,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       if (adj.type === 'percentage' && adj.value > 100) return `${label === 'discount' ? 'Discount' : 'Tax'} percentage cannot exceed 100%.`;
       return null;
     };
+    // A refund always belongs to the customer of the sale it refunds (its effect unwinds THAT
+    // customer's balance), whatever the client sent.
+    if (type === 'refund' && refundStakeholderId) resolvedStakeholderId = refundStakeholderId;
+
     const discountError = invalidAdjustment(discount, 'discount');
     if (discountError) return res.status(400).json({ error: discountError });
     const taxError = invalidAdjustment(tax, 'tax');
@@ -1328,7 +1365,12 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       // Apply global discount/tax if any (bounds validated above) — exactly the same math as
       // before, now shared with PUT /api/transactions/:id via server/pricing.ts.
-      const finalTotal = computeTotals([calculatedTotal], discount, tax);
+      // A refund's invoice-level discount/tax come from the original invoice (originalAdjustmentPcts),
+      // never from the client — sending them again would double-apply or let a client inflate it.
+      const pct = (v: number) => (Math.abs(v) > 1e-9 ? { type: 'percentage' as const, value: v } : null);
+      const storedDiscount = type === 'refund' ? pct(refundAdjust.discountPct) : discount;
+      const storedTax = type === 'refund' ? pct(refundAdjust.taxPct) : tax;
+      const finalTotal = computeTotals([calculatedTotal], storedDiscount, storedTax);
 
       const termId = terminalId || 'MAIN';
       const sequenceRow = db.prepare(`SELECT IFNULL(MAX(terminal_sequence), 0) + 1 as next_seq FROM transactions WHERE terminal_id = ? AND tenant_id = ?`).get(termId, tenantId) as any;
@@ -1345,10 +1387,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         finalTotal,
         currency,
         exchange_rate,
-        discount?.type || null,
-        discount?.value || null,
-        tax?.type || null,
-        tax?.value || null,
+        storedDiscount?.type || null,
+        storedDiscount?.value || null,
+        storedTax?.type || null,
+        storedTax?.value || null,
         'completed',
         termId,
         termSeq,
@@ -1666,6 +1708,56 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
     return transaction;
   }
+
+  // What is still refundable on a sale: per line, sold / already refunded / remaining quantity and
+  // the amount one unit refunds (line discount prorated, invoice-level discount/tax applied through
+  // chargedFactor) -- exactly the math POST /api/transactions uses for a refund.
+  app.get("/api/transactions/:id/refundable", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const id = Number(req.params.id);
+    const original = findOriginalSale(tenantId, id);
+    if (!original) return res.status(404).json({ error: "Transaction not found" });
+    if (original.tx.type !== 'sale') return res.status(400).json({ error: "Only a sale can be refunded." });
+    const factor = chargedFactor(original);
+    const refunded = refundedQuantityByProduct(tenantId, id);
+    const archived = !db.prepare("SELECT 1 FROM transactions WHERE id = ? AND tenant_id = ?").get(id, tenantId);
+    const productStmt = db.prepare("SELECT name, barcode FROM products WHERE id = ? AND tenant_id = ?");
+    const lines = original.items.map((oi) => {
+      const product = productStmt.get(oi.product_id, tenantId) as any;
+      const perUnitLine = lineTotal(oi.unit_price, oi.quantity, { type: oi.discount_type, value: oi.discount_value }) / (oi.quantity || 1);
+      const refundedQty = refunded[oi.product_id] || 0;
+      return {
+        product_id: oi.product_id,
+        product_name: product?.name ?? `#${oi.product_id}`,
+        barcode: product?.barcode ?? null,
+        sold_qty: oi.quantity,
+        refunded_qty: refundedQty,
+        remaining_qty: Math.max(0, oi.quantity - refundedQty),
+        unit_price: oi.unit_price,
+        discount_type: oi.discount_type,
+        discount_value: oi.discount_value,
+        unit_refund: perUnitLine * factor,
+      };
+    });
+    const paid = db.prepare(`SELECT IFNULL(SUM(amount / exchange_rate), 0) as p FROM ${archived ? 'archived_payments' : 'payments'} WHERE transaction_id = ? AND method != 'credit'`).get(id) as any;
+    const refunds = db.prepare(`
+      SELECT * FROM (
+        SELECT id, created_at, total_amount, 0 as archived FROM transactions WHERE tenant_id = ? AND type = 'refund' AND original_transaction_id = ?
+        UNION ALL
+        SELECT id, created_at, total_amount, 1 as archived FROM archived_transactions WHERE tenant_id = ? AND type = 'refund' AND original_transaction_id = ?
+      ) ORDER BY created_at
+    `).all(tenantId, id, tenantId, id);
+    const stakeholder = original.tx.stakeholder_id
+      ? db.prepare("SELECT id, name, balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(original.tx.stakeholder_id, tenantId)
+      : null;
+    res.json({
+      transaction: { id, created_at: original.tx.created_at, total_amount: original.tx.total_amount, paid_amount: paid.p, archived: archived ? 1 : 0 },
+      stakeholder,
+      factor,
+      lines,
+      refunds,
+    });
+  });
 
   app.get("/api/transactions/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;

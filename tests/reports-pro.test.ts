@@ -113,7 +113,7 @@ before(async () => {
   app.db.prepare("UPDATE transaction_items SET unit_cost = 4 WHERE transaction_id = ?").run(sale3Id);
 
   // --- Refund: 2 units of A from the now-archived sale1 (10% line discount carries over). ---
-  // 10*2=20 -> 10% line disc -> 18
+  // 10*2=20 -> 10% line disc -> 18 -> sale1 also had a 5% invoice discount -> the refund pays back 17.10
   const r1 = await app.api("POST", "/api/transactions", {
     tenantId,
     body: {
@@ -121,7 +121,7 @@ before(async () => {
       original_transaction_id: sale1Id,
       items: [{ id: productA, quantity: 2 }],
       currency: "USD", exchange_rate: 1,
-      payments: [{ amount: 18, method: "cash", currency: "USD", exchange_rate: 1 }],
+      payments: [{ amount: 17.1, method: "cash", currency: "USD", exchange_rate: 1 }],
     },
   });
   assert.equal(r1.status, 200, JSON.stringify(r1.body));
@@ -186,12 +186,12 @@ test("summary reconciles sales, refunds, cogs, discounts, cash, receivables/paya
   const s = res.body;
 
   approx(s.sales, 112.75, "sales"); // 42.75 + 40 + 30
-  approx(s.refunds, 18, "refunds");
-  approx(s.net_sales, 94.75, "net_sales");
+  approx(s.refunds, 17.1, "refunds");
+  approx(s.net_sales, 95.65, "net_sales");
   approx(s.discounts, 7.25, "discounts"); // only sale1's line+global discount
   approx(s.cogs, 40, "cogs"); // (20+16+12) - 8
-  approx(s.gross_profit, 54.75, "gross_profit");
-  approx(s.margin_pct, (54.75 / 94.75) * 100, "margin_pct");
+  approx(s.gross_profit, 55.65, "gross_profit");
+  approx(s.margin_pct, (55.65 / 95.65) * 100, "margin_pct");
   approx(s.purchases, 120, "purchases");
   approx(s.cash_in, 50, "cash_in");
   approx(s.cash_out, 70, "cash_out"); // 30 rent + 40 supplier payment
@@ -219,9 +219,9 @@ test("by-product reconciles with summary net_sales/cogs and nets refunds", async
   assert.ok(a && b, "both products present");
 
   approx(a.qty, 6, "product A net qty (5 + 3 - 2)");
-  approx(a.revenue, 54.75, "product A revenue"); // 42.75 + 30 - 18
+  approx(a.revenue, 55.65, "product A revenue"); // 42.75 + 30 - 17.10
   approx(a.cogs, 24, "product A cogs"); // 20 + 12 - 8
-  approx(a.profit, 30.75, "product A profit");
+  approx(a.profit, 31.65, "product A profit");
 
   approx(b.qty, 2, "product B qty");
   approx(b.revenue, 40, "product B revenue");
@@ -229,7 +229,7 @@ test("by-product reconciles with summary net_sales/cogs and nets refunds", async
 
   const totalRevenue = rows.reduce((sum, r) => sum + r.revenue, 0);
   const totalCogs = rows.reduce((sum, r) => sum + r.cogs, 0);
-  approx(totalRevenue, 94.75, "sum(by-product.revenue) reconciles with summary.net_sales");
+  approx(totalRevenue, 95.65, "sum(by-product.revenue) reconciles with summary.net_sales");
   approx(totalCogs, 40, "sum(by-product.cogs) reconciles with summary.cogs");
 
   // sort + limit
@@ -244,7 +244,7 @@ test("by-category shares sum to 100% and reconciles with by-product", async () =
   const drinks = rows.find((r) => r.category === "Drinks");
   const snacks = rows.find((r) => r.category === "Snacks");
   assert.ok(drinks && snacks);
-  approx(drinks.revenue, 54.75, "Drinks revenue");
+  approx(drinks.revenue, 55.65, "Drinks revenue");
   approx(snacks.revenue, 40, "Snacks revenue");
   const totalShare = rows.reduce((sum, r) => sum + r.share_pct, 0);
   approx(totalShare, 100, "share_pct sums to 100", 0.1);
@@ -260,7 +260,7 @@ test("by-customer: invoices, revenue/profit net of refunds, paid (excludes credi
   assert.ok(walkin && custX);
 
   assert.equal(walkin.invoices, 2, "walk-in: sale1 + sale2 (refund not counted as an invoice)");
-  approx(walkin.revenue, 64.75, "walk-in revenue net of refund"); // 42.75 + 40 - 18
+  approx(walkin.revenue, 65.65, "walk-in revenue net of refund"); // 42.75 + 40 - 17.10
   approx(walkin.paid, 82.75, "walk-in paid");
   approx(walkin.balance, 0, "walk-in balance");
 
@@ -278,7 +278,7 @@ test("by-cashier aggregates invoices/revenue/refunds per user", async () => {
   const admin = rows[0];
   assert.equal(admin.invoices, 3);
   approx(admin.revenue, 112.75, "admin revenue");
-  approx(admin.refunds, 18, "admin refunds");
+  approx(admin.refunds, 17.1, "admin refunds");
   approx(admin.avg_ticket, 112.75 / 3, "admin avg_ticket");
 });
 
@@ -297,7 +297,7 @@ test("by-payment-method breaks out currency and kind (sale/refund/purchase)", as
   approx(saleUsd.amount_usd, 42.75, "sale cash USD");
   approx(saleLbp.amount_usd, 40, "sale cash LBP converted to USD");
   approx(saleCredit.amount_usd, 30, "sale credit");
-  approx(refundRow.amount_usd, 18, "refund payment");
+  approx(refundRow.amount_usd, 17.1, "refund payment");
   approx(purchaseRow.amount_usd, 100, "purchase payment");
 });
 
@@ -368,11 +368,11 @@ test("profit-and-loss excludes supplier payments from expenses", async () => {
   const res = await app.api("GET", `/api/reports/profit-and-loss?from=${today}&to=${today}`, { tenantId });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   const pl = res.body;
-  approx(pl.revenue, 94.75, "P&L revenue");
+  approx(pl.revenue, 95.65, "P&L revenue");
   approx(pl.cogs, 40, "P&L cogs");
-  approx(pl.gross_profit, 54.75, "P&L gross_profit");
+  approx(pl.gross_profit, 55.65, "P&L gross_profit");
   approx(pl.expenses, 30, "P&L expenses exclude the supplier payment");
-  approx(pl.net_profit, 24.75, "P&L net_profit");
+  approx(pl.net_profit, 25.65, "P&L net_profit");
 });
 
 test("sales-trend fills empty periods with zeros and reconciles the populated day", async () => {
@@ -392,10 +392,10 @@ test("sales-trend fills empty periods with zeros and reconciles the populated da
   const todayRow = rows.find((r) => r.period === today);
   assert.ok(todayRow);
   approx(todayRow.sales, 112.75, "trend today sales");
-  approx(todayRow.refunds, 18, "trend today refunds");
-  approx(todayRow.net, 94.75, "trend today net");
+  approx(todayRow.refunds, 17.1, "trend today refunds");
+  approx(todayRow.net, 95.65, "trend today net");
   approx(todayRow.cogs, 40, "trend today cogs");
-  approx(todayRow.profit, 54.75, "trend today profit");
+  approx(todayRow.profit, 55.65, "trend today profit");
   assert.equal(todayRow.count, 3, "trend today sale count");
 
   // Ascending order.
