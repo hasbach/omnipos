@@ -7,7 +7,7 @@ import {
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
-import { formatMoney, formatDateTime, resolveDateRangePreset, type DateRange } from '../lib/format';
+import { formatMoney, formatDateTime, resolveDateRangePreset, partyDisplayName, type DateRange } from '../lib/format';
 import type { Product, Stakeholder } from '../types';
 import InvoiceDetailDrawer from './invoices/InvoiceDetailDrawer';
 import InvoiceEditor from './invoices/InvoiceEditor';
@@ -96,7 +96,7 @@ export default function PurchaseManagement() {
   const handleExport = () => {
     const sheet = filteredRows.map((r) => ({
       'PO #': r.id,
-      Supplier: r.supplier_name || '',
+      Supplier: r.supplier_name ? partyDisplayName(r.supplier_name, t) : '',
       Date: formatDateTime(r.created_at, lang),
       Items: r.item_count,
       Total: r.total_amount,
@@ -143,7 +143,7 @@ export default function PurchaseManagement() {
 
   const columns: DataTableColumn<PurchaseListRow>[] = [
     { key: 'id', header: t('inv_col_number', '#'), sortable: true, render: (r) => <span className="num font-medium">#{r.id}</span> },
-    { key: 'supplier_name', header: t('inv_col_supplier', 'Supplier'), sortable: true, render: (r) => r.supplier_name || '—' },
+    { key: 'supplier_name', header: t('inv_col_supplier', 'Supplier'), sortable: true, render: (r) => r.supplier_name ? partyDisplayName(r.supplier_name, t) : '—' },
     { key: 'created_at', header: t('inv_col_date', 'Date'), sortable: true, sortValue: (r) => new Date(r.created_at).getTime(), render: (r) => <span className="num text-text-2">{formatDateTime(r.created_at, lang)}</span> },
     { key: 'item_count', header: t('inv_col_items', 'Items'), align: 'center', sortable: true },
     { key: 'total_amount', header: t('inv_col_total', 'Total'), align: 'end', sortable: true, render: (r) => formatMoney(r.total_amount, USD) },
@@ -229,7 +229,7 @@ export default function PurchaseManagement() {
         <DateRangePicker value={dateRange} onChange={(r) => setDateRange(r)} />
         <Select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} className="w-48" options={[
           { value: 'all', label: t('pur_filter_supplier_all', 'All suppliers') },
-          ...suppliers.map((s) => ({ value: String(s.id), label: s.name })),
+          ...suppliers.map((s) => ({ value: String(s.id), label: partyDisplayName(s.name, t) })),
         ]} />
         <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40" options={[
           { value: 'all', label: t('inv_filter_status_all', 'Any status') },

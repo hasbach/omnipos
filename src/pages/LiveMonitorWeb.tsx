@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Tenant } from '../types';
 import { useI18n } from '../intl/index';
-import { formatMoney, formatDateTime } from '../lib/format';
+import { formatMoney, formatDateTime, partyDisplayName } from '../lib/format';
 
 // Normalize a timestamp coming from Supabase/Postgres into a value `new Date()` parses as UTC.
 // PostgREST returns timestamptz as e.g. "2026-07-13T07:00:00+00:00" (offset, no "Z"), while the
@@ -177,7 +177,7 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
                       </div>
                       <p className="text-xs font-bold opacity-50">
                         {t('web_processed_by', 'Processed by')} <span className="text-app-ink">{activity.user_name}</span>
-                        {activity.stakeholder_name && <> {t('web_for', 'for')} <span className="text-app-ink">{activity.stakeholder_name}</span></>}
+                        {activity.stakeholder_name && <> {t('web_for', 'for')} <span className="text-app-ink">{partyDisplayName(activity.stakeholder_name, t)}</span></>}
                       </p>
                     </div>
                   </div>

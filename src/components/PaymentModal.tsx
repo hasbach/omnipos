@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Modal, Button, Field, Input, Textarea, Badge, IconButton } from './ui';
-import { formatMoney, formatBalance, paymentMethodLabel, formatTime, formatDate, formatNumber } from '../lib/format';
+import { formatMoney, formatBalance, paymentMethodLabel, formatTime, formatDate, formatNumber, partyDisplayName } from '../lib/format';
 
 const QUICK_CASH_STEPS = [5, 10, 20, 50, 100];
 
@@ -250,7 +250,7 @@ export default function PaymentModal() {
                       >
                         <td className="p-3 font-mono font-bold text-text">{formatTxId(tr)}</td>
                         <td className="p-3 text-text-3">{formatTime(tr.created_at, lang, { seconds: true })}</td>
-                        <td className="p-3 font-semibold text-text">{tr.stakeholder_name || t('pos_walk_in', 'Walk-in')}</td>
+                        <td className="p-3 font-semibold text-text">{tr.stakeholder_name ? partyDisplayName(tr.stakeholder_name, t) : t('pos_walk_in', 'Walk-in')}</td>
                         <td className="p-3 text-text-2">{tr.user_name || t('pos_hist_system', 'System')}</td>
                         <td className="p-3 text-end font-mono font-bold num text-text">${tr.total_amount.toFixed(2)}</td>
                         <td className="p-3 text-center">
@@ -664,7 +664,7 @@ export default function PaymentModal() {
       {/* Debt Modal */}
       <Modal open={showDebtModal} onClose={() => !isProcessing && setShowDebtModal(false)} size="sm" title={t('pos_receive_debt_payment', 'Receive Debt Payment')}>
         <p className="text-xs text-text-3 font-semibold mb-4">
-          {t('pos_customer_label', 'Customer: {name}', { name: stakeholders.find((s: any) => s.id === selectedStakeholder)?.name || '' })}
+          {t('pos_customer_label', 'Customer: {name}', { name: partyDisplayName(stakeholders.find((s: any) => s.id === selectedStakeholder)?.name, t) })}
         </p>
         <div className="mb-4 p-4 bg-danger-soft text-danger rounded-xl border border-danger/20 text-center">
           <span className="text-[10px] font-bold uppercase tracking-wide block mb-1">{t('pos_current_balance', 'Current Balance')}</span>

@@ -13,7 +13,7 @@ import {
 } from '../lib/pricing';
 import { useSettings } from '../lib/useSettings';
 import { translateServerError } from '../lib/serverErrors';
-import { formatDateTime } from '../lib/format';
+import { formatDateTime, partyDisplayName } from '../lib/format';
 
 export const CURRENCIES = [
   { code: 'USD', symbol: '$', rate: 1 },
@@ -917,7 +917,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     };
 
     const customer = stakeholders.find(s => s.id === transaction.stakeholder_id);
-    const stakeholder = customer?.name || 'Walk-in Customer';
+    const stakeholder = partyDisplayName(customer?.name, t);
     const lines = [
       "================================",
       center(printSettings.store_name || 'Unnamed Business'),

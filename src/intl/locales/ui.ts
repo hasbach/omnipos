@@ -41,6 +41,8 @@ export default {
     ui_line_chart: 'Line chart',
     ui_no_data: 'No data',
 
+    party_walk_in: 'Walk-in Customer',
+
     // ---- Server error translation (src/lib/serverErrors.ts) ----
     err_credit_limit: "This would exceed the customer's credit limit.",
     err_credit_limit_amount: 'This would exceed the credit limit ({limit}).',
@@ -100,6 +102,8 @@ export default {
     ui_line_chart: 'رسم بياني خطي',
     ui_no_data: 'لا توجد بيانات',
 
+    party_walk_in: 'زبون عابر',
+
     // ---- Server error translation (src/lib/serverErrors.ts) ----
     err_credit_limit: 'سيتجاوز هذا سقف ائتمان الزبون.',
     err_credit_limit_amount: 'سيتجاوز هذا سقف الائتمان ({limit}).',
@@ -158,6 +162,8 @@ export default {
     ui_donut_chart: 'Graphique en anneau',
     ui_line_chart: 'Graphique linéaire',
     ui_no_data: 'Aucune donnée',
+
+    party_walk_in: 'Client de passage',
 
     // ---- Server error translation (src/lib/serverErrors.ts) ----
     err_credit_limit: 'Cela dépasserait la limite de crédit du client.',

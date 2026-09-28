@@ -9,7 +9,7 @@ import {
   StatCard,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
-import { formatMoney, localToday, formatTime, transactionStatusLabel, paymentMethodLabel } from '../lib/format';
+import { formatMoney, localToday, formatTime, transactionStatusLabel, paymentMethodLabel, partyDisplayName } from '../lib/format';
 import { api } from '../lib/api';
 
 interface Transaction {
@@ -93,7 +93,7 @@ export default function DailySales() {
       sortable: true,
       render: (r) => <span className="num text-text-3">{formatTime(r.created_at, lang, { seconds: true })}</span>,
     },
-    { key: 'stakeholder_name', header: t('fin_ds_customer', 'Customer'), render: (r) => r.stakeholder_name || t('fin_ds_walk_in', 'Walk-in') },
+    { key: 'stakeholder_name', header: t('fin_ds_customer', 'Customer'), render: (r) => r.stakeholder_name ? partyDisplayName(r.stakeholder_name, t) : t('fin_ds_walk_in', 'Walk-in') },
     { key: 'user_name', header: t('fin_ds_cashier', 'Cashier'), render: (r) => r.user_name || t('fin_ds_system', 'System') },
     {
       key: 'total_amount',

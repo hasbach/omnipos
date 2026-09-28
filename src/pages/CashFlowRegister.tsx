@@ -15,7 +15,7 @@ import {
   useToast,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
-import { formatDateTime, formatMoney } from '../lib/format';
+import { formatDateTime, formatMoney, partyDisplayName } from '../lib/format';
 import { api } from '../lib/api';
 
 interface Currency {
@@ -391,9 +391,9 @@ export default function CashFlowRegister() {
               options={[
                 ...(balDirection === 'collect' ? customersWithBalance : suppliersWithBalance).map((s) => ({
                   value: String(s.id),
-                  label: `${s.name} — ${formatMoney(Math.abs(s.balance), { code: 'USD', symbol: '$' })} ${s.balance > 0 ? t('fin_cfr_owed', 'owed to you') : t('fin_cfr_outstanding', 'you owe')}`,
+                  label: `${partyDisplayName(s.name, t)} — ${formatMoney(Math.abs(s.balance), { code: 'USD', symbol: '$' })} ${s.balance > 0 ? t('fin_cfr_owed', 'owed to you') : t('fin_cfr_outstanding', 'you owe')}`,
                 })),
-                ...stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${formatMoney(s.balance, { code: 'USD', symbol: '$' })})` })),
+                ...stakeholders.map((s) => ({ value: String(s.id), label: `${partyDisplayName(s.name, t)} (${formatMoney(s.balance, { code: 'USD', symbol: '$' })})` })),
               ]}
             />
             {selectedStakeholder && (

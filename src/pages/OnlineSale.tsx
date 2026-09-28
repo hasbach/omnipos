@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Tenant } from '../types';
 import { useI18n } from '../intl/index';
+import { partyDisplayName } from '../lib/format';
 
 // Minimal emergency fallback for when the local register is unreachable.
 // Deliberately out of scope: purchases, receipt printing, product create/edit/delete,
@@ -229,7 +230,7 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
               >
                 <option value="">{t('web_walkin_no_customer', 'Walk-in (no customer)')}</option>
                 {stakeholders.map(s => (
-                  <option key={s.global_id} value={s.global_id}>{s.name}</option>
+                  <option key={s.global_id} value={s.global_id}>{partyDisplayName(s.name, t)}</option>
                 ))}
               </select>
             </div>

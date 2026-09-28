@@ -5,7 +5,7 @@ import {
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatBalance } from '../../lib/format';
+import { formatMoney, formatBalance, partyDisplayName } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, type PriceLevel } from '../../lib/pricing';
@@ -365,7 +365,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
               <Field label={isPurchase ? t('inv_editor_party_purchase', 'Supplier') : t('inv_editor_party_sale', 'Customer')} required error={fieldErrors.stakeholder_id}>
                 <div className="relative">
                   <Input
-                    value={party ? party.name : partySearch}
+                    value={party ? partyDisplayName(party.name, t) : partySearch}
                     placeholder={t('inv_editor_party_placeholder')}
                     invalid={!!fieldErrors.stakeholder_id}
                     onFocus={() => setPartyOpen(true)}
@@ -381,7 +381,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                           className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-surface-2 cursor-pointer"
                           onClick={() => { setPartyId(p.id); setPartySearch(''); setPartyOpen(false); setDirty(true); clearFieldError('stakeholder_id'); }}
                         >
-                          <span className="font-medium text-text">{p.name}</span>
+                          <span className="font-medium text-text">{partyDisplayName(p.name, t)}</span>
                           <span className="num text-xs text-text-3">{formatMoney(p.balance || 0, USD)}</span>
                         </button>
                       ))}

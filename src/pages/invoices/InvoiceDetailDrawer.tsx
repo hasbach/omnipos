@@ -4,7 +4,7 @@ import { Drawer, Button, Badge, Tabs, Checkbox, SkeletonTable } from '../../comp
 import { useToast, useConfirm } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime, formatBalance, paymentMethodLabel } from '../../lib/format';
+import { formatMoney, formatDateTime, formatBalance, paymentMethodLabel, partyDisplayName } from '../../lib/format';
 import RefundModal, { type RefundableResponse } from './RefundModal';
 import type { CurrencyRow, TxType } from './types';
 
@@ -119,7 +119,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
         .totals{margin-top:12px;text-align:end;} .totals p{font-weight:bold;}
       </style></head><body>
       <h1>Invoice #${invoice.id} — ${invoice.type === 'refund' ? t('inv_type_refund', 'Refund') : invoice.type === 'purchase' ? t('inv_type_purchase', 'Purchase') : t('inv_type_sale', 'Sale')}</h1>
-      <p>${invoice.stakeholder_name || ''}</p>
+      <p>${invoice.stakeholder_name ? partyDisplayName(invoice.stakeholder_name, t) : ''}</p>
       <p>${formatDateTime(invoice.created_at, lang)}</p>
       <table><thead><tr><th>${t('inv_detail_col_product', 'Product')}</th><th>${t('inv_detail_col_qty', 'Qty')}</th><th>${t('inv_editor_col_unit_price', 'Price')}</th><th>${t('inv_detail_col_line_total', 'Line total')}</th></tr></thead>
       <tbody>${rows}</tbody></table>
@@ -188,7 +188,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <p className="text-xs text-text-3">{invoice.type === 'purchase' ? t('inv_detail_supplier', 'Supplier') : t('inv_detail_party', 'Party')}</p>
-              <p className="font-medium text-text">{invoice.stakeholder_name || '—'}</p>
+              <p className="font-medium text-text">{invoice.stakeholder_name ? partyDisplayName(invoice.stakeholder_name, t) : '—'}</p>
             </div>
             <div>
               <p className="text-xs text-text-3">{t('inv_detail_date', 'Date')}</p>

@@ -7,7 +7,7 @@ import {
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
-import { formatMoney, formatDateTime, resolveDateRangePreset, type DateRange } from '../lib/format';
+import { formatMoney, formatDateTime, resolveDateRangePreset, partyDisplayName, type DateRange } from '../lib/format';
 import type { Product, Stakeholder } from '../types';
 import InvoiceDetailDrawer from './invoices/InvoiceDetailDrawer';
 import InvoiceEditor from './invoices/InvoiceEditor';
@@ -104,7 +104,7 @@ export default function InvoiceManagement() {
     const sheet = filteredRows.map((r) => ({
       '#': r.id,
       Type: r.type,
-      Party: r.stakeholder_name || '',
+      Party: r.stakeholder_name ? partyDisplayName(r.stakeholder_name, t) : '',
       Date: formatDateTime(r.created_at, lang),
       Items: r.item_count,
       Total: r.total_amount,
@@ -140,7 +140,7 @@ export default function InvoiceManagement() {
         </div>
       ),
     },
-    { key: 'stakeholder_name', header: t('inv_col_party', 'Party'), sortable: true, render: (r) => r.stakeholder_name || '—' },
+    { key: 'stakeholder_name', header: t('inv_col_party', 'Party'), sortable: true, render: (r) => r.stakeholder_name ? partyDisplayName(r.stakeholder_name, t) : '—' },
     { key: 'item_count', header: t('inv_col_items', 'Items'), align: 'center', sortable: true },
     { key: 'total_amount', header: t('inv_col_total', 'Total'), align: 'end', sortable: true, render: (r) => formatMoney(r.total_amount, USD) },
     { key: 'paid_amount', header: t('inv_col_paid', 'Paid'), align: 'end', sortable: true, render: (r) => formatMoney(r.paid_amount, USD) },
@@ -207,7 +207,7 @@ export default function InvoiceManagement() {
         ]} />
         <Select value={partyFilter} onChange={(e) => setPartyFilter(e.target.value)} className="w-48" options={[
           { value: 'all', label: t('inv_filter_party_all', 'All parties') },
-          ...stakeholders.map((s) => ({ value: String(s.id), label: s.name })),
+          ...stakeholders.map((s) => ({ value: String(s.id), label: partyDisplayName(s.name, t) })),
         ]} />
         <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40" options={[
           { value: 'all', label: t('inv_filter_status_all', 'Any status') },

@@ -12,6 +12,7 @@ export interface ReceiptLabels {
   date: string;
   cashier: string;
   customer: string;
+  walkIn: string;             // display name for the tenant's built-in walk-in customer record
   address: string;
   itemQty: string;           // item table column headers (not currently printed, kept for completeness)
   itemPrice: string;
@@ -46,6 +47,7 @@ const LABELS: Record<ReceiptLanguage, ReceiptLabels> = {
     date: 'Date',
     cashier: 'Cashier',
     customer: 'Customer',
+    walkIn: 'Walk-in Customer',
     address: 'Address',
     itemQty: 'Qty',
     itemPrice: 'Price',
@@ -75,6 +77,7 @@ const LABELS: Record<ReceiptLanguage, ReceiptLabels> = {
     date: 'التاريخ',
     cashier: 'الكاشير',
     customer: 'الزبون',
+    walkIn: 'زبون عابر',
     address: 'العنوان',
     itemQty: 'الكمية',
     itemPrice: 'السعر',
@@ -102,6 +105,7 @@ const LABELS: Record<ReceiptLanguage, ReceiptLabels> = {
     date: 'Date',
     cashier: 'Caissier',
     customer: 'Client',
+    walkIn: 'Client de passage',
     address: 'Adresse',
     itemQty: 'Qté',
     itemPrice: 'Prix',

@@ -52,6 +52,22 @@ export function formatMoney(amount: number, currency?: CurrencyLike, opts: Forma
 
 export type Translate = (key: string, fallback?: string) => string;
 
+/** The exact stored name of the built-in walk-in customer record. server/routes.ts creates it with
+ * this literal string and several server queries match on it — never rename it in the database or
+ * change what gets sent to the server. This constant is for display-layer comparisons only. */
+export const WALK_IN_CUSTOMER_NAME = 'Walk-in Customer';
+
+/**
+ * Display-only translation for a stakeholder/party name. The DB always stores the English
+ * 'Walk-in Customer' (and server queries match on that exact string), but Arabic/French UIs
+ * should show the localized label. Also covers the null/empty-name "Walk-in" fallback used
+ * across the UI when a sale has no stakeholder attached.
+ */
+export function partyDisplayName(name: string | null | undefined, t: Translate): string {
+  if (!name || name === WALK_IN_CUSTOMER_NAME) return t('party_walk_in', 'Walk-in Customer');
+  return name;
+}
+
 /**
  * Balance sign convention (shared across POS, invoice editor, stakeholder pages): negative = the
  * party owes us / we owe the supplier ("Due"); positive = credit in their favour ("Credit").

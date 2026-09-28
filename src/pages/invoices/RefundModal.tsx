@@ -3,7 +3,7 @@ import { RotateCcw, Undo2 } from 'lucide-react';
 import { Modal, Button, Field, NumberInput, Select, Textarea, Badge, useToast, useConfirm, SkeletonTable } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime, formatBalance } from '../../lib/format';
+import { formatMoney, formatDateTime, formatBalance, partyDisplayName } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import { postJson, ApiFieldError, type CurrencyRow } from './types';
 
@@ -205,7 +205,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
             <div className="grid grid-cols-4 gap-3 text-sm">
               <div>
                 <p className="text-xs text-text-3">{t('inv_detail_party', 'Party')}</p>
-                <p className="font-medium text-text">{data.stakeholder?.name || '—'}</p>
+                <p className="font-medium text-text">{data.stakeholder ? partyDisplayName(data.stakeholder.name, t) : t('party_walk_in', 'Walk-in Customer')}</p>
               </div>
               <div>
                 <p className="text-xs text-text-3">{t('inv_detail_date', 'Date')}</p>

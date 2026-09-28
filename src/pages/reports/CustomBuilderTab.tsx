@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardBody, Field, Select, Input, Button, DataTable, Badge, type DataTableColumn } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime, stakeholderTypeLabel } from '../../lib/format';
+import { formatMoney, formatDateTime, stakeholderTypeLabel, partyDisplayName } from '../../lib/format';
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { CustomBuilderRow, ProductLite, StakeholderLite } from './types';
@@ -64,7 +64,7 @@ export function CustomBuilderTab({ businessName }: CustomBuilderTabProps) {
     { key: 'invoice_no', header: t('rep_col_invoice_no', 'Invoice #'), sortable: true },
     { key: 'date', header: t('rep_col_date', 'Date'), sortable: true, render: (r) => formatDateTime(r.date, lang) },
     { key: 'type', header: t('rep_col_type', 'Type'), sortable: true, render: (r) => <Badge variant={TYPE_VARIANT[r.type] || 'neutral'}>{kindLabel(r.type)}</Badge> },
-    { key: 'stakeholder', header: t('rep_col_party', 'Party'), sortable: true, render: (r) => r.stakeholder || '—' },
+    { key: 'stakeholder', header: t('rep_col_party', 'Party'), sortable: true, render: (r) => r.stakeholder ? partyDisplayName(r.stakeholder, t) : '—' },
     { key: 'total_amount', header: t('rep_col_amount', 'Amount'), sortable: true, align: 'end', render: (r) => usd(r.total_amount) },
     { key: 'paid_amount', header: t('rep_col_paid', 'Paid'), sortable: true, align: 'end', render: (r) => usd(r.paid_amount) },
     { key: 'balance', header: t('rep_col_balance', 'Balance'), sortable: true, align: 'end', render: (r) => <span className={r.balance > 0.01 ? 'text-danger' : ''}>{usd(r.balance)}</span> },
@@ -75,7 +75,7 @@ export function CustomBuilderTab({ businessName }: CustomBuilderTabProps) {
     { key: 'invoice_no', header: t('rep_col_invoice_no', 'Invoice #'), value: (r) => r.invoice_no },
     { key: 'date', header: t('rep_col_date', 'Date'), value: (r) => formatDateTime(r.date, lang) },
     { key: 'type', header: t('rep_col_type', 'Type'), value: (r) => kindLabel(r.type) },
-    { key: 'stakeholder', header: t('rep_col_party', 'Party'), value: (r) => r.stakeholder || '' },
+    { key: 'stakeholder', header: t('rep_col_party', 'Party'), value: (r) => r.stakeholder ? partyDisplayName(r.stakeholder, t) : '' },
     { key: 'total_amount', header: t('rep_col_amount', 'Amount'), value: (r) => r.total_amount, align: 'right' },
     { key: 'paid_amount', header: t('rep_col_paid', 'Paid'), value: (r) => r.paid_amount, align: 'right' },
     { key: 'balance', header: t('rep_col_balance', 'Balance'), value: (r) => r.balance, align: 'right' },
@@ -100,7 +100,7 @@ export function CustomBuilderTab({ businessName }: CustomBuilderTabProps) {
                 value={filters.stakeholderId}
                 onChange={(e) => setFilters((f) => ({ ...f, stakeholderId: e.target.value }))}
                 placeholder={t('rep_builder_all_stakeholders', 'All stakeholders')}
-                options={stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${stakeholderTypeLabel(s.type, t)})` }))}
+                options={stakeholders.map((s) => ({ value: String(s.id), label: `${partyDisplayName(s.name, t)} (${stakeholderTypeLabel(s.type, t)})` }))}
               />
             </Field>
             <Field label={t('rep_builder_type', 'Invoice type')}>

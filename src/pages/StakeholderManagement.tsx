@@ -17,7 +17,7 @@ import {
 import type { DataTableColumn } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
-import { formatMoney } from '../lib/format';
+import { formatMoney, partyDisplayName } from '../lib/format';
 import { useSettings } from '../lib/useSettings';
 import type { Currency, PriceLevel, Stakeholder } from '../types';
 import { EditDrawer } from './stakeholders/EditDrawer';
@@ -99,7 +99,7 @@ export default function StakeholderManagement() {
   const handleDelete = async (s: Stakeholder) => {
     const ok = await confirm({
       title: t('stk_delete_confirm_title'),
-      description: t('stk_delete_confirm_desc').replace('{name}', s.name),
+      description: t('stk_delete_confirm_desc').replace('{name}', partyDisplayName(s.name, t)),
     });
     if (!ok) return;
     try {
@@ -119,7 +119,7 @@ export default function StakeholderManagement() {
       : t('stk_price_level_retail');
 
   const columns: DataTableColumn<Stakeholder>[] = [
-    { key: 'name', header: t('stk_col_name'), sortable: true, render: (s) => <span className="font-medium text-text">{s.name}</span> },
+    { key: 'name', header: t('stk_col_name'), sortable: true, render: (s) => <span className="font-medium text-text">{partyDisplayName(s.name, t)}</span> },
     {
       key: 'contact',
       header: t('stk_col_contact'),

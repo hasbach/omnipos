@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardBody, Field, Select, DataTable, Badge, type DataTableColumn } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime, stakeholderTypeLabel } from '../../lib/format';
+import { formatMoney, formatDateTime, stakeholderTypeLabel, partyDisplayName } from '../../lib/format';
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { CustomerStatementRow, StakeholderLite } from './types';
@@ -76,7 +76,7 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
   const meta = {
     fileName: `statement-${party?.name || id}`,
     title: t('rep_tab_customer_statement', 'Customer statement'),
-    subtitle: party?.name,
+    subtitle: party ? partyDisplayName(party.name, t) : undefined,
     businessName,
   };
 
@@ -89,7 +89,7 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
               value={id}
               onChange={(e) => setId(e.target.value)}
               placeholder={t('rep_statement_select_placeholder', 'Select a party…')}
-              options={stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${stakeholderTypeLabel(s.type, t)})` }))}
+              options={stakeholders.map((s) => ({ value: String(s.id), label: `${partyDisplayName(s.name, t)} (${stakeholderTypeLabel(s.type, t)})` }))}
             />
           </Field>
         </CardBody>
@@ -99,10 +99,10 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
         <div id="printable-report" className="space-y-2">
           <div className="hidden print:block mb-2">
             <p className="text-lg font-bold">{businessName || 'OmniPOS'}</p>
-            <p className="text-sm font-semibold">{meta.title} — {party?.name}</p>
+            <p className="text-sm font-semibold">{meta.title} — {party ? partyDisplayName(party.name, t) : ''}</p>
           </div>
           <ReportToolbar
-            title={`${t('rep_tab_customer_statement', 'Customer statement')}${party ? ` — ${party.name}` : ''}`}
+            title={`${t('rep_tab_customer_statement', 'Customer statement')}${party ? ` — ${partyDisplayName(party.name, t)}` : ''}`}
             onExportExcel={() => exportRowsToExcel(rows, exportColumns, meta)}
             onExportPdf={() => exportRowsToPdf(rows, exportColumns, meta)}
           />

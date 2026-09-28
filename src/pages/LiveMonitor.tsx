@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Globe, Monitor, Users, Wallet, Zap } from 'lucide-react';
 import { Badge, EmptyState, PageHeader, StatCard } from '../components/ui';
 import { useI18n } from '../intl/index';
-import { formatMoney, formatTime, transactionTypeLabel } from '../lib/format';
+import { formatMoney, formatTime, transactionTypeLabel, partyDisplayName } from '../lib/format';
 import { api } from '../lib/api';
 import type { Tenant } from '../types';
 
@@ -198,7 +198,7 @@ export default function LiveMonitor() {
                         {activity.stakeholder_name && (
                           <>
                             {' '}
-                            {t('fin_lm_for', 'for')} <span className="font-medium text-text-2">{activity.stakeholder_name}</span>
+                            {t('fin_lm_for', 'for')} <span className="font-medium text-text-2">{partyDisplayName(activity.stakeholder_name, t)}</span>
                           </>
                         )}
                       </p>

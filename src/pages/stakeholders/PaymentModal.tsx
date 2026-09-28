@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Field, MoneyInput, Select, Button, useToast, useConfirm } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney } from '../../lib/format';
+import { formatMoney, partyDisplayName } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import type { Currency, Stakeholder } from '../../types';
 
@@ -44,7 +44,7 @@ export function PaymentModal({ open, onClose, stakeholder, currencies, onDone }:
       title: t('stk_payment_confirm_title'),
       description: t('stk_payment_confirm_desc')
         .replace('{amount}', formatMoney(amount, currency))
-        .replace('{name}', stakeholder.name),
+        .replace('{name}', partyDisplayName(stakeholder.name, t)),
       variant: 'primary',
       confirmLabel: t('stk_payment_submit'),
     });
@@ -63,7 +63,7 @@ export function PaymentModal({ open, onClose, stakeholder, currencies, onDone }:
       toast.success(
         (direction === 'collect' ? t('stk_toast_payment_collected') : t('stk_toast_payment_paid')).replace(
           '{name}',
-          stakeholder.name,
+          partyDisplayName(stakeholder.name, t),
         ),
       );
       onDone();
@@ -79,7 +79,7 @@ export function PaymentModal({ open, onClose, stakeholder, currencies, onDone }:
 
   const title = (direction === 'collect' ? t('stk_payment_title_collect') : t('stk_payment_title_pay')).replace(
     '{name}',
-    stakeholder.name,
+    partyDisplayName(stakeholder.name, t),
   );
 
   return (

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { DataTable, Tabs, type DataTableColumn } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney } from '../../lib/format';
+import { formatMoney, partyDisplayName } from '../../lib/format';
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { ReportTabProps, AgingRow } from './types';
@@ -46,7 +46,7 @@ export function AgingTab({ businessName, onOpenStatement }: AgingTabProps) {
   const outstanding = (r: AgingRow) => r.current + r.d31_60 + r.d61_90 + r.d90_plus;
 
   const columns: DataTableColumn<AgingRow>[] = [
-    { key: 'name', header: type === 'customer' ? t('rep_col_customer', 'Customer') : t('rep_col_supplier', 'Supplier'), sortable: true },
+    { key: 'name', header: type === 'customer' ? t('rep_col_customer', 'Customer') : t('rep_col_supplier', 'Supplier'), sortable: true, render: (r) => partyDisplayName(r.name, t) },
     { key: 'current', header: t('rep_aging_current', 'Current'), sortable: true, align: 'end', render: (r) => usd(r.current) },
     { key: 'd31_60', header: t('rep_aging_31_60', '31–60'), sortable: true, align: 'end', render: (r) => usd(r.d31_60) },
     { key: 'd61_90', header: t('rep_aging_61_90', '61–90'), sortable: true, align: 'end', render: (r) => usd(r.d61_90) },
@@ -56,7 +56,7 @@ export function AgingTab({ businessName, onOpenStatement }: AgingTabProps) {
   ];
 
   const exportColumns: ExportColumn<AgingRow>[] = [
-    { key: 'name', header: type === 'customer' ? t('rep_col_customer', 'Customer') : t('rep_col_supplier', 'Supplier'), value: (r) => r.name },
+    { key: 'name', header: type === 'customer' ? t('rep_col_customer', 'Customer') : t('rep_col_supplier', 'Supplier'), value: (r) => partyDisplayName(r.name, t) },
     { key: 'current', header: t('rep_aging_current', 'Current'), value: (r) => r.current, align: 'right' },
     { key: 'd31_60', header: t('rep_aging_31_60', '31–60'), value: (r) => r.d31_60, align: 'right' },
     { key: 'd61_90', header: t('rep_aging_61_90', '61–90'), value: (r) => r.d61_90, align: 'right' },

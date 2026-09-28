@@ -85,7 +85,7 @@ export function buildReceiptBuffer(opts: {
   p.align('left');
   p.text(`${title}: ${receiptNo}`).feed(1);
   p.text(`${labels.date}: ${tx.created_at ? new Date(tx.created_at).toLocaleString() : new Date().toLocaleString()}`).feed(1);
-  if (tx.stakeholder_name) p.labeled(`${labels.customer}:`, tx.stakeholder_name);
+  if (tx.stakeholder_name) p.labeled(`${labels.customer}:`, tx.stakeholder_name === 'Walk-in Customer' ? labels.walkIn : tx.stakeholder_name);
   if (tx.stakeholder_address) p.labeled(`${labels.address}:`, tx.stakeholder_address);
   p.hr();
 

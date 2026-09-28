@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { DataTable, type DataTableColumn } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney } from '../../lib/format';
+import { formatMoney, partyDisplayName } from '../../lib/format';
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { ReportTabProps, ByCustomerRow, BySupplierRow, ByCashierRow } from './types';
@@ -33,7 +33,7 @@ export function CustomersTab({ range, businessName }: ReportTabProps) {
   const usd = (n: number) => formatMoney(n, { code: 'USD', symbol: '$' });
 
   const columns: DataTableColumn<ByCustomerRow>[] = [
-    { key: 'name', header: t('rep_col_customer', 'Customer'), sortable: true },
+    { key: 'name', header: t('rep_col_customer', 'Customer'), sortable: true, render: (r) => partyDisplayName(r.name, t) },
     { key: 'invoices', header: t('rep_col_invoices', 'Invoices'), sortable: true, align: 'end' },
     { key: 'revenue', header: t('rep_col_revenue', 'Revenue'), sortable: true, align: 'end', render: (r) => usd(r.revenue) },
     { key: 'profit', header: t('rep_col_profit', 'Profit'), sortable: true, align: 'end', render: (r) => usd(r.profit) },
@@ -49,7 +49,7 @@ export function CustomersTab({ range, businessName }: ReportTabProps) {
   ];
 
   const exportColumns: ExportColumn<ByCustomerRow>[] = [
-    { key: 'name', header: t('rep_col_customer', 'Customer'), value: (r) => r.name },
+    { key: 'name', header: t('rep_col_customer', 'Customer'), value: (r) => partyDisplayName(r.name, t) },
     { key: 'invoices', header: t('rep_col_invoices', 'Invoices'), value: (r) => r.invoices, align: 'right' },
     { key: 'revenue', header: t('rep_col_revenue', 'Revenue'), value: (r) => r.revenue, align: 'right' },
     { key: 'profit', header: t('rep_col_profit', 'Profit'), value: (r) => r.profit, align: 'right' },
@@ -95,7 +95,7 @@ export function SuppliersTab({ range, businessName }: ReportTabProps) {
   const usd = (n: number) => formatMoney(n, { code: 'USD', symbol: '$' });
 
   const columns: DataTableColumn<BySupplierRow>[] = [
-    { key: 'name', header: t('rep_col_supplier', 'Supplier'), sortable: true },
+    { key: 'name', header: t('rep_col_supplier', 'Supplier'), sortable: true, render: (r) => partyDisplayName(r.name, t) },
     { key: 'purchases', header: t('rep_col_purchases_count', 'Purchases'), sortable: true, align: 'end' },
     { key: 'amount', header: t('rep_col_amount', 'Amount'), sortable: true, align: 'end', render: (r) => usd(r.amount) },
     { key: 'paid', header: t('rep_col_paid', 'Paid'), sortable: true, align: 'end', render: (r) => usd(r.paid) },
@@ -110,7 +110,7 @@ export function SuppliersTab({ range, businessName }: ReportTabProps) {
   ];
 
   const exportColumns: ExportColumn<BySupplierRow>[] = [
-    { key: 'name', header: t('rep_col_supplier', 'Supplier'), value: (r) => r.name },
+    { key: 'name', header: t('rep_col_supplier', 'Supplier'), value: (r) => partyDisplayName(r.name, t) },
     { key: 'purchases', header: t('rep_col_purchases_count', 'Purchases'), value: (r) => r.purchases, align: 'right' },
     { key: 'amount', header: t('rep_col_amount', 'Amount'), value: (r) => r.amount, align: 'right' },
     { key: 'paid', header: t('rep_col_paid', 'Paid'), value: (r) => r.paid, align: 'right' },

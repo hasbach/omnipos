@@ -8,7 +8,7 @@ import { Link } from 'react-router-dom';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Badge, IconButton, Kbd } from './ui';
-import { formatMoney } from '../lib/format';
+import { formatMoney, partyDisplayName } from '../lib/format';
 import type { PriceLevel } from '../lib/pricing';
 
 export default function PosHeader() {
@@ -42,6 +42,14 @@ export default function PosHeader() {
   ];
 
   const balance = selectedStakeholderObj?.balance ?? 0;
+
+  // Customer search should match either the raw stored name (English) or its translated
+  // display label, since Arabic/French users may type either.
+  const matchesCustomerSearch = (s: any, term: string) => {
+    const q = term.toLowerCase();
+    if (!q) return true;
+    return s.name.toLowerCase().includes(q) || partyDisplayName(s.name, t).toLowerCase().includes(q);
+  };
 
   return (
     <header className="border-b border-border px-4 py-2.5 flex justify-between items-center bg-surface gap-3">
@@ -82,7 +90,7 @@ export default function PosHeader() {
             >
               <span className="flex items-center gap-1.5 min-w-0">
                 <User size={14} className="text-text-3 shrink-0" />
-                <span className="truncate">{stakeholders.find((s: any) => s.id === selectedStakeholder)?.name || t('select_customer', 'Select Customer')}</span>
+                <span className="truncate">{(() => { const sel = stakeholders.find((s: any) => s.id === selectedStakeholder); return sel ? partyDisplayName(sel.name, t) : t('select_customer', 'Select Customer'); })()}</span>
               </span>
               <Plus size={12} className={`shrink-0 transition-transform text-text-3 ${showCustomerDropdown ? 'rotate-45' : ''}`} />
             </button>
@@ -116,7 +124,7 @@ export default function PosHeader() {
                       <Plus size={14} /> {t('add_new_customer', 'Add New Customer')}
                     </button>
                     {stakeholders
-                      .filter((s: any) => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase()))
+                      .filter((s: any) => s.type === 'customer' && matchesCustomerSearch(s, customerSearchTerm))
                       .map((s: any) => (
                         <div key={s.id} className={`group flex items-stretch hover:bg-primary hover:text-on-primary transition-colors ${selectedStakeholder === s.id ? 'bg-primary-soft' : ''}`}>
                           <button
@@ -128,7 +136,7 @@ export default function PosHeader() {
                             className="flex-1 min-w-0 text-start ps-4 pe-2 py-2.5 text-xs font-semibold flex justify-between items-center gap-2 cursor-pointer"
                           >
                             <span className="min-w-0">
-                              <span className="block truncate">{s.name}</span>
+                              <span className="block truncate">{partyDisplayName(s.name, t)}</span>
                               {s.address && <span className="block truncate text-[10px] font-medium opacity-70">{s.address}</span>}
                             </span>
                             {s.balance !== 0 && (
@@ -149,7 +157,7 @@ export default function PosHeader() {
                           )}
                         </div>
                       ))}
-                    {stakeholders.filter((s: any) => s.type === 'customer' && s.name.toLowerCase().includes(customerSearchTerm.toLowerCase())).length === 0 && (
+                    {stakeholders.filter((s: any) => s.type === 'customer' && matchesCustomerSearch(s, customerSearchTerm)).length === 0 && (
                       <div className="p-4 text-center text-[10px] text-text-3 italic">{t('no_customers_found', 'No customers found')}</div>
                     )}
                   </div>

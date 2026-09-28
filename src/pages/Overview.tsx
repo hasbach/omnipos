@@ -7,7 +7,7 @@ import { Card, CardHeader, CardBody, StatCard, Badge, Skeleton, EmptyState } fro
 import { LineChart } from '../components/ui/charts/LineChart';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
-import { formatMoney, formatDateTime, localToday, toLocalYMD, resolveDateRangePreset } from '../lib/format';
+import { formatMoney, formatDateTime, localToday, toLocalYMD, resolveDateRangePreset, partyDisplayName } from '../lib/format';
 import type { ReportSummary, SalesTrendPoint, ByProductRow, LowStockRow, AgingRow } from './reports/types';
 
 interface RecentInvoice {
@@ -260,7 +260,7 @@ export default function Overview() {
                     <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-surface-2">
                       <td className="px-4 py-2 font-medium text-text">#{inv.id}</td>
                       <td className="px-4 py-2"><Badge variant={typeVariant(inv.type)}>{typeLabel(inv.type)}</Badge></td>
-                      <td className="px-4 py-2 text-text-2">{inv.stakeholder_name || '—'}</td>
+                      <td className="px-4 py-2 text-text-2">{inv.stakeholder_name ? partyDisplayName(inv.stakeholder_name, t) : '—'}</td>
                       <td className="px-4 py-2 text-text-3">{formatDateTime(inv.created_at, lang)}</td>
                       <td className="px-4 py-2 text-end num">{usd(inv.total_amount)}</td>
                     </tr>
