@@ -1,5 +1,5 @@
 import { db, logAction } from "./db.js";
-import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect } from "./balance.js";
+import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
 import { forceInitialSync } from "./sync.js";
@@ -17,7 +17,8 @@ import { setupReportRoutes } from "./reports.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, type PriceLevel } from "./pricing.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
-import { ValidationError } from "./errors.js";
+import { ValidationError, validationErrorBody } from "./errors.js";
+import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
 
 // The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
 // can't use it directly — translate it to the real address backing that Auth user (kept in
@@ -1194,13 +1195,16 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     let resolvedStakeholderId = tenantStakeholderId(tenantId, stakeholder_id);
     const settings = getSettingsMap(tenantId);
     const stakeholderRow = resolvedStakeholderId
-      ? db.prepare("SELECT price_level, credit_limit, balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
+      ? db.prepare("SELECT name, price_level, credit_limit, balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
       : null;
     // price_level: explicit request value, else the stakeholder's own level, else the tenant's
-    // configured default, else retail (normalizeLevel handles any garbled/missing value).
-    const resolvedPriceLevel: PriceLevel = normalizeLevel(
-      price_level ?? stakeholderRow?.price_level ?? settings.default_price_level
-    );
+    // configured default, else retail (normalizeLevel handles any garbled/missing value). When
+    // price levels are turned off tenant-wide (Settings > Sales & Pricing), everything sells at
+    // retail regardless of what was requested — missing key = on (default).
+    const priceLevelsEnabled = settings.enable_price_levels !== '0';
+    const resolvedPriceLevel: PriceLevel = priceLevelsEnabled
+      ? normalizeLevel(price_level ?? stakeholderRow?.price_level ?? settings.default_price_level)
+      : 'retail';
 
     // A refund's price and discount must come from the sale it's refunding — never from the
     // client — or a modified client could submit an arbitrary refund amount. A purchase's price
@@ -1231,26 +1235,28 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           unitCost: oi.unit_cost ?? null,
         };
       }
-      for (const item of items) {
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
         if (!(Number.isFinite(item.quantity) && item.quantity > 0)) {
-          return res.status(400).json({ error: `Invalid refund quantity for product ${item.id}.` });
+          return res.status(400).json({ error: `Invalid refund quantity for product ${item.id}.`, field: `items.${idx}.quantity` });
         }
         const line = refundLines[item.id];
         if (!line) {
-          return res.status(400).json({ error: `Product ${item.id} was not part of the original sale.` });
+          return res.status(400).json({ error: `Product ${item.id} was not part of the original sale.`, field: `items.${idx}.quantity` });
         }
         if (item.quantity > line.remaining + 1e-9) {
-          return res.status(400).json({ error: `Cannot refund ${item.quantity} of product ${item.id} — only ${Math.max(0, line.remaining)} remain eligible for refund.` });
+          return res.status(400).json({ error: `Cannot refund ${item.quantity} of product ${item.id} — only ${Math.max(0, line.remaining)} remain eligible for refund.`, field: `items.${idx}.quantity` });
         }
         line.remaining -= item.quantity; // guards duplicate rows for the same product within one request
       }
     } else if (type === 'purchase') {
-      for (const item of items) {
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
         if (!(Number.isFinite(item.price) && item.price >= 0)) {
-          return res.status(400).json({ error: `Invalid purchase price for product ${item.id}.` });
+          return res.status(400).json({ error: `Invalid purchase price for product ${item.id}.`, field: `items.${idx}.unit_price` });
         }
         if (!(Number.isFinite(item.quantity) && item.quantity > 0)) {
-          return res.status(400).json({ error: `Invalid purchase quantity for product ${item.id}.` });
+          return res.status(400).json({ error: `Invalid purchase quantity for product ${item.id}.`, field: `items.${idx}.quantity` });
         }
       }
     }
@@ -1272,6 +1278,40 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     // customer's balance), whatever the client sent.
     if (type === 'refund' && refundStakeholderId) resolvedStakeholderId = refundStakeholderId;
 
+    // Current balance, before this transaction — the response's balance_before AND the cap for a
+    // store_credit payment (Σ store_credit ≤ max(0, this)). Queried fresh (not from stakeholderRow
+    // above, which was looked up before a refund's stakeholder reassignment) against the FINAL
+    // resolvedStakeholderId.
+    const stakeholderForBalance = resolvedStakeholderId
+      ? db.prepare("SELECT name, balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
+      : null;
+    const balanceBefore: number | null = stakeholderForBalance ? (stakeholderForBalance.balance || 0) : null;
+
+    for (const p of (payments || [])) {
+      if (!isValidPaymentMethod(p.method)) {
+        return res.status(400).json({ error: `Invalid payment method: ${p.method}.`, field: 'payments' });
+      }
+    }
+    const storeCreditTotal = (payments || [])
+      .filter((p: any) => p.method === 'store_credit')
+      .reduce((sum: number, p: any) => sum + (p.amount / (p.exchange_rate || 1)), 0);
+    if (storeCreditTotal > 1e-9) {
+      if (type === 'refund') {
+        return res.status(400).json({ error: "Store credit can't be used on a refund.", field: 'payments' });
+      }
+      if (!resolvedStakeholderId || stakeholderForBalance?.name === 'Walk-in Customer') {
+        return res.status(400).json({ error: "Walk-in Customer has no account balance to use.", code: 'STORE_CREDIT_WALKIN' });
+      }
+      const available = Math.max(0, balanceBefore || 0);
+      if (storeCreditTotal > available + 1e-9) {
+        return res.status(400).json({
+          error: `Store credit exceeds the available balance (${available.toFixed(2)}).`,
+          code: 'STORE_CREDIT_EXCEEDED',
+          available,
+        });
+      }
+    }
+
     const discountError = invalidAdjustment(discount, 'discount');
     if (discountError) return res.status(400).json({ error: discountError });
     const taxError = invalidAdjustment(tax, 'tax');
@@ -1292,7 +1332,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       };
 
       let calculatedTotal = 0;
-      const processedItems = items.map((item: any) => {
+      const processedItems = items.map((item: any, idx: number) => {
         const product = getProduct(item.id);
 
         let unitPrice = item.price; // Fallback to provided price (purchases — validated above)
@@ -1315,7 +1355,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
             unitPrice = item.unit_price;
           }
           if (product.min_price && product.min_price > 0 && unitPrice < product.min_price && settings.enforce_min_price === '1') {
-            throw new ValidationError(`Price for product ${item.id} is below its minimum price of ${product.min_price}.`);
+            throw new ValidationError(
+              `Price for product ${item.id} is below its minimum price of ${product.min_price}.`,
+              400,
+              { field: `items.${idx}.unit_price` }
+            );
           }
 
           // Apply the per-item discount (the cart's "DISC" control) the same way the client does
@@ -1440,7 +1484,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       `);
         for (const payment of payments) {
           insertPayment.run(transactionId, payment.amount, payment.method, payment.currency, payment.exchange_rate);
-          if (payment.method !== 'credit') {
+          // BALANCE MATH (server/paymentMethods.ts): store_credit is not money either, exactly
+          // like credit — it stays "unpaid" so its effect keeps consuming the positive balance.
+          if (isRealMoney(payment.method)) {
             totalPaid += (payment.amount / (payment.exchange_rate || 1));
           }
         }
@@ -1458,7 +1504,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           throw new ValidationError(
             `This would exceed the credit limit (${stakeholderRow.credit_limit}).`,
             400,
-            'CREDIT_LIMIT'
+            { code: 'CREDIT_LIMIT', field: 'stakeholder_id' }
           );
         }
       }
@@ -1482,13 +1528,20 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       WHERE t.id = ?
     `).get(id);
 
-      res.json({ id, success: true });
+      // balance_after: same stakeholder, re-read now that recomputeStakeholderBalance ran inside
+      // the transaction above. null when there's no stakeholder (Walk-in has no account balance).
+      const balanceAfterRow = resolvedStakeholderId
+        ? db.prepare("SELECT balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
+        : null;
+      const balanceAfter = balanceAfterRow ? (balanceAfterRow.balance || 0) : null;
+
+      res.json({ id, success: true, balance_before: balanceBefore, balance_after: balanceAfter });
       logAction(tenantId, resolvedUserId, `Transaction: ${type || 'sale'}`, `ID: ${id}, Total: ${fullTransaction.total_amount} ${fullTransaction.currency}`);
       broadcast({ type: 'TRANSACTIONS_UPDATED', transaction: fullTransaction, terminalId }, tenantId);
       broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
     } catch (error: any) {
       if (error instanceof ValidationError) {
-        return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+        return res.status(error.status).json(validationErrorBody(error));
       }
       res.status(500).json({ error: error.message });
     }
@@ -1706,6 +1759,23 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     transaction.payments = payments;
     transaction.paid_amount = paidAmount;
 
+    // stakeholder_balance (current) and balance_effect (this tx's own effect on it — BALANCE MATH,
+    // server/paymentMethods.ts: store_credit doesn't count as paid here either) for the invoice
+    // editor's "old / new balance" panel and the receipt's balance block.
+    if (transaction.stakeholder_id) {
+      const stRow = db.prepare("SELECT balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(transaction.stakeholder_id, tenantId) as any;
+      transaction.stakeholder_balance = stRow ? (stRow.balance || 0) : null;
+      transaction.balance_effect = transactionBalanceEffect(
+        transaction.type,
+        Number(id),
+        transaction.total_amount,
+        paymentsTable as 'payments' | 'archived_payments'
+      );
+    } else {
+      transaction.stakeholder_balance = null;
+      transaction.balance_effect = null;
+    }
+
     return transaction;
   }
 
@@ -1779,15 +1849,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.put("/api/transactions/:id", authenticate, async (req: any, res) => {
     const tenantId = req.session.tenantId;
     try {
-      const { id } = await editTransaction(tenantId, Number(req.params.id), req.body || {});
+      const { id, balance_before, balance_after } = await editTransaction(tenantId, Number(req.params.id), req.body || {});
       const transaction = buildTransactionDetail(tenantId, id);
+      transaction.balance_before = balance_before;
+      transaction.balance_after = balance_after;
       broadcast({ type: 'TRANSACTIONS_UPDATED' }, tenantId);
       broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
       broadcast({ type: 'STAKEHOLDERS_UPDATED' }, tenantId);
       res.json(transaction);
     } catch (error: any) {
       if (error instanceof ValidationError) {
-        return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+        return res.status(error.status).json(validationErrorBody(error));
       }
       res.status(500).json({ error: error.message });
     }
@@ -2661,6 +2733,13 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       }));
       transaction.discount = transaction.discount_type ? { type: transaction.discount_type, value: transaction.discount_value } : undefined;
       transaction.payments = db.prepare("SELECT * FROM payments WHERE transaction_id = ?").all(transactionId);
+
+      // Previous/this/new balance block (non-Walk-in only) — see server/printing/receipt.ts.
+      if (transaction.stakeholder_id) {
+        const stRow = db.prepare("SELECT balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(transaction.stakeholder_id, tenantId) as any;
+        transaction.stakeholder_balance = stRow ? (stRow.balance || 0) : null;
+        transaction.balance_effect = transactionBalanceEffect(transaction.type, Number(transactionId), transaction.total_amount, 'payments');
+      }
 
       const settings = getSettingsMap(tenantId);
       const buffer = buildReceiptBuffer({

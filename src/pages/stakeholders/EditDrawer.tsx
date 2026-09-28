@@ -3,6 +3,7 @@ import { Drawer, Field, Input, Select, MoneyInput, Switch, Button } from '../../
 import { useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
+import { useSettings } from '../../lib/useSettings';
 import type { PriceLevel, Stakeholder } from '../../types';
 
 export interface EditDrawerProps {
@@ -44,6 +45,7 @@ function emptyForm(defaultType: 'customer' | 'supplier'): FormState {
 export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved }: EditDrawerProps) {
   const { t } = useI18n();
   const toast = useToast();
+  const { priceLevelsEnabled } = useSettings();
   const [form, setForm] = useState<FormState>(emptyForm(defaultType));
   const [saving, setSaving] = useState(false);
 
@@ -153,13 +155,15 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved }:
           <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
         </Field>
 
-        <Field label={t('stk_field_price_level')} helper={t('stk_price_level_help')}>
-          <Select
-            value={form.price_level}
-            onChange={(e) => setForm({ ...form, price_level: e.target.value as PriceLevel })}
-            options={priceLevelOptions}
-          />
-        </Field>
+        {priceLevelsEnabled && (
+          <Field label={t('stk_field_price_level')} helper={t('stk_price_level_help')}>
+            <Select
+              value={form.price_level}
+              onChange={(e) => setForm({ ...form, price_level: e.target.value as PriceLevel })}
+              options={priceLevelOptions}
+            />
+          </Field>
+        )}
 
         <Field label={t('stk_field_credit_limit')} helper={t('stk_credit_limit_help')}>
           <MoneyInput

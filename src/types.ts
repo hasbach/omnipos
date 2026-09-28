@@ -66,9 +66,11 @@ export interface CartItem extends Product {
   discount?: Discount;
 }
 
+export type PaymentMethod = 'cash' | 'card' | 'credit' | 'store_credit';
+
 export interface Payment {
   amount: number;
-  method: 'cash' | 'card' | 'credit';
+  method: PaymentMethod;
   currency: string;
   exchange_rate: number;
 }
@@ -90,6 +92,20 @@ export interface Transaction {
   edited_at?: string;
   edit_count?: number;
   archived?: boolean;
+  /** The stakeholder's derived balance immediately before/after this transaction (null if none). */
+  balance_before?: number | null;
+  balance_after?: number | null;
+  /** GET /api/transactions/:id only: current balance and this tx's effect on it. */
+  stakeholder_balance?: number | null;
+  balance_effect?: number | null;
+}
+
+/** Server error shape for POST/PUT /api/transactions and related endpoints. */
+export interface ApiErrorBody {
+  error: string;
+  code?: string;
+  field?: string;
+  available?: number;
 }
 
 export interface TransactionItem {

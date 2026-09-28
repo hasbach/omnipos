@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Modal, Button, Field, Input, Textarea, Badge, IconButton } from './ui';
-import { formatMoney } from '../lib/format';
+import { formatMoney, formatBalance, paymentMethodLabel } from '../lib/format';
 
 const QUICK_CASH_STEPS = [5, 10, 20, 50, 100];
 
@@ -21,8 +21,10 @@ export default function PaymentModal() {
     showAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, setIsPriceChecker,
     lastTransaction, setLastTransaction, suggestions, setSuggestions,
     stakeholders, selectedStakeholder, selectedStakeholderObj, creditLimit, availableCredit,
+    availableStoreCredit,
     historyDate, setHistoryDate, loadingHistory, selectedHistoryTransaction, setSelectedHistoryTransaction,
     showRefundModal, setShowRefundModal, refundQuantities, setRefundQuantities,
+    refundMethod, setRefundMethod,
     tenant, showUpdateModal, setShowUpdateModal, updateVersion, isUpdating, users, currentUser,
     handleInstallUpdate, scheduleForm, setScheduleForm, handleScheduleUpdate,
     fetchDailyHistory, handleRefund, handleBarcodeSubmit,
@@ -31,6 +33,11 @@ export default function PaymentModal() {
     t, barcodeRef, showDebtModal, setShowDebtModal, handleReceiveDebt,
     terminalId, editingCustomerId, closeCustomerModal, handleCreateCustomer, isDarkMode,
   } = pos as any;
+  // What is left of the customer's positive balance after the store-credit payments already added to
+  // this sale — the button, the cap and the "available" hint must shrink as it's used.
+  const creditLeft = Math.max(0, (availableStoreCredit || 0) - (payments || [])
+    .filter((p: any) => p.method === 'store_credit')
+    .reduce((sum: number, p: any) => sum + p.amount / (p.exchange_rate || 1), 0));
 
   // Format a transaction display ID as e.g. 'POS1-0024', falling back to '#id' for legacy records
   const formatTxId = (tx: any) =>
@@ -286,6 +293,7 @@ export default function PaymentModal() {
                           const initialRefunds: Record<number, number> = {};
                           full.items.forEach((item: any) => initialRefunds[item.id] = 0);
                           setRefundQuantities(initialRefunds);
+                          setRefundMethod('cash');
                           setShowRefundModal(true);
                         }
                       }}
@@ -305,12 +313,15 @@ export default function PaymentModal() {
 
       {/* Refund Modal */}
       <Modal
-        open={showRefundModal && !!selectedHistoryTransaction}
+        open={showRefundModal && !!selectedHistoryTransaction?.items}
         onClose={() => setShowRefundModal(false)}
         size="lg"
         title={t('pos_process_refund', 'Process Refund')}
       >
-        {selectedHistoryTransaction && (
+        {/* Children are evaluated even while the modal is closed, and a row picked from the history
+            list has no `items` until the Refund button loads the full transaction — guard on items,
+            not just on the selection, or selecting any history row crashes the POS. */}
+        {Array.isArray(selectedHistoryTransaction?.items) && (
           <>
             <p className="text-sm text-text-3 mb-4">
               {t('pos_refund_subtitle', 'Select items and quantities to return for Transaction #{id}', { id: selectedHistoryTransaction.id })}
@@ -343,6 +354,26 @@ export default function PaymentModal() {
             </div>
 
             <div className="mt-4 pt-4 border-t border-border flex flex-col gap-4">
+              {(() => {
+                const isWalkInRefund = !selectedHistoryTransaction.stakeholder_id
+                  || stakeholders.find((s: any) => s.id === selectedHistoryTransaction.stakeholder_id)?.name === 'Walk-in Customer';
+                return (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-bold uppercase text-text-3">{t('pos_refund_method', 'Refund method')}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => setRefundMethod('cash')} className={`py-2.5 min-h-[40px] rounded-lg text-[11px] font-bold uppercase border transition-all cursor-pointer ${refundMethod === 'cash' ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}>{t('pos_cash', 'Cash')}</button>
+                      <button
+                        disabled={isWalkInRefund}
+                        onClick={() => setRefundMethod('credit')}
+                        className={`py-2.5 min-h-[40px] rounded-lg text-[11px] font-bold uppercase border transition-all cursor-pointer ${refundMethod === 'credit' ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'} ${isWalkInRefund ? 'opacity-30 cursor-not-allowed' : ''}`}
+                      >
+                        {t('pos_keep_on_account', 'Keep on customer account')}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="flex justify-between items-center">
                 <span className="text-sm font-bold text-text-3 uppercase">{t('pos_total_refund_amount', 'Total Refund Amount')}</span>
                 <span className="text-2xl font-black font-mono num text-danger">
@@ -350,6 +381,31 @@ export default function PaymentModal() {
                     sum + refundLineAmount(item, refundQuantities[item.id] || 0, selectedHistoryTransaction), 0).toFixed(2)}
                 </span>
               </div>
+
+              {selectedHistoryTransaction.stakeholder_id !== 1 && (() => {
+                const s = stakeholders.find((x: any) => x.id === selectedHistoryTransaction.stakeholder_id);
+                if (!s || s.name === 'Walk-in Customer') return null;
+                const totalRefund = selectedHistoryTransaction.items.reduce((sum: number, item: any) =>
+                  sum + refundLineAmount(item, refundQuantities[item.id] || 0, selectedHistoryTransaction), 0);
+                const prevBal = s.balance || 0;
+                const newBal = refundMethod === 'credit' ? prevBal + totalRefund : prevBal;
+                const USD = { code: 'USD', symbol: '$' };
+                const prev = formatBalance(prevBal, USD, t);
+                const next = formatBalance(newBal, USD, t);
+                return (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-xl border border-border p-3 text-center">
+                      <p className="text-[10px] font-bold uppercase text-text-3">{t('pos_previous_balance', 'Previous balance')}</p>
+                      <p className={`num font-bold ${prev.variant === 'danger' ? 'text-danger' : prev.variant === 'success' ? 'text-success' : 'text-text-3'}`}>{prev.amount} {prev.label}</p>
+                    </div>
+                    <div className="rounded-xl border border-border p-3 text-center">
+                      <p className="text-[10px] font-bold uppercase text-text-3">{t('pos_new_balance', 'New balance')}</p>
+                      <p className={`num font-bold ${next.variant === 'danger' ? 'text-danger' : next.variant === 'success' ? 'text-success' : 'text-text-3'}`}>{next.amount} {next.label}</p>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="flex gap-3">
                 <Button variant="secondary" className="flex-1" onClick={() => setShowRefundModal(false)}>{t('cancel', 'Cancel')}</Button>
                 <Button
@@ -381,6 +437,23 @@ export default function PaymentModal() {
               <CheckCircle2 size={56} />
               <p className="mt-4 font-bold uppercase tracking-wide">{t('pos_payment_received', 'Payment Received')}</p>
             </div>
+            {lastTransaction.stakeholder_id !== 1 && lastTransaction.balance_before != null && lastTransaction.balance_after != null && (() => {
+              const USD = { code: 'USD', symbol: '$' };
+              const prev = formatBalance(lastTransaction.balance_before, USD, t);
+              const next = formatBalance(lastTransaction.balance_after, USD, t);
+              return (
+                <div className="grid grid-cols-2 gap-3 -mt-2">
+                  <div className="rounded-xl border border-border p-3 text-center">
+                    <p className="text-[10px] font-bold uppercase text-text-3">{t('pos_previous_balance', 'Previous balance')}</p>
+                    <p className={`num font-bold ${prev.variant === 'danger' ? 'text-danger' : prev.variant === 'success' ? 'text-success' : 'text-text-3'}`}>{prev.amount} {prev.label}</p>
+                  </div>
+                  <div className="rounded-xl border border-border p-3 text-center">
+                    <p className="text-[10px] font-bold uppercase text-text-3">{t('pos_new_balance', 'New balance')}</p>
+                    <p className={`num font-bold ${next.variant === 'danger' ? 'text-danger' : next.variant === 'success' ? 'text-success' : 'text-text-3'}`}>{next.amount} {next.label}</p>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-2 gap-3">
               <Button variant="primary" onClick={() => printReceipt(lastTransaction)}>
                 <Printer size={18} /> {t('pos_print_receipt', 'Print Receipt')}
@@ -406,7 +479,7 @@ export default function PaymentModal() {
                     <div key={idx} className="flex justify-between items-center p-3 bg-surface-2 rounded-xl border border-border">
                       <div className="flex items-center gap-2">
                         {p.method === 'cash' ? <Banknote size={14} /> : <CreditCard size={14} />}
-                        <span className="text-xs font-bold text-text">{p.method.toUpperCase()}</span>
+                        <span className="text-xs font-bold text-text">{paymentMethodLabel(p.method, t)}</span>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="font-mono text-xs font-bold num text-text">{p.amount.toLocaleString()} {p.currency}</span>
@@ -426,7 +499,7 @@ export default function PaymentModal() {
                     <span className="text-xl font-black font-mono num text-danger">${remainingUSD.toFixed(2)}</span>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className={`grid gap-2 ${creditLeft > 0.005 ? 'grid-cols-4' : 'grid-cols-3'}`}>
                     <button onClick={() => setPaymentMethod('cash')} className={`py-2.5 min-h-[40px] rounded-lg text-[11px] font-bold uppercase border transition-all cursor-pointer ${paymentMethod === 'cash' ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}>{t('pos_cash', 'Cash')}</button>
                     <button onClick={() => setPaymentMethod('card')} className={`py-2.5 min-h-[40px] rounded-lg text-[11px] font-bold uppercase border transition-all cursor-pointer ${paymentMethod === 'card' ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}>{t('pos_card', 'Card')}</button>
                     <div className="relative group/credit">
@@ -443,6 +516,20 @@ export default function PaymentModal() {
                         </div>
                       )}
                     </div>
+                    {creditLeft > 0.005 && (
+                      <button
+                        onClick={() => {
+                          setPaymentMethod('store_credit');
+                          const usd = currencies.find((c: any) => c.code === 'USD') || paymentCurrency;
+                          setPaymentCurrency(usd);
+                          const capped = Math.min(creditLeft, remainingUSD);
+                          setPaymentAmount(capped > 0 ? capped.toFixed(2) : '');
+                        }}
+                        className={`py-2.5 min-h-[40px] rounded-lg text-[10px] font-bold uppercase border transition-all cursor-pointer leading-tight ${paymentMethod === 'store_credit' ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}
+                      >
+                        {t('pos_use_account_balance', 'Use account balance')}
+                      </button>
+                    )}
                   </div>
 
                   {creditLimit > 0 && (
@@ -451,37 +538,44 @@ export default function PaymentModal() {
                   {wouldExceedCredit && (
                     <p className="text-[11px] font-semibold text-danger">{t('pos_credit_limit_warning', "This sale would exceed the customer's credit limit.")}</p>
                   )}
+                  {paymentMethod === 'store_credit' && (
+                    <p className="text-[10px] text-text-3">{t('pos_available_balance', 'Available balance: {amount}', { amount: formatMoney(creditLeft, { code: 'USD', symbol: '$' }) })}</p>
+                  )}
 
-                  <div className="grid grid-cols-3 gap-2">
-                    {currencies.map((c: any) => (
-                      <button key={c.code} onClick={() => setPaymentCurrency(c)} className={`py-2 min-h-[36px] rounded-lg text-[10px] font-bold uppercase border transition-all cursor-pointer ${paymentCurrency.code === c.code ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}>{c.code}</button>
-                    ))}
-                  </div>
+                  {paymentMethod !== 'store_credit' && (
+                    <div className="grid grid-cols-3 gap-2">
+                      {currencies.map((c: any) => (
+                        <button key={c.code} onClick={() => setPaymentCurrency(c)} className={`py-2 min-h-[36px] rounded-lg text-[10px] font-bold uppercase border transition-all cursor-pointer ${paymentCurrency.code === c.code ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}>{c.code}</button>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Quick-cash shortcut amounts in the active payment currency */}
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      onClick={() => setPaymentAmount((remainingUSD * paymentCurrency.rate).toFixed(paymentCurrency.code === 'USD' ? 2 : 0))}
-                      className="px-2.5 py-1.5 min-h-[32px] rounded-md text-[10px] font-bold border border-border text-text-2 hover:border-primary hover:text-primary transition-all cursor-pointer"
-                    >
-                      {t('pos_remaining', 'Remaining')}
-                    </button>
-                    {QUICK_CASH_STEPS.map(stepUsd => {
-                      // Quick-cash steps are defined in USD and converted to whatever currency is
-                      // currently selected for this payment (rounded to a sensible display unit).
-                      const converted = stepUsd * paymentCurrency.rate;
-                      const rounded = paymentCurrency.rate > 100 ? Math.round(converted / 1000) * 1000 : Math.round(converted * 100) / 100;
-                      return (
-                        <button
-                          key={stepUsd}
-                          onClick={() => setPaymentAmount(String(rounded))}
-                          className="px-2.5 py-1.5 min-h-[32px] rounded-md text-[10px] font-bold border border-border text-text-2 hover:border-primary hover:text-primary transition-all cursor-pointer num"
-                        >
-                          {paymentCurrency.symbol}{rounded.toLocaleString()}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {paymentMethod !== 'store_credit' && (
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        onClick={() => setPaymentAmount((remainingUSD * paymentCurrency.rate).toFixed(paymentCurrency.code === 'USD' ? 2 : 0))}
+                        className="px-2.5 py-1.5 min-h-[32px] rounded-md text-[10px] font-bold border border-border text-text-2 hover:border-primary hover:text-primary transition-all cursor-pointer"
+                      >
+                        {t('pos_remaining', 'Remaining')}
+                      </button>
+                      {QUICK_CASH_STEPS.map(stepUsd => {
+                        // Quick-cash steps are defined in USD and converted to whatever currency is
+                        // currently selected for this payment (rounded to a sensible display unit).
+                        const converted = stepUsd * paymentCurrency.rate;
+                        const rounded = paymentCurrency.rate > 100 ? Math.round(converted / 1000) * 1000 : Math.round(converted * 100) / 100;
+                        return (
+                          <button
+                            key={stepUsd}
+                            onClick={() => setPaymentAmount(String(rounded))}
+                            className="px-2.5 py-1.5 min-h-[32px] rounded-md text-[10px] font-bold border border-border text-text-2 hover:border-primary hover:text-primary transition-all cursor-pointer num"
+                          >
+                            {paymentCurrency.symbol}{rounded.toLocaleString()}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <div className="relative">
                     <input
@@ -493,10 +587,13 @@ export default function PaymentModal() {
                     />
                     <button
                       onClick={() => {
-                        const amt = parseFloat(paymentAmount);
+                        let amt = parseFloat(paymentAmount);
+                        if (paymentMethod === 'store_credit') amt = Math.min(amt || 0, creditLeft, remainingUSD);
                         if (amt > 0) {
                           setPayments((prev: any) => [...prev, { amount: amt, method: paymentMethod, currency: paymentCurrency.code, exchange_rate: paymentCurrency.rate }]);
                           setPaymentAmount('');
+                          // The balance is used up (or the sale covered) — go back to cash for the rest.
+                          if (paymentMethod === 'store_credit') setPaymentMethod('cash');
                         }
                       }}
                       className="absolute end-2 top-2 bottom-2 px-4 bg-primary text-on-primary rounded-lg font-bold uppercase text-[10px] tracking-wide cursor-pointer"

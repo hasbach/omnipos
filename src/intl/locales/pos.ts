@@ -11,6 +11,15 @@ export default {
     pos_tier_super_wholesale: 'Super Wholesale',
     pos_tier_badge: 'Tier',
 
+    pos_previous_balance: 'Previous balance',
+    pos_this_sale: 'This sale',
+    pos_new_balance: 'New balance',
+    pos_use_account_balance: 'Use account balance',
+    pos_available_balance: 'Available balance: {amount}',
+    pos_keep_on_account: 'Keep on customer account',
+    pos_refund_method: 'Refund method',
+    pos_receipt_this_invoice: 'This invoice',
+
     pos_available_credit: 'Available Credit',
     pos_credit_limit_reached: 'Credit Limit Reached',
     pos_credit_limit_warning: 'This sale would exceed the customer\'s credit limit.',
@@ -130,6 +139,15 @@ export default {
     pos_tier_super_wholesale: 'جملة الجملة',
     pos_tier_badge: 'مستوى',
 
+    pos_previous_balance: 'الرصيد السابق',
+    pos_this_sale: 'هذه العملية',
+    pos_new_balance: 'الرصيد الجديد',
+    pos_use_account_balance: 'استخدام رصيد الحساب',
+    pos_available_balance: 'الرصيد المتاح: {amount}',
+    pos_keep_on_account: 'إبقاء في حساب العميل',
+    pos_refund_method: 'طريقة الاسترجاع',
+    pos_receipt_this_invoice: 'هذه الفاتورة',
+
     pos_available_credit: 'الرصيد الائتماني المتاح',
     pos_credit_limit_reached: 'تم بلوغ الحد الائتماني',
     pos_credit_limit_warning: 'هذه العملية ستتجاوز الحد الائتماني للعميل.',
@@ -248,6 +266,15 @@ export default {
     pos_tier_wholesale: 'Gros',
     pos_tier_super_wholesale: 'Super gros',
     pos_tier_badge: 'Niveau',
+
+    pos_previous_balance: 'Solde précédent',
+    pos_this_sale: 'Cette vente',
+    pos_new_balance: 'Nouveau solde',
+    pos_use_account_balance: 'Utiliser le solde du compte',
+    pos_available_balance: 'Solde disponible : {amount}',
+    pos_keep_on_account: 'Conserver sur le compte client',
+    pos_refund_method: 'Méthode de remboursement',
+    pos_receipt_this_invoice: 'Cette facture',
 
     pos_available_credit: 'Crédit disponible',
     pos_credit_limit_reached: 'Limite de crédit atteinte',

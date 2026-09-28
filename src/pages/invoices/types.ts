@@ -3,7 +3,7 @@
 import { lineTotal, type LineDiscount } from '../../lib/pricing';
 
 export type TxType = 'sale' | 'purchase' | 'refund';
-export type PaymentMethod = 'cash' | 'card' | 'credit';
+export type PaymentMethod = 'cash' | 'card' | 'credit' | 'store_credit';
 export type PayStatus = 'paid' | 'partial' | 'unpaid';
 
 export interface CurrencyRow {
@@ -119,9 +119,66 @@ export function nextKey(prefix: string): string {
   return `${prefix}_${keySeq}_${Date.now()}`;
 }
 
-/** Real money paid (excludes 'credit' on-account payments), summed in USD. */
+/**
+ * What counts as "paid" for invoice settlement status (paid_amount, due, aging): 'credit' does NOT
+ * settle the invoice; 'store_credit' DOES (it's not money, but the invoice is considered paid) — see
+ * server/paymentMethods.ts SETTLED_SQL ("method != 'credit'"). Summed in USD.
+ */
 export function paidFromPayments(payments: PaymentDraft[]): number {
   return payments
     .filter((p) => !p.removed && p.method !== 'credit')
     .reduce((sum, p) => sum + p.amount / (p.exchange_rate || 1), 0);
+}
+
+/**
+ * Real money collected/paid out (excludes BOTH 'credit' and 'store_credit' — neither is money; see
+ * server/paymentMethods.ts REAL_MONEY_SQL). Used for balance-effect / cash-register math, never for
+ * invoice settlement status. Summed in USD.
+ */
+export function realMoneyFromPayments(payments: PaymentDraft[]): number {
+  return payments
+    .filter((p) => !p.removed && p.method !== 'credit' && p.method !== 'store_credit')
+    .reduce((sum, p) => sum + p.amount / (p.exchange_rate || 1), 0);
+}
+
+/** Sum of (non-removed) store_credit payments, in USD — must not exceed the party's available balance. */
+export function storeCreditFromPayments(payments: PaymentDraft[]): number {
+  return payments
+    .filter((p) => !p.removed && p.method === 'store_credit')
+    .reduce((sum, p) => sum + p.amount / (p.exchange_rate || 1), 0);
+}
+
+/** Server error shape thrown by postJson/putJson below — carries `code`/`field`/`available` that the
+ * shared src/lib/api.ts (page agents may not edit) discards, needed here for inline field errors. */
+export class ApiFieldError extends Error {
+  code?: string;
+  field?: string;
+  available?: number;
+  constructor(body: any, status: number) {
+    super((body && typeof body === 'object' && body.error) || `Request failed (${status})`);
+    this.code = body?.code;
+    this.field = body?.field;
+    this.available = body?.available;
+  }
+}
+
+async function requestJson(method: 'POST' | 'PUT', url: string, data?: unknown) {
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: data === undefined ? undefined : JSON.stringify(data),
+  });
+  const contentType = res.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await res.json().catch(() => null) : null;
+  if (!res.ok) throw new ApiFieldError(body, res.status);
+  return body;
+}
+
+/** Like api.post, but the rejected promise carries `.code`/`.field`/`.available` for inline errors. */
+export function postJson<T = any>(url: string, data?: unknown): Promise<T> {
+  return requestJson('POST', url, data);
+}
+/** Like api.put, but the rejected promise carries `.code`/`.field`/`.available` for inline errors. */
+export function putJson<T = any>(url: string, data?: unknown): Promise<T> {
+  return requestJson('PUT', url, data);
 }

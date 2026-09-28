@@ -27,6 +27,21 @@ interface ReceiptTransaction {
   total_amount: number;
   discount?: { type: 'percentage' | 'fixed'; value: number };
   payments?: ReceiptPayment[];
+  // Store credit / balance display (docs/plans/2026-09-28-store-credit-and-levels.md section 2):
+  // the stakeholder's CURRENT (post-transaction) balance and this transaction's own effect on it,
+  // in the derived-balance sign convention (server/balance.ts) — negative = customer owes us.
+  // Both undefined/null for Walk-in or a transaction with no stakeholder.
+  stakeholder_balance?: number | null;
+  balance_effect?: number | null;
+}
+
+// "$12.00 Due / مستحق" (negative) or "$12.00 Credit / رصيد دائن" (positive/zero) — bilingual so the
+// line reads on a receipt whether the shop's customers read English or Arabic. Routed through
+// p.kv() below, which already renders any Arabic text as an image on printers without a working
+// Arabic code page (see server/printing/escpos.ts / arabic.ts) — no separate Arabic path needed.
+function formatBalance(balance: number): string {
+  const abs = Math.abs(balance).toFixed(2);
+  return balance < 0 ? `$${abs} Due / مستحق` : `$${abs} Credit / رصيد دائن`;
 }
 
 export function buildReceiptBuffer(opts: {
@@ -90,6 +105,16 @@ export function buildReceiptBuffer(opts: {
     for (const pay of tx.payments) {
       p.kv(pay.method.toUpperCase(), `${Number(pay.amount).toFixed(2)} ${pay.currency}`);
     }
+  }
+
+  // Previous / this / new balance, for a non-Walk-in customer/supplier with a known balance.
+  if (tx.stakeholder_name && tx.stakeholder_name !== 'Walk-in Customer' && tx.stakeholder_balance != null && tx.balance_effect != null) {
+    p.hr();
+    const newBalance = tx.stakeholder_balance;
+    const prevBalance = newBalance - tx.balance_effect;
+    p.kv('Previous Balance', formatBalance(prevBalance));
+    p.kv('This Invoice', formatBalance(tx.balance_effect));
+    p.kv('New Balance', formatBalance(newBalance));
   }
 
   p.feed(1).align('center');

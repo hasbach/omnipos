@@ -3,7 +3,7 @@ import { Card, CardBody, DataTable, Badge, type DataTableColumn } from '../../co
 import { DonutChart } from '../../components/ui/charts/DonutChart';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney } from '../../lib/format';
+import { formatMoney, paymentMethodLabel } from '../../lib/format';
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { ReportTabProps, ByPaymentMethodRow } from './types';
@@ -47,7 +47,7 @@ export function PaymentsTab({ range, businessName }: ReportTabProps) {
 
   const columns: DataTableColumn<ByPaymentMethodRow>[] = [
     { key: 'kind', header: t('rep_col_type', 'Type'), sortable: true, render: (r) => <Badge variant={KIND_VARIANT[r.kind] || 'neutral'}>{kindLabel(r.kind)}</Badge> },
-    { key: 'method', header: t('rep_col_method', 'Method'), sortable: true, render: (r) => <span className="capitalize">{r.method}</span> },
+    { key: 'method', header: t('rep_col_method', 'Method'), sortable: true, render: (r) => <span>{paymentMethodLabel(r.method, t)}</span> },
     { key: 'currency', header: t('rep_col_currency', 'Currency'), sortable: true },
     { key: 'amount', header: t('rep_col_amount', 'Amount'), sortable: true, align: 'end' },
     { key: 'amount_usd', header: t('rep_col_amount_usd', 'Amount (USD)'), sortable: true, align: 'end', render: (r) => usd(r.amount_usd) },
@@ -56,7 +56,7 @@ export function PaymentsTab({ range, businessName }: ReportTabProps) {
 
   const exportColumns: ExportColumn<ByPaymentMethodRow>[] = [
     { key: 'kind', header: t('rep_col_type', 'Type'), value: (r) => kindLabel(r.kind) },
-    { key: 'method', header: t('rep_col_method', 'Method'), value: (r) => r.method },
+    { key: 'method', header: t('rep_col_method', 'Method'), value: (r) => paymentMethodLabel(r.method, t) },
     { key: 'currency', header: t('rep_col_currency', 'Currency'), value: (r) => r.currency },
     { key: 'amount', header: t('rep_col_amount', 'Amount'), value: (r) => r.amount, align: 'right' },
     { key: 'amount_usd', header: t('rep_col_amount_usd', 'Amount (USD)'), value: (r) => r.amount_usd, align: 'right' },

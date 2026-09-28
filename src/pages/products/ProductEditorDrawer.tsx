@@ -25,6 +25,8 @@ export interface ProductEditorDrawerProps {
   product: Product | null; // null => creating a new product
   categories: string[];
   localCurrency: { code: string; symbol: string; rate: number } | null;
+  /** When false (Settings → Sales & Pricing → enable_price_levels off), hide the wholesale / super-wholesale tier cards. */
+  priceLevelsEnabled?: boolean;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -115,7 +117,7 @@ const TIER_FIELD: Record<TierKey, { usd: keyof FormState; lbp: keyof FormState }
   super_wholesale: { usd: 'price_super_wholesale', lbp: 'price_super_wholesale_lbp' },
 };
 
-export function ProductEditorDrawer({ open, product, categories, localCurrency, onClose, onSaved }: ProductEditorDrawerProps) {
+export function ProductEditorDrawer({ open, product, categories, localCurrency, priceLevelsEnabled = true, onClose, onSaved }: ProductEditorDrawerProps) {
   const { t } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
@@ -359,7 +361,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 </Field>
               </div>
 
-              {(['retail', 'wholesale', 'super_wholesale'] as TierKey[]).map((tier) => {
+              {(['retail', ...(priceLevelsEnabled ? ['wholesale', 'super_wholesale'] as TierKey[] : [])] as TierKey[]).map((tier) => {
                 const { usd, lbp } = TIER_FIELD[tier];
                 const priceUsd = form[usd] as number;
                 const priceLbp = form[lbp] as number;

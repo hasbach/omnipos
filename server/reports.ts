@@ -11,6 +11,7 @@
 // computeAllocatedLines() below, and every per-line report (by-product, by-category, by-customer,
 // by-cashier) is built from that same array so they all reconcile with /api/reports/summary.
 import { db } from "./db.js";
+import { REAL_MONEY_SQL } from "./paymentMethods.js";
 
 // ---------------------------------------------------------------------------
 // Small local helpers (deliberately NOT imported from routes.ts — that module imports this one,
@@ -211,18 +212,19 @@ function purchasesTotal(tenantId: number, from: string, to: string): number {
   return row.total || 0;
 }
 
-// Non-credit payments collected in USD, for sale tickets created within range.
+// Real money collected in USD, for sale tickets created within range — REAL MONEY (server/paymentMethods.ts):
+// neither 'credit' (on-account) nor 'store_credit' (paid from the customer's own balance) is cash/card in hand.
 function collectedOnSales(tenantId: number, from: string, to: string): number {
   const row = db.prepare(`
     SELECT IFNULL(SUM(amount / exchange_rate), 0) as total FROM (
       SELECT pay.amount as amount, pay.exchange_rate as exchange_rate FROM payments pay
       JOIN transactions t ON t.id = pay.transaction_id
-      WHERE t.tenant_id = ? AND t.type = 'sale' AND pay.method != 'credit'
+      WHERE t.tenant_id = ? AND t.type = 'sale' AND pay.${REAL_MONEY_SQL}
         AND date(t.created_at,'localtime') BETWEEN ? AND ?
       UNION ALL
       SELECT apay.amount, apay.exchange_rate FROM archived_payments apay
       JOIN archived_transactions at ON at.id = apay.transaction_id
-      WHERE at.tenant_id = ? AND at.type = 'sale' AND apay.method != 'credit'
+      WHERE at.tenant_id = ? AND at.type = 'sale' AND apay.${REAL_MONEY_SQL}
         AND date(at.created_at,'localtime') BETWEEN ? AND ?
     )
   `).get(tenantId, from, to, tenantId, from, to) as any;

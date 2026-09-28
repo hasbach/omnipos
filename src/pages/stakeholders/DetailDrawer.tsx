@@ -5,6 +5,7 @@ import { Mail, Phone, MapPin, CreditCard, Layers, Printer, FileDown, Edit2, Hand
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatDate, formatDateTime, formatMoney } from '../../lib/format';
+import { useSettings } from '../../lib/useSettings';
 import type { Currency, Stakeholder } from '../../types';
 
 export interface DetailDrawerProps {
@@ -58,6 +59,7 @@ function invoiceStatus(inv: InvoiceRow): 'paid' | 'partial' | 'unpaid' {
 
 export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, onPay }: DetailDrawerProps) {
   const { t, lang } = useI18n();
+  const { priceLevelsEnabled } = useSettings();
   const [tab, setTab] = useState('summary');
   const [statement, setStatement] = useState<StatementRow[] | null>(null);
   const [invoices, setInvoices] = useState<InvoiceRow[] | null>(null);
@@ -177,13 +179,15 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
           <Badge variant={stakeholder.type === 'customer' ? 'primary' : 'info'}>
             {stakeholder.type === 'customer' ? t('stk_type_customer') : t('stk_type_supplier')}
           </Badge>
-          <Badge variant="neutral">
-            {stakeholder.price_level === 'wholesale'
-              ? t('stk_price_level_wholesale')
-              : stakeholder.price_level === 'super_wholesale'
-              ? t('stk_price_level_super_wholesale')
-              : t('stk_price_level_retail')}
-          </Badge>
+          {priceLevelsEnabled && (
+            <Badge variant="neutral">
+              {stakeholder.price_level === 'wholesale'
+                ? t('stk_price_level_wholesale')
+                : stakeholder.price_level === 'super_wholesale'
+                ? t('stk_price_level_super_wholesale')
+                : t('stk_price_level_retail')}
+            </Badge>
+          )}
           {overLimit && <Badge variant="danger">{t('stk_over_limit_badge')}</Badge>}
         </div>
 

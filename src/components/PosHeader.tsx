@@ -19,7 +19,7 @@ export default function PosHeader() {
     customerSearchTerm, setCustomerSearchTerm, showCustomerDropdown, setShowCustomerDropdown,
     tenant, currentUser, setCurrentUser, handleLogout, setShowDailyHistory, setShowDebtModal,
     openAddCustomer, openEditCustomer, priceLevel, setPriceLevel, t, dir, isDarkMode, setIsDarkMode,
-    customerDropdownRef,
+    customerDropdownRef, priceLevelsEnabled,
   } = pos as any;
 
   const [showHeaderMenu, setShowHeaderMenu] = React.useState(false);
@@ -53,21 +53,24 @@ export default function PosHeader() {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap justify-end">
-        {/* Price level selector — changeable per sale, defaults from the selected customer */}
-        <div className="flex items-center gap-1 bg-surface-2 border border-border rounded-lg p-1" role="group" aria-label={t('pos_price_level', 'Price Level')}>
-          {priceLevels.map(lvl => (
-            <button
-              key={lvl.value}
-              onClick={() => setPriceLevel(lvl.value)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer min-h-[32px] ${
-                priceLevel === lvl.value ? 'bg-primary text-on-primary shadow-sm' : 'text-text-2 hover:text-text'
-              }`}
-              title={t('pos_price_level', 'Price Level')}
-            >
-              {lvl.label}
-            </button>
-          ))}
-        </div>
+        {/* Price level selector — changeable per sale, defaults from the selected customer.
+            Hidden entirely when Settings → Sales & Pricing → enable_price_levels is off. */}
+        {priceLevelsEnabled && (
+          <div className="flex items-center gap-1 bg-surface-2 border border-border rounded-lg p-1" role="group" aria-label={t('pos_price_level', 'Price Level')}>
+            {priceLevels.map(lvl => (
+              <button
+                key={lvl.value}
+                onClick={() => setPriceLevel(lvl.value)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer min-h-[32px] ${
+                  priceLevel === lvl.value ? 'bg-primary text-on-primary shadow-sm' : 'text-text-2 hover:text-text'
+                }`}
+                title={t('pos_price_level', 'Price Level')}
+              >
+                {lvl.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Customer selector — stays directly on the header, it's a per-sale action the cashier
             needs constantly, unlike the menu's occasional-use items. */}

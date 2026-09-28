@@ -23,6 +23,7 @@ import {
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
+import { useSettings } from '../lib/useSettings';
 import { marginPct } from '../lib/pricing';
 import { Product, Currency } from '../types';
 import LabelPrinter from '../components/LabelPrinter';
@@ -57,6 +58,7 @@ export default function ProductManagement() {
   const { t } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
+  const { priceLevelsEnabled } = useSettings();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
@@ -66,6 +68,9 @@ export default function ProductManagement() {
   const [category, setCategory] = useState('');
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
   const [showTiers, setShowTiers] = useState(true);
+  // Multiple price levels can be turned off entirely (Settings → Sales & Pricing); when off the
+  // wholesale/super-wholesale columns are hidden regardless of the "Show price levels" toggle.
+  const tiersVisible = priceLevelsEnabled && showTiers;
   const [selectedKeys, setSelectedKeys] = useState<Set<string | number>>(new Set());
 
   const [editorOpen, setEditorOpen] = useState(false);
@@ -355,7 +360,7 @@ export default function ProductManagement() {
       },
     ];
 
-    if (showTiers) {
+    if (tiersVisible) {
       cols.push(
         {
           key: 'price_wholesale',
@@ -444,7 +449,7 @@ export default function ProductManagement() {
     );
 
     return cols;
-  }, [t, showTiers, usdCurrency, localCurrency]);
+  }, [t, tiersVisible, usdCurrency, localCurrency]);
 
   return (
     <div className="flex h-full flex-col">
@@ -475,10 +480,12 @@ export default function ProductManagement() {
       <Toolbar
         className="mb-3"
         actions={
-          <label className="flex items-center gap-2 text-sm text-text-2">
-            <Switch checked={showTiers} onChange={setShowTiers} />
-            {t('prod_price_level_toggle', 'Show price levels')}
-          </label>
+          priceLevelsEnabled ? (
+            <label className="flex items-center gap-2 text-sm text-text-2">
+              <Switch checked={showTiers} onChange={setShowTiers} />
+              {t('prod_price_level_toggle', 'Show price levels')}
+            </label>
+          ) : undefined
         }
       >
         <SearchInput value={search} onChange={setSearch} placeholder={t('prod_search_placeholder')} className="max-w-sm" />
@@ -537,6 +544,7 @@ export default function ProductManagement() {
         product={editingProduct}
         categories={categories}
         localCurrency={localCurrency ? { code: localCurrency.code, symbol: localCurrency.symbol, rate: localCurrency.rate } : null}
+        priceLevelsEnabled={priceLevelsEnabled}
         onClose={() => setEditorOpen(false)}
         onSaved={fetchProducts}
       />
@@ -547,6 +555,7 @@ export default function ProductManagement() {
         products={products}
         selectedIds={selectedKeys}
         categories={categories}
+        priceLevelsEnabled={priceLevelsEnabled}
         onApplied={fetchProducts}
       />
 

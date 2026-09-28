@@ -2,11 +2,12 @@
 // Kept out of server/routes.ts to keep that file readable; the route handler there just calls
 // editTransaction() and re-renders the same response shape as GET /api/transactions/:id.
 import { db, logAction } from "./db.js";
-import { recomputeStakeholderBalance } from "./balance.js";
+import { recomputeStakeholderBalance, transactionBalanceEffect } from "./balance.js";
 import { getActiveSession } from "./session.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, type PriceLevel } from "./pricing.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { ValidationError } from "./errors.js";
+import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
 
 // Same guard as tenantStakeholderId in server/routes.ts (kept local to avoid a circular import
 // between routes.ts and this module) — resolves to a stakeholder that actually belongs to this
@@ -20,6 +21,13 @@ function resolveStakeholderId(tenantId: number, requested: any): number | null {
     "SELECT id FROM stakeholders WHERE tenant_id = ? ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
   ).get(tenantId) as any;
   return walkIn ? walkIn.id : null;
+}
+
+// Same query as getSettingsMap in server/routes.ts (kept local to avoid a circular import between
+// routes.ts and this module — routes.ts imports editTransaction from here).
+function getSettingsMap(tenantId: number): Record<string, string> {
+  const rows = db.prepare("SELECT key, value FROM settings WHERE tenant_id = ?").all(tenantId) as any[];
+  return rows.reduce((acc: any, r: any) => { acc[r.key] = r.value; return acc; }, {} as Record<string, string>);
 }
 
 // Quantity of each product already refunded against a given original sale — same query as
@@ -93,7 +101,7 @@ const invalidAdjustment = (adj: any, label: string): string | null => {
 
 // Edits a live or archived sale/purchase invoice in place. Returns which table it lives in so the
 // route handler can re-render it with the same shape as GET /api/transactions/:id.
-export async function editTransaction(tenantId: number, id: number, body: EditTransactionBody): Promise<{ id: number; archived: boolean }> {
+export async function editTransaction(tenantId: number, id: number, body: EditTransactionBody): Promise<{ id: number; archived: boolean; balance_before: number | null; balance_after: number | null }> {
   let archived = false;
   let tx = db.prepare("SELECT * FROM transactions WHERE id = ? AND tenant_id = ?").get(id, tenantId) as any;
   let txTable = "transactions";
@@ -112,22 +120,23 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   const items = Array.isArray(body.items) ? body.items : [];
   if (!items.length) throw new ValidationError("An invoice must have at least one line item.");
 
-  for (const item of items) {
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx];
     if (!(Number.isFinite(item.quantity) && item.quantity > 0)) {
-      throw new ValidationError(`Invalid quantity for product ${item.product_id}.`);
+      throw new ValidationError(`Invalid quantity for product ${item.product_id}.`, 400, { field: `items.${idx}.quantity` });
     }
     if (item.unit_price !== undefined && !(Number.isFinite(item.unit_price) && item.unit_price >= 0)) {
-      throw new ValidationError(`Invalid unit price for product ${item.product_id}.`);
+      throw new ValidationError(`Invalid unit price for product ${item.product_id}.`, 400, { field: `items.${idx}.unit_price` });
     }
     const discErr = invalidAdjustment(item.discount, 'line discount');
-    if (discErr) throw new ValidationError(discErr);
+    if (discErr) throw new ValidationError(discErr, 400, { field: `items.${idx}.unit_price` });
   }
   for (const p of Array.isArray(body.payments) ? body.payments : []) {
     if (p.id !== undefined && p.id !== null) continue; // existing payment, kept as-is
-    if (!(Number.isFinite(p.amount) && (p.amount as number) > 0)) throw new ValidationError("Invalid payment amount.");
-    if (!['cash', 'card', 'credit'].includes(String(p.method))) throw new ValidationError("Invalid payment method.");
-    if (!p.currency) throw new ValidationError("Payment currency is required.");
-    if (p.exchange_rate !== undefined && !(Number.isFinite(p.exchange_rate) && (p.exchange_rate as number) > 0)) throw new ValidationError("Invalid payment exchange rate.");
+    if (!(Number.isFinite(p.amount) && (p.amount as number) > 0)) throw new ValidationError("Invalid payment amount.", 400, { field: 'payments' });
+    if (!isValidPaymentMethod(p.method)) throw new ValidationError("Invalid payment method.", 400, { field: 'payments' });
+    if (!p.currency) throw new ValidationError("Payment currency is required.", 400, { field: 'payments' });
+    if (p.exchange_rate !== undefined && !(Number.isFinite(p.exchange_rate) && (p.exchange_rate as number) > 0)) throw new ValidationError("Invalid payment exchange rate.", 400, { field: 'payments' });
   }
   // Same tenant-scoped user guard as tenantUserId() in routes.ts — cash_flow rows reference users.
   const editUserId: number | null = (() => {
@@ -156,8 +165,13 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       if ((refundedQty as number) <= 0) continue;
       const newQty = newQtyByProduct[productId] || 0;
       if (newQty < (refundedQty as number) - 1e-9) {
+        // field points at the FIRST request line for this product (position in body.items), so the
+        // UI can highlight the offending row rather than just toasting the error.
+        const itemIdx = items.findIndex((it) => it.product_id === productId);
         throw new ValidationError(
-          `Product ${productId} has ${refundedQty} already refunded — the invoice can't hold less than that.`
+          `Product ${productId} has ${refundedQty} already refunded — the invoice can't hold less than that.`,
+          400,
+          { field: `items.${Math.max(0, itemIdx)}.quantity` }
         );
       }
     }
@@ -168,7 +182,64 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     : tx.stakeholder_id;
   const oldStakeholderId = tx.stakeholder_id;
 
-  const priceLevel: PriceLevel = normalizeLevel(body.price_level ?? tx.price_level);
+  const settings = getSettingsMap(tenantId);
+  const priceLevelsEnabled = settings.enable_price_levels !== '0';
+  const priceLevel: PriceLevel = priceLevelsEnabled ? normalizeLevel(body.price_level ?? tx.price_level) : 'retail';
+
+  // balance_before for the response — the (post-edit target) stakeholder's current balance, read
+  // fresh before any of this edit's mutations run.
+  const balanceBeforeRow = resolvedStakeholderId
+    ? db.prepare("SELECT balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
+    : null;
+  const balanceBefore: number | null = balanceBeforeRow ? (balanceBeforeRow.balance || 0) : null;
+
+  // Store credit: this invoice's OWN current effect on its (pre-edit) stakeholder, computed from
+  // the still-unedited DB state — "available" is the balance this stakeholder would have WITHOUT
+  // this invoice at all (see docs/plans/2026-09-28-store-credit-and-levels.md section 1). An
+  // existing store_credit payment kept by id is "being re-used" and correctly counts toward the
+  // new Σ, because this old effect already treated it as unpaid (not money) too.
+  const bodyPaymentsForValidation: EditPaymentInput[] | null = Array.isArray(body.payments) ? body.payments : null;
+  if (bodyPaymentsForValidation) {
+    // Resolve each body payment entry (a new one, sent in full, or an existing one kept "by id"
+    // with nothing but that id) to its actual method/amount/exchange_rate, so a kept store_credit
+    // payment is counted even though the body only names its id.
+    const existingRows = db.prepare(`SELECT id, amount, method, exchange_rate FROM ${paymentsTable} WHERE transaction_id = ?`).all(id) as any[];
+    const existingById = new Map(existingRows.map((p) => [Number(p.id), p]));
+    const resolvedPayments = bodyPaymentsForValidation.map((p) => {
+      if (p.id !== undefined && p.id !== null) {
+        const ex = existingById.get(Number(p.id));
+        return ex ? { method: ex.method as string, amount: ex.amount as number, exchange_rate: (ex.exchange_rate as number) || 1 } : null;
+      }
+      return { method: String(p.method), amount: Number(p.amount), exchange_rate: (p.exchange_rate as number) || 1 };
+    }).filter((p): p is { method: string; amount: number; exchange_rate: number } => !!p);
+    const storeCreditTotal = resolvedPayments
+      .filter((p) => p.method === 'store_credit')
+      .reduce((sum, p) => sum + (p.amount / p.exchange_rate), 0);
+    if (storeCreditTotal > 1e-9) {
+      if (tx.type === 'refund') throw new ValidationError("Store credit can't be used on a refund.", 400, { field: 'payments' });
+      const targetId = resolvedStakeholderId;
+      const targetRow = targetId
+        ? db.prepare("SELECT name, balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(targetId, tenantId) as any
+        : null;
+      if (!targetId || targetRow?.name === 'Walk-in Customer') {
+        throw new ValidationError("Walk-in Customer has no account balance to use.", 400, { code: 'STORE_CREDIT_WALKIN' });
+      }
+      // This invoice's current effect on ITS stakeholder — only meaningful when the invoice isn't
+      // moving to a different one (moving it means it isn't part of the target's balance yet, so
+      // the effect to subtract is 0).
+      const thisInvoiceEffect = (oldStakeholderId && oldStakeholderId === targetId)
+        ? transactionBalanceEffect(tx.type, id, tx.total_amount, paymentsTable as 'payments' | 'archived_payments')
+        : 0;
+      const available = Math.max(0, (targetRow?.balance || 0) - thisInvoiceEffect);
+      if (storeCreditTotal > available + 1e-9) {
+        throw new ValidationError(
+          `Store credit exceeds the available balance (${available.toFixed(2)}).`,
+          400,
+          { code: 'STORE_CREDIT_EXCEEDED', available }
+        );
+      }
+    }
+  }
 
   // created_at is stored the way SQLite's CURRENT_TIMESTAMP writes it ('YYYY-MM-DD HH:MM:SS', UTC):
   // every date filter and string ORDER BY across live/archived tables assumes that exact format, so
@@ -279,9 +350,10 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       for (const p of toInsert) {
         if (archived) insertPayment.run(reserveSharedId('payments', 'archived_payments'), id, p.amount, p.method, p.currency, p.exchange_rate || 1);
         else insertPayment.run(id, p.amount, p.method, p.currency, p.exchange_rate || 1);
-        if (p.method !== 'credit') {
+        if (isRealMoney(p.method)) {
           // An archived (settled) invoice's cash register was already closed out — a newly-added
           // real payment on it is money arriving NOW, so the open cash register needs to see it.
+          // (store_credit isn't money arriving either — same as credit — so it's excluded too.)
           if (archived) {
             db.prepare(
               "INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -334,11 +406,11 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       // Archived: this invoice's effect is banked into balance_baseline (it isn't summed live
       // anymore), so adjust the baseline by the delta between its effect before and after this
       // edit, then recompute so `balance` reflects the new baseline.
-      const oldPaid = existingPayments.reduce((sum, p) => p.method === 'credit' ? sum : sum + (p.amount || 0) / (p.exchange_rate || 1), 0);
+      const oldPaid = existingPayments.reduce((sum, p) => isRealMoney(p.method) ? sum + (p.amount || 0) / (p.exchange_rate || 1) : sum, 0);
       // existingPayments was queried BEFORE the deletes/inserts above — re-query for the current,
       // post-edit set to compute what this invoice's effect is now.
       const currentPayments = db.prepare(`SELECT * FROM ${paymentsTable} WHERE transaction_id = ?`).all(id) as any[];
-      const newPaid = currentPayments.reduce((sum, p) => p.method === 'credit' ? sum : sum + (p.amount || 0) / (p.exchange_rate || 1), 0);
+      const newPaid = currentPayments.reduce((sum, p) => isRealMoney(p.method) ? sum + (p.amount || 0) / (p.exchange_rate || 1) : sum, 0);
 
       const effectOf = (total: number, paid: number, type: string) => {
         if (type === 'sale' || type === 'purchase') return -(total - paid);
@@ -369,10 +441,16 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
 
     logAction(tenantId, editUserId, 'Transaction Edited', `ID: ${id}, Type: ${tx.type}, Total: ${tx.total_amount} -> ${finalTotal}`);
 
-    return { removedItemGlobalIds, removedPaymentGlobalIds };
+    // balance_after: same (resolved) stakeholder, now that the balance recompute above has run.
+    const balanceAfterRow = resolvedStakeholderId
+      ? db.prepare("SELECT balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(resolvedStakeholderId, tenantId) as any
+      : null;
+    const balanceAfter: number | null = balanceAfterRow ? (balanceAfterRow.balance || 0) : null;
+
+    return { removedItemGlobalIds, removedPaymentGlobalIds, balanceAfter };
   });
 
-  const { removedItemGlobalIds, removedPaymentGlobalIds } = run();
+  const { removedItemGlobalIds, removedPaymentGlobalIds, balanceAfter } = run();
 
   // Best-effort cloud cleanup AFTER the local write for archived invoices (never synced, so
   // this is a no-op there), and for live invoices too — items are always fully replaced, so their
@@ -386,7 +464,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     }
   }
 
-  return { id, archived };
+  return { id, archived, balance_before: balanceBefore, balance_after: balanceAfter };
 }
 
 // Rows inserted into archived_transaction_items / archived_payments must use an id the LIVE twin

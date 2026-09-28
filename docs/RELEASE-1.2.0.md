@@ -31,9 +31,23 @@ no GitHub release. Publishing is a separate, deliberate step (see README).
   keeps its number. Stock, cost and customer/supplier balances are adjusted automatically; editing a settled invoice
   adjusts the carried balance, and new cash payments on it go into today's cash register.
 - Every edit requires a reason and is kept in an audit history (before → after).
+- Validation problems are shown next to the field or line that caused them (including server-side checks such
+  as minimum price, credit limit, refunded quantities and available store credit).
 - Refund screen (from any sale, including settled ones): pick quantities per line, see what was already
   refunded and what remains, refund in cash or card (USD or local currency) or as credit to the customer's
   account, with a required reason. Refunds link back to their original sale.
+
+**Customer & supplier balances (store credit)**
+- A refund can be kept on the customer's account (POS and back office) instead of paying cash; it becomes a
+  positive balance (store credit).
+- New payment method "From account balance" on POS sales and on back-office sale/purchase invoices uses that
+  positive balance; the invoice counts as paid, the credit is consumed, and the cash register is not affected.
+- Previous balance / this invoice / new balance shown live in the POS cart, in the refund and payment dialogs,
+  on the sale-complete screen, in the invoice editor, and printed on receipts for account customers.
+
+**Price levels are optional**
+- Settings → Sales & Pricing → "Enable price levels". Turn it off (e.g. restaurants/cafés) and the POS,
+  products, customers and invoice editor show a single retail price; the server prices everything at retail.
 
 **Reports**
 - KPIs, P&L, sales trend, and analysis by product, category, customer, supplier, cashier and payment method.
@@ -57,5 +71,6 @@ no GitHub release. Publishing is a separate, deliberate step (see README).
 - Daily sales reports used UTC days (sales after 9 pm / midnight local landed on the wrong day).
 - Yearly report ignored settled transactions and refunds.
 - Purchases screen hid settled purchases.
+- Selecting a sale in the POS daily history crashed the POS screen (refund dialog rendered before its data loaded).
 - Refunds ignored the original invoice's global discount and tax, so a partial refund from a discounted
   invoice paid back more than the customer paid (POS and back office now both use the charged amount).

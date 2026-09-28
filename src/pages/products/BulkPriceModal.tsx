@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Button, Field, Select, NumberInput } from '../../components/ui';
 import { useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
@@ -16,6 +16,8 @@ export interface BulkPriceModalProps {
   products: Product[];
   selectedIds: Set<number | string>;
   categories: string[];
+  /** When false (Settings → Sales & Pricing → enable_price_levels off), only retail is offered. */
+  priceLevelsEnabled?: boolean;
   onApplied: () => void;
 }
 
@@ -43,7 +45,7 @@ function computeNewPrice(p: Product, tier: BulkTier, mode: BulkMode, value: numb
   return newPrice;
 }
 
-export function BulkPriceModal({ open, onClose, products, selectedIds, categories, onApplied }: BulkPriceModalProps) {
+export function BulkPriceModal({ open, onClose, products, selectedIds, categories, priceLevelsEnabled = true, onApplied }: BulkPriceModalProps) {
   const { t } = useI18n();
   const toast = useToast();
   const [scope, setScope] = useState<BulkScope>(selectedIds.size > 0 ? 'selected' : 'all');
@@ -53,6 +55,10 @@ export function BulkPriceModal({ open, onClose, products, selectedIds, categorie
   const [value, setValue] = useState<number>(0);
   const [roundTo, setRoundTo] = useState<number>(0);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!priceLevelsEnabled) setTier('retail');
+  }, [priceLevelsEnabled, open]);
 
   const affected = useMemo(() => {
     if (scope === 'selected') return products.filter((p) => selectedIds.has(p.id));
@@ -130,17 +136,19 @@ export function BulkPriceModal({ open, onClose, products, selectedIds, categorie
               <Select value={category} onChange={(e) => setCategory(e.target.value)} options={categories.map((c) => ({ value: c, label: c }))} />
             </Field>
           )}
-          <Field label={t('prod_bulk_tier', 'Price tier')}>
-            <Select
-              value={tier}
-              onChange={(e) => setTier(e.target.value as BulkTier)}
-              options={[
-                { value: 'retail', label: t('prod_tier_retail', 'Retail') },
-                { value: 'wholesale', label: t('prod_tier_wholesale', 'Wholesale (جملة)') },
-                { value: 'super_wholesale', label: t('prod_tier_super_wholesale', 'Super wholesale (جملة الجملة)') },
-              ]}
-            />
-          </Field>
+          {priceLevelsEnabled && (
+            <Field label={t('prod_bulk_tier', 'Price tier')}>
+              <Select
+                value={tier}
+                onChange={(e) => setTier(e.target.value as BulkTier)}
+                options={[
+                  { value: 'retail', label: t('prod_tier_retail', 'Retail') },
+                  { value: 'wholesale', label: t('prod_tier_wholesale', 'Wholesale (جملة)') },
+                  { value: 'super_wholesale', label: t('prod_tier_super_wholesale', 'Super wholesale (جملة الجملة)') },
+                ]}
+              />
+            </Field>
+          )}
           <Field label={t('prod_bulk_mode', 'Mode')}>
             <Select
               value={mode}

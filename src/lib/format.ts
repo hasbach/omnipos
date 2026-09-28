@@ -50,6 +50,44 @@ export function formatMoney(amount: number, currency?: CurrencyLike, opts: Forma
   return `${sign}${marker} ${numStr}`;
 }
 
+export type Translate = (key: string, fallback?: string) => string;
+
+/**
+ * Balance sign convention (shared across POS, invoice editor, stakeholder pages): negative = the
+ * party owes us / we owe the supplier ("Due"); positive = credit in their favour ("Credit").
+ * Returns the formatted absolute amount plus a human label and a color variant to apply.
+ */
+export function formatBalance(
+  balance: number,
+  currency: CurrencyLike | undefined,
+  t: Translate,
+): { amount: string; label: string; variant: 'danger' | 'success' | 'neutral' } {
+  const n = Number.isFinite(balance) ? balance : 0;
+  if (n < -0.005) {
+    return { amount: formatMoney(Math.abs(n), currency), label: t('bal_due', 'Due'), variant: 'danger' };
+  }
+  if (n > 0.005) {
+    return { amount: formatMoney(n, currency), label: t('bal_credit', 'Credit'), variant: 'success' };
+  }
+  return { amount: formatMoney(0, currency), label: t('bal_settled', 'Settled'), variant: 'neutral' };
+}
+
+/** Human label for a payment method, including the new `store_credit` ("From account balance"). */
+export function paymentMethodLabel(method: string, t: Translate): string {
+  switch (method) {
+    case 'cash':
+      return t('pm_cash', 'Cash');
+    case 'card':
+      return t('pm_card', 'Card');
+    case 'credit':
+      return t('pm_credit', 'Credit');
+    case 'store_credit':
+      return t('pm_store_credit', 'From account balance');
+    default:
+      return method;
+  }
+}
+
 export function formatPercent(value: number, opts: { decimals?: number; locale?: string } = {}): string {
   const { decimals = 1, locale = 'en-US' } = opts;
   const n = Number.isFinite(value) ? value : 0;

@@ -5,13 +5,17 @@ import {
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney } from '../../lib/format';
+import { formatMoney, formatBalance } from '../../lib/format';
+import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, type PriceLevel } from '../../lib/pricing';
 import type { Product, Stakeholder } from '../../types';
 import {
-  computeInvoiceTotals, lineDraftTotal, nextKey, paidFromPayments,
+  computeInvoiceTotals, lineDraftTotal, nextKey, paidFromPayments, realMoneyFromPayments,
+  storeCreditFromPayments, postJson, putJson, ApiFieldError,
   type CurrencyRow, type LineDraft, type PaymentDraft, type PaymentMethod, type TxType,
 } from './types';
+
+type FieldErrors = Record<string, string>;
 
 export interface InvoiceEditorProps {
   open: boolean;
@@ -42,9 +46,22 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const { t } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
+  const { priceLevelsEnabled } = useSettings();
 
   const isPurchase = txType === 'purchase';
   const parties = useMemo(() => stakeholders.filter((s) => (isPurchase ? s.type === 'supplier' : s.type === 'customer')), [stakeholders, isPurchase]);
+
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const clearFieldError = (key: string) => setFieldErrors((prev) => {
+    if (!(key in prev)) return prev;
+    const next = { ...prev };
+    delete next[key];
+    return next;
+  });
+  // The invoice's stakeholder balance BEFORE this invoice's own effect — for a new invoice that's
+  // simply the party's current balance; for an edit, the server-provided stakeholder_balance minus
+  // this invoice's current balance_effect (both loaded with the transaction below).
+  const [baseBalance, setBaseBalance] = useState<number | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -77,10 +94,16 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   useEffect(() => {
     if (!open) return;
     setDirty(false);
+    setFieldErrors({});
     if (editingId) {
       setLoading(true);
       api.get(`/api/transactions/${editingId}`).then((tx) => {
         setArchived(!!tx.archived);
+        setBaseBalance(
+          tx.stakeholder_balance != null && tx.balance_effect != null
+            ? tx.stakeholder_balance - tx.balance_effect
+            : null,
+        );
         setPartyId(tx.stakeholder_id || '');
         setPriceLevel(normalizeLevel(tx.price_level));
         const loaded = tx.created_at ? toLocalInput(tx.created_at) : nowLocalDateTime();
@@ -112,6 +135,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       }).catch((err) => toast.error(err.message)).finally(() => setLoading(false));
     } else {
       setArchived(false);
+      setBaseBalance(null);
       setPartyId('');
       setPartySearch('');
       setPriceLevel('retail');
@@ -131,12 +155,14 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
 
   // Default the customer's price level when a party is picked fresh (new invoice only).
   useEffect(() => {
-    if (!open || editingId) return;
+    if (!open || editingId || !priceLevelsEnabled) return;
     if (party?.price_level) reprice(normalizeLevel(party.price_level));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [partyId]);
+  }, [partyId, priceLevelsEnabled]);
 
-  const reprice = (level: PriceLevel) => {
+  const reprice = (levelArg: PriceLevel) => {
+    // Never send/apply a non-retail price level when the tenant has price levels disabled.
+    const level = priceLevelsEnabled ? levelArg : 'retail';
     setPriceLevel(level);
     if (isPurchase) return;
     setLines((prev) => prev.map((l) => {
@@ -184,6 +210,16 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const due = Math.max(0, totals.total - paid);
   const local = currencies.find((c) => c.code !== 'USD') || null;
 
+  // Old / new balance panel. "Old" = balance without this invoice's own effect (party's current
+  // balance for a new invoice; server-provided base for an edit — see baseBalance above).
+  // "New" = old − (total − real money paid), matching the shared balance-effect convention
+  // (store_credit and credit are not money). Available store credit = max(0, old balance).
+  const oldBalance = editingId ? (baseBalance ?? party?.balance ?? 0) : (party?.balance ?? 0);
+  const realPaid = realMoneyFromPayments(payments);
+  const newBalance = oldBalance - (totals.total - realPaid);
+  const availableStoreCredit = Math.max(0, oldBalance);
+  const storeCreditUsed = storeCreditFromPayments(payments);
+
   const removePayment = (key: string) => {
     setPayments((prev) => prev.map((p) => (p._key === key ? { ...p, removed: !p.removed } : p)));
     setDirty(true);
@@ -215,10 +251,28 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     onClose();
   };
 
+  /** Client-side validation, mirroring the server's own checks so the cashier sees them instantly
+   * (party required, qty > 0, unit price ≥ 0, reason required on edit, payment amount > 0, store
+   * credit ≤ available). Populates fieldErrors and returns whether the form may be submitted. */
+  const validate = (): boolean => {
+    const errors: FieldErrors = {};
+    if (!partyId) errors.stakeholder_id = t('inv_editor_validation_no_party', 'Select a customer or supplier.');
+    lines.forEach((l, idx) => {
+      if (!(l.quantity > 0)) errors[`items.${idx}.quantity`] = t('inv_editor_validation_qty', 'Quantity must be greater than 0.');
+      if (l.unit_price < 0) errors[`items.${idx}.unit_price`] = t('inv_editor_validation_price', 'Unit price cannot be negative.');
+    });
+    if (editingId && !reason.trim()) errors.reason = t('inv_editor_reason_required', 'A reason is required.');
+    if (storeCreditUsed > availableStoreCredit + 0.005) {
+      errors.payments = t('inv_editor_validation_store_credit_exceeded', 'Exceeds the available account balance ({amount}).').replace('{amount}', formatMoney(availableStoreCredit, USD));
+    }
+    setFieldErrors(errors);
+    if (lines.length === 0) toast.error(t('inv_editor_validation_no_lines', 'Add at least one line item.'));
+    if (Object.keys(errors).length > 0) toast.error(t('inv_editor_validation_generic', 'Fix the highlighted fields before saving.'));
+    return lines.length > 0 && Object.keys(errors).length === 0;
+  };
+
   const handleSave = async () => {
-    if (lines.length === 0) return toast.error(t('inv_editor_validation_no_lines', 'Add at least one line item.'));
-    if (!partyId) return toast.error(t('inv_editor_validation_no_party', 'Select a customer or supplier.'));
-    if (editingId && !reason.trim()) return toast.error(t('inv_editor_reason_required'));
+    if (!validate()) return;
 
     setSaving(true);
     try {
@@ -231,12 +285,12 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           tax: globalTax,
           notes,
           reference,
-          price_level: priceLevel,
+          price_level: priceLevelsEnabled ? priceLevel : 'retail',
           created_at: dateTime !== initialDateTime ? fromLocalInput(dateTime) : undefined,
           reason,
           user_id: currentUserId(),
         };
-        const tx = await api.put(`/api/transactions/${editingId}`, body);
+        const tx = await putJson(`/api/transactions/${editingId}`, body);
         toast.success(t('inv_editor_saved_toast', 'Invoice #{id} saved.').replace('{id}', String(tx.id)));
         onSaved(tx.id);
       } else {
@@ -254,17 +308,20 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           payments: payload,
           discount: globalDiscount,
           tax: globalTax,
-          price_level: priceLevel,
+          price_level: priceLevelsEnabled ? priceLevel : 'retail',
           notes,
           reference,
         };
-        const res = await api.post('/api/transactions', body);
+        const res = await postJson('/api/transactions', body);
         toast.success(t('inv_editor_created_toast', 'Invoice #{id} created.').replace('{id}', String(res.id)));
         onSaved(res.id);
       }
       setDirty(false);
     } catch (err: any) {
       toast.error(err.message);
+      if (err instanceof ApiFieldError && err.field) {
+        setFieldErrors((prev) => ({ ...prev, [err.field as string]: err.message }));
+      }
     } finally {
       setSaving(false);
     }
@@ -303,13 +360,14 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
             )}
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label={isPurchase ? t('inv_editor_party_purchase', 'Supplier') : t('inv_editor_party_sale', 'Customer')} required>
+              <Field label={isPurchase ? t('inv_editor_party_purchase', 'Supplier') : t('inv_editor_party_sale', 'Customer')} required error={fieldErrors.stakeholder_id}>
                 <div className="relative">
                   <Input
                     value={party ? party.name : partySearch}
                     placeholder={t('inv_editor_party_placeholder')}
+                    invalid={!!fieldErrors.stakeholder_id}
                     onFocus={() => setPartyOpen(true)}
-                    onChange={(e) => { setPartySearch(e.target.value); setPartyId(''); setPartyOpen(true); }}
+                    onChange={(e) => { setPartySearch(e.target.value); setPartyId(''); setPartyOpen(true); clearFieldError('stakeholder_id'); }}
                     startAdornment={<Search size={14} />}
                   />
                   {partyOpen && (
@@ -319,7 +377,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                           key={p.id}
                           type="button"
                           className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-surface-2 cursor-pointer"
-                          onClick={() => { setPartyId(p.id); setPartySearch(''); setPartyOpen(false); setDirty(true); }}
+                          onClick={() => { setPartyId(p.id); setPartySearch(''); setPartyOpen(false); setDirty(true); clearFieldError('stakeholder_id'); }}
                         >
                           <span className="font-medium text-text">{p.name}</span>
                           <span className="num text-xs text-text-3">{formatMoney(p.balance || 0, USD)}</span>
@@ -337,7 +395,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                 )}
               </Field>
 
-              {!isPurchase && (
+              {!isPurchase && priceLevelsEnabled && (
                 <Field label={t('inv_editor_price_level', 'Price level')}>
                   <Select
                     value={priceLevel}
@@ -407,8 +465,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                   <tbody>
                     {lines.length === 0 ? (
                       <tr><td colSpan={6} className="p-6 text-center text-xs text-text-3">{t('inv_editor_empty_lines')}</td></tr>
-                    ) : lines.map((l) => {
+                    ) : lines.map((l, idx) => {
                       const below = !isPurchase && l.minPrice && l.unit_price < l.minPrice;
+                      const qtyError = fieldErrors[`items.${idx}.quantity`];
+                      const priceError = fieldErrors[`items.${idx}.unit_price`];
                       return (
                         <tr key={l._key} className="border-t border-border align-top">
                           <td className="px-2 py-2">
@@ -417,12 +477,14 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                               <p className="text-xs text-text-3">{t('inv_editor_tier_price_hint', 'Catalog price: {price}').replace('{price}', formatMoney(l.catalogPrice, USD))}</p>
                             )}
                             {below && <p className="text-xs text-danger">{t('inv_editor_min_price_warning', 'Below minimum price of {min}').replace('{min}', formatMoney(l.minPrice || 0, USD))}</p>}
+                            {priceError && <p className="text-xs text-danger">{priceError}</p>}
+                            {qtyError && <p className="text-xs text-danger">{qtyError}</p>}
                           </td>
                           <td className="px-2 py-2">
-                            <NumberInput value={l.quantity} min={0.01} step={1} onChange={(v) => updateLine(l._key, { quantity: v })} className="w-20" />
+                            <NumberInput value={l.quantity} min={0.01} step={1} invalid={!!qtyError} onChange={(v) => { updateLine(l._key, { quantity: v }); clearFieldError(`items.${idx}.quantity`); }} className="w-20" />
                           </td>
                           <td className="px-2 py-2">
-                            <MoneyInput value={l.unit_price} onChange={(v) => updateLine(l._key, { unit_price: v })} invalid={!!below} className="w-28" />
+                            <MoneyInput value={l.unit_price} onChange={(v) => { updateLine(l._key, { unit_price: v }); clearFieldError(`items.${idx}.unit_price`); }} invalid={!!below || !!priceError} className="w-28" />
                           </td>
                           <td className="px-2 py-2">
                             <NumberInput value={l.discount.value} min={0} onChange={(v) => updateLine(l._key, { discount: { ...l.discount, value: v } })} className="w-20" endAdornment={l.discount.type === 'percentage' ? '%' : '$'} />
@@ -464,29 +526,69 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
               </div>
             </div>
 
+            {party && (
+              <div className="rounded-[var(--radius-card)] border border-border p-3 space-y-1.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-3">{t('inv_editor_balance_panel', 'Account balance')}</p>
+                {(() => {
+                  const oldB = formatBalance(oldBalance, USD, t);
+                  const newB = formatBalance(newBalance, USD, t);
+                  const variantClass = (v: 'danger' | 'success' | 'neutral') => v === 'danger' ? 'text-danger' : v === 'success' ? 'text-success' : 'text-text-3';
+                  return (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-text-3">{t('inv_editor_old_balance', 'Old balance')}: <span className={`num font-semibold ${variantClass(oldB.variant)}`}>{oldB.amount} {oldB.label}</span></span>
+                      <span className="text-text-3">{t('inv_editor_new_balance', 'New balance')}: <span className={`num font-semibold ${variantClass(newB.variant)}`}>{newB.amount} {newB.label}</span></span>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
             <div className="rounded-[var(--radius-card)] border border-border p-3 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-text-3">{t('inv_editor_payments', 'Payments')}</p>
-              {payments.map((p) => {
-                const cur = currencies.find((c) => c.code === p.currency) || USD;
-                return (
-                  <div key={p._key} className={['flex items-center justify-between rounded-md border border-border px-2 py-1.5 text-sm', p.removed ? 'opacity-40 line-through' : ''].join(' ')}>
-                    <span className="capitalize text-text-2">{p.method}</span>
-                    <span className="num text-text">{formatMoney(p.amount, cur)}</span>
+              {fieldErrors.payments && <p className="text-xs text-danger">{fieldErrors.payments}</p>}
+              {payments.map((p, i) => (
+                <div key={p._key}>
+                  <div className={['flex items-center justify-between rounded-md border border-border px-2 py-1.5 text-sm', p.removed ? 'opacity-40 line-through' : '', fieldErrors[`payments.${i}`] ? 'border-danger' : ''].join(' ')}>
+                    <span className="text-text-2">{t(`inv_editor_payment_method_${p.method}`, p.method)}</span>
+                    <span className="num text-text">{formatMoney(p.amount, currencies.find((c) => c.code === p.currency) || USD)}</span>
                     <button type="button" className="text-danger hover:opacity-70 cursor-pointer text-xs" onClick={() => removePayment(p._key)}>×</button>
                   </div>
-                );
-              })}
+                  {fieldErrors[`payments.${i}`] && <p className="text-xs text-danger">{fieldErrors[`payments.${i}`]}</p>}
+                </div>
+              ))}
+              {availableStoreCredit > 0.005 && (
+                <p className="text-xs text-text-3">{t('inv_editor_available_store_credit', 'Available balance: {amount}').replace('{amount}', formatMoney(availableStoreCredit, USD))}</p>
+              )}
               <div className="grid grid-cols-3 gap-1.5">
-                <MoneyInput value={newPayAmount} onChange={setNewPayAmount} className="col-span-1" />
+                <MoneyInput value={newPayAmount} onChange={(v) => { setNewPayAmount(v); clearFieldError('payments'); }} className="col-span-1" />
                 <Select value={newPayMethod} onChange={(e) => setNewPayMethod(e.target.value as PaymentMethod)} options={[
                   { value: 'cash', label: t('inv_editor_payment_method_cash', 'Cash') },
                   { value: 'card', label: t('inv_editor_payment_method_card', 'Card') },
                   { value: 'credit', label: t('inv_editor_payment_method_credit', 'Credit') },
+                  { value: 'store_credit', label: t('inv_editor_payment_method_store_credit', 'From account balance'), disabled: availableStoreCredit <= 0.005 },
                 ]} />
                 <Select value={newPayCurrency} onChange={(e) => setNewPayCurrency(e.target.value)} options={currencies.map((c) => ({ value: c.code, label: c.code }))} />
               </div>
               <div className="flex gap-2">
-                <Button variant="secondary" size="sm" className="flex-1" onClick={() => addPayment(newPayAmount)}><Plus size={14} /> {t('inv_editor_payments_add', 'Add payment')}</Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => {
+                    if (!newPayAmount || newPayAmount <= 0) { setFieldErrors((prev) => ({ ...prev, payments: t('inv_editor_validation_payment_amount', 'Payment amount must be greater than 0.') })); return; }
+                    if (newPayMethod === 'store_credit') {
+                      const cur = currencies.find((c) => c.code === newPayCurrency) || USD;
+                      const amountUsd = newPayAmount / (cur.rate || 1);
+                      if (storeCreditUsed + amountUsd > availableStoreCredit + 0.005) {
+                        setFieldErrors((prev) => ({ ...prev, payments: t('inv_editor_validation_store_credit_exceeded', 'Exceeds the available account balance ({amount}).').replace('{amount}', formatMoney(availableStoreCredit, USD)) }));
+                        return;
+                      }
+                    }
+                    addPayment(newPayAmount);
+                  }}
+                >
+                  <Plus size={14} /> {t('inv_editor_payments_add', 'Add payment')}
+                </Button>
                 <Button variant="ghost" size="sm" onClick={() => { const cur = currencies.find((c) => c.code === newPayCurrency) || USD; addPayment(Number((due * cur.rate).toFixed(2))); }}>{t('inv_editor_pay_remaining', 'Pay remaining')}</Button>
               </div>
               <div className="flex justify-between text-xs text-text-3 pt-1">
@@ -496,8 +598,8 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
             </div>
 
             {editingId && (
-              <Field label={t('inv_editor_reason_label', 'Reason for edit')} required>
-                <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('inv_editor_reason_placeholder')} />
+              <Field label={t('inv_editor_reason_label', 'Reason for edit')} required error={fieldErrors.reason}>
+                <Textarea rows={3} value={reason} onChange={(e) => { setReason(e.target.value); clearFieldError('reason'); }} placeholder={t('inv_editor_reason_placeholder')} />
               </Field>
             )}
           </div>

@@ -3,8 +3,8 @@ import { RotateCcw, Undo2 } from 'lucide-react';
 import { Modal, Button, Field, NumberInput, Select, Textarea, Badge, useToast, useConfirm, SkeletonTable } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime } from '../../lib/format';
-import type { CurrencyRow } from './types';
+import { formatMoney, formatDateTime, formatBalance } from '../../lib/format';
+import { postJson, ApiFieldError, type CurrencyRow } from './types';
 
 export interface RefundableLine {
   product_id: number;
@@ -66,6 +66,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
   const [payCurrency, setPayCurrency] = useState<string>('USD');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const local = currencies.find((c) => c.code !== 'USD') || null;
   const isWalkIn = !!data && (!data.stakeholder || data.stakeholder.name === WALK_IN_NAME);
@@ -142,6 +143,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
     if (!ok) return;
 
     setSubmitting(true);
+    setFormError(null);
     try {
       const cur = currencies.find((c) => c.code === payCurrency) || USD;
       const payments = method === 'credit' ? [] : [{
@@ -150,7 +152,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
         currency: cur.code,
         exchange_rate: cur.rate || 1,
       }];
-      const res = await api.post<{ id: number }>('/api/transactions', {
+      const res = await postJson<{ id: number }>('/api/transactions', {
         type: 'refund',
         original_transaction_id: invoiceId,
         stakeholder_id: data.stakeholder?.id ?? null,
@@ -165,6 +167,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
       onDone(res.id);
     } catch (err: any) {
       toast.error(err.message);
+      if (err instanceof ApiFieldError) setFormError(err.message);
     } finally {
       setSubmitting(false);
     }
@@ -291,8 +294,8 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
                     />
                   </Field>
                 )}
-                <Field label={t('inv_refund_reason', 'Reason')} required>
-                  <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('inv_refund_reason_placeholder', 'Why is this being refunded?')} />
+                <Field label={t('inv_refund_reason', 'Reason')} required error={formError || undefined}>
+                  <Textarea rows={2} value={reason} onChange={(e) => { setReason(e.target.value); setFormError(null); }} placeholder={t('inv_refund_reason_placeholder', 'Why is this being refunded?')} />
                 </Field>
               </div>
 
@@ -301,6 +304,20 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
                   <div className="flex justify-between text-base font-semibold"><span>{t('inv_refund_total', 'Refund total')}</span><span className="num text-danger">{formatMoney(totalUSD, USD)}</span></div>
                   {local && <div className="flex justify-between text-xs text-text-3"><span>{t('inv_detail_local', 'Local')}</span><span className="num">{formatMoney(totalUSD * local.rate, local)}</span></div>}
                 </div>
+
+                {data.stakeholder && !isWalkIn && (() => {
+                  const prevBal = data.stakeholder!.balance;
+                  const newBal = method === 'credit' ? prevBal + totalUSD : prevBal;
+                  const prev = formatBalance(prevBal, USD, t);
+                  const next = formatBalance(newBal, USD, t);
+                  const variantClass = (v: 'danger' | 'success' | 'neutral') => v === 'danger' ? 'text-danger' : v === 'success' ? 'text-success' : 'text-text-3';
+                  return (
+                    <div className="rounded-[var(--radius-card)] border border-border p-3 flex justify-between text-sm">
+                      <span className="text-text-3">{t('inv_editor_old_balance', 'Old balance')}: <span className={`num font-semibold ${variantClass(prev.variant)}`}>{prev.amount} {prev.label}</span></span>
+                      <span className="text-text-3">{t('inv_editor_new_balance', 'New balance')}: <span className={`num font-semibold ${variantClass(next.variant)}`}>{next.amount} {next.label}</span></span>
+                    </div>
+                  );
+                })()}
 
                 <div className="rounded-[var(--radius-card)] border border-border p-3">
                   <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-3">{t('inv_refund_previous', 'Previous refunds')}</p>

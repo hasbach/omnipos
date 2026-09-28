@@ -18,6 +18,7 @@ import type { DataTableColumn } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
+import { useSettings } from '../lib/useSettings';
 import type { Currency, PriceLevel, Stakeholder } from '../types';
 import { EditDrawer } from './stakeholders/EditDrawer';
 import { DetailDrawer } from './stakeholders/DetailDrawer';
@@ -29,6 +30,7 @@ export default function StakeholderManagement() {
   const { t } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
+  const { priceLevelsEnabled } = useSettings();
 
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
@@ -69,7 +71,7 @@ export default function StakeholderManagement() {
 
   const filtered = useMemo(() => {
     return byType.filter((s) => {
-      if (priceLevelFilter !== 'all' && (s.price_level || 'retail') !== priceLevelFilter) return false;
+      if (priceLevelsEnabled && priceLevelFilter !== 'all' && (s.price_level || 'retail') !== priceLevelFilter) return false;
       const overLimit = !!s.credit_limit && s.credit_limit > 0 && -s.balance > s.credit_limit;
       if (balanceFilter === 'with_balance' && s.balance === 0) return false;
       if (balanceFilter === 'over_limit' && !overLimit) return false;
@@ -129,13 +131,13 @@ export default function StakeholderManagement() {
         </div>
       ),
     },
-    {
+    ...(priceLevelsEnabled ? [{
       key: 'price_level',
       header: t('stk_col_price_level'),
-      render: (s) => <Badge variant="neutral">{priceLevelLabel(s.price_level)}</Badge>,
-      sortValue: (s) => s.price_level || 'retail',
+      render: (s: Stakeholder) => <Badge variant="neutral">{priceLevelLabel(s.price_level)}</Badge>,
+      sortValue: (s: Stakeholder) => s.price_level || 'retail',
       sortable: true,
-    },
+    } as DataTableColumn<Stakeholder>] : []),
     {
       key: 'credit_limit',
       header: t('stk_col_credit_limit'),
@@ -230,17 +232,19 @@ export default function StakeholderManagement() {
       <Toolbar
         actions={
           <>
-            <Select
-              value={priceLevelFilter}
-              onChange={(e) => setPriceLevelFilter(e.target.value)}
-              className="w-44"
-              options={[
-                { value: 'all', label: t('stk_filter_all') },
-                { value: 'retail', label: t('stk_price_level_retail') },
-                { value: 'wholesale', label: t('stk_price_level_wholesale') },
-                { value: 'super_wholesale', label: t('stk_price_level_super_wholesale') },
-              ]}
-            />
+            {priceLevelsEnabled && (
+              <Select
+                value={priceLevelFilter}
+                onChange={(e) => setPriceLevelFilter(e.target.value)}
+                className="w-44"
+                options={[
+                  { value: 'all', label: t('stk_filter_all') },
+                  { value: 'retail', label: t('stk_price_level_retail') },
+                  { value: 'wholesale', label: t('stk_price_level_wholesale') },
+                  { value: 'super_wholesale', label: t('stk_price_level_super_wholesale') },
+                ]}
+              />
+            )}
             <Select
               value={balanceFilter}
               onChange={(e) => setBalanceFilter(e.target.value)}

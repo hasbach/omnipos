@@ -11,6 +11,7 @@ import {
   saleLineUnitPrice,
   saleLineUnitPriceLbp,
 } from '../lib/pricing';
+import { useSettings } from '../lib/useSettings';
 
 export const CURRENCIES = [
   { code: 'USD', symbol: '$', rate: 1 },
@@ -54,8 +55,12 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const [showCheckout, setShowCheckout] = useState(false);
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit' | 'store_credit'>('cash');
   const [paymentCurrency, setPaymentCurrency] = useState(CURRENCIES[0]);
+  // Refund method for the POS refund modal: 'cash' pays back in cash; 'credit' keeps the amount on
+  // the customer's account (payments: [] submitted, matching store_credit/credit semantics
+  // server-side — never available for the tenant's Walk-in customer).
+  const [refundMethod, setRefundMethod] = useState<'cash' | 'credit'>('cash');
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
   const [newCustomerForm, setNewCustomerForm] = useState(EMPTY_CUSTOMER_FORM);
   const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
@@ -91,6 +96,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const [settings, setSettings] = useState<Record<string, string>>({});
   const allowPriceOverride = settings.allow_price_override === '1';
   const enforceMinPrice = settings.enforce_min_price === '1';
+  // enable_price_levels: '1' (or missing) = on, '0' = off — hides the level selector/tier badges
+  // and forces every sale to retail pricing (see CartPanel/PosHeader/ProductGrid).
+  const { priceLevelsEnabled } = useSettings();
 
   // Price level (Retail / Wholesale / Super wholesale) for the CURRENT sale. Defaults from the
   // selected customer's own price_level, else the tenant's configured default, but the cashier can
@@ -147,6 +155,12 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
             break;
           case 'TRANSACTIONS_UPDATED':
             safeFetch('/api/transactions/recent', setRecentTransactions);
+            // Every sale/refund/edit changes a customer's derived balance — refresh them too, or the
+            // cart's "previous balance" and the store-credit amount go stale.
+            safeFetch('/api/stakeholders', setStakeholders);
+            break;
+          case 'STAKEHOLDERS_UPDATED':
+            safeFetch('/api/stakeholders', setStakeholders);
             break;
           case 'SETTINGS_UPDATED':
             fetchSettings();
@@ -387,6 +401,12 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         return sum + unitRefund * item.quantity;
       }, 0);
 
+      // 'cash' pays the customer back in cash; 'credit' keeps the amount on their account
+      // (payments: [] — the refund's balance effect then credits their balance instead).
+      const isWalkInRefund = !selectedHistoryTransaction.stakeholder_id
+        || stakeholders.find((s: any) => s.id === selectedHistoryTransaction.stakeholder_id)?.name === 'Walk-in Customer';
+      const effectiveMethod = isWalkInRefund ? 'cash' : refundMethod;
+
       const res = await fetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -399,7 +419,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
           total_amount: totalRefund,
           currency: selectedHistoryTransaction.currency,
           exchange_rate: selectedHistoryTransaction.exchange_rate,
-          payments: [{
+          payments: effectiveMethod === 'credit' ? [] : [{
             amount: totalRefund,
             method: 'cash',
             currency: selectedHistoryTransaction.currency,
@@ -412,6 +432,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         setShowRefundModal(false);
         setSelectedHistoryTransaction(null);
         fetchDailyHistory();
+        // A refund kept on account changes the customer's balance (store credit) — reload it now so
+        // the next sale shows the right "previous balance" and can use the credit.
+        fetch('/api/stakeholders').then(r => r.ok ? r.json() : null).then(d => { if (Array.isArray(d)) setStakeholders(d); }).catch(() => {});
         toast.success(t('pos_refund_success', 'Refund processed successfully.'));
       } else {
         const err = await res.json().catch(() => ({}));
@@ -460,11 +483,16 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   // can still override it per sale via setPriceLevel (header selector) — but switching customer
   // resets the "manual" flag so the NEXT customer change re-defaults again.
   useEffect(() => {
+    if (!priceLevelsEnabled) {
+      priceLevelManualRef.current = false;
+      setPriceLevelState('retail');
+      return;
+    }
     const s = stakeholders.find((x: any) => x.id === selectedStakeholder);
     priceLevelManualRef.current = false;
     setPriceLevelState(normalizeLevel(s?.price_level || settings.default_price_level));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStakeholder, stakeholders.length, settings.default_price_level]);
+  }, [selectedStakeholder, stakeholders.length, settings.default_price_level, priceLevelsEnabled]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -609,6 +637,21 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     : 0;
   // Balance sign convention: negative = customer owes us. Headroom before hitting the limit.
   const availableCredit = creditLimit > 0 ? creditLimit + (selectedStakeholderObj?.balance || 0) : null;
+  // Positive balance = store credit this customer can use to pay for the sale (POS payment modal's
+  // "Use account balance" button); never available for the Walk-in customer.
+  const availableStoreCredit = selectedStakeholder !== 1 && (selectedStakeholderObj?.balance || 0) > 0
+    ? selectedStakeholderObj.balance
+    : 0;
+
+  // Previous balance · This sale · New balance (live), per the Cart/customer area spec. Real money
+  // paid so far excludes credit and store_credit (neither is money) — see server/balance.ts
+  // unpaidNonCredit / stakeholderTxEffect, mirrored here.
+  const prevBalanceUSD = selectedStakeholderObj?.balance ?? 0;
+  const realMoneyPaidUSD = payments
+    .filter((p: any) => p.method !== 'credit' && p.method !== 'store_credit')
+    .reduce((sum: number, p: any) => sum + p.amount / (p.exchange_rate || 1), 0);
+  const thisSaleEffectUSD = -(totalUSD - realMoneyPaidUSD);
+  const newBalanceUSD = prevBalanceUSD + thisSaleEffectUSD;
 
   useEffect(() => {
     if (showCheckout && !lastTransaction && cart.length > 0) {
@@ -726,7 +769,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     // {code:'CREDIT_LIMIT'} if this check is stale or the setting changed server-side, but warning
     // up front saves the cashier a round trip.
     if (selectedStakeholderObj && creditLimit > 0) {
-      const paidUSD = paymentsArg.filter(p => p.method !== 'credit').reduce((sum, p) => sum + p.amount / p.exchange_rate, 0);
+      const paidUSD = paymentsArg.filter(p => p.method !== 'credit' && p.method !== 'store_credit').reduce((sum, p) => sum + p.amount / p.exchange_rate, 0);
       const prospective = (selectedStakeholderObj.balance || 0) - (totalUSD - paidUSD);
       if (prospective < -creditLimit) {
         const proceed = await confirm({
@@ -749,7 +792,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       exchange_rate: 1,
       discount: globalDiscount.value > 0 ? globalDiscount : undefined,
       terminalId,
-      price_level: priceLevel,
+      price_level: priceLevelsEnabled ? priceLevel : 'retail',
       payments: paymentsArg
     };
 
@@ -767,7 +810,13 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         fetchData();
 
         if (showReceiptDialog) {
-          setLastTransaction({ ...transaction, id: data.id, created_at: new Date().toISOString() });
+          setLastTransaction({
+            ...transaction,
+            id: data.id,
+            created_at: new Date().toISOString(),
+            balance_before: data.balance_before,
+            balance_after: data.balance_after,
+          });
           setShowCheckout(true);
         } else {
           // Skip the post-checkout confirmation screen; go straight back to a fresh sale.
@@ -906,6 +955,28 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     if (transaction.discount?.value > 0) {
       const disc = transaction.discount.type === 'percentage' ? `${transaction.discount.value}%` : `$${transaction.discount.value}`;
       lines.push(`Global Discount:   ${disc}`);
+    }
+
+    // Previous balance / This invoice / New balance — only for a real (non-Walk-in) customer, and
+    // only when the transaction carries the fields to compute them: balance_before/balance_after
+    // fresh off checkout, or stakeholder_balance/balance_effect from a re-fetched GET /api/transactions/:id.
+    if (customer && customer.name !== 'Walk-in Customer') {
+      let balanceBefore: number | null = null;
+      let balanceAfter: number | null = null;
+      if (transaction.balance_before != null || transaction.balance_after != null) {
+        balanceBefore = transaction.balance_before ?? null;
+        balanceAfter = transaction.balance_after ?? null;
+      } else if (transaction.stakeholder_balance != null && transaction.balance_effect != null) {
+        balanceAfter = transaction.stakeholder_balance;
+        balanceBefore = transaction.stakeholder_balance - transaction.balance_effect;
+      }
+      if (balanceBefore != null && balanceAfter != null) {
+        const balLabel = (v: number) => `$${Math.abs(v).toFixed(2)} ${v < 0 ? 'Due' : v > 0 ? 'Credit' : ''}`.trim();
+        lines.push("--------------------------------");
+        lines.push(`Previous balance: ${balLabel(balanceBefore)}`);
+        lines.push(`This invoice:     $${transaction.total_amount.toFixed(2)}`);
+        lines.push(`New balance:      ${balLabel(balanceAfter)}`);
+      }
     }
 
     lines.push("================================",
@@ -1073,6 +1144,13 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     enforceMinPrice,
     creditLimit,
     availableCredit,
+    priceLevelsEnabled,
+    availableStoreCredit,
+    prevBalanceUSD,
+    thisSaleEffectUSD,
+    newBalanceUSD,
+    refundMethod,
+    setRefundMethod,
     setItemPriceOverride,
     setItemQuantity,
     handleCheckout,

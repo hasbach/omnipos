@@ -8,7 +8,7 @@ import Fuse from 'fuse.js';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Badge } from './ui';
-import { formatMoney } from '../lib/format';
+import { formatMoney, formatBalance } from '../lib/format';
 
 export default function CartPanel() {
   const pos = usePosContext();
@@ -19,7 +19,8 @@ export default function CartPanel() {
     handleBarcodeSubmit, handleSuggestionClick, updateQuantity, setItemQuantity, applyItemDiscount,
     calculateItemTotal, calculateItemTotalLBP, handleQuickCash, subtotalUSD, totalUSD, totalLBP,
     priceLevel, allowPriceOverride, enforceMinPrice, unitPriceUSD, setItemPriceOverride,
-    creditLimit, availableCredit, t, barcodeRef,
+    creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled,
+    selectedStakeholder, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
   } = pos as any;
 
   const [discountEditorId, setDiscountEditorId] = useState<number | null>(null);
@@ -55,11 +56,14 @@ export default function CartPanel() {
 
   const clearPriceOverride = (id: number) => setItemPriceOverride(id, null);
 
-  const tierLabel = priceLevel === 'wholesale'
+  const tierLabel = !priceLevelsEnabled ? null : priceLevel === 'wholesale'
     ? t('pos_tier_wholesale', 'Wholesale')
     : priceLevel === 'super_wholesale'
       ? t('pos_tier_super_wholesale', 'Super Wholesale')
       : null;
+
+  const USD = { code: 'USD', symbol: '$' };
+  const isWalkIn = selectedStakeholder === 1;
 
   return (
     <>
@@ -285,6 +289,26 @@ export default function CartPanel() {
                     {t('pos_available_credit', 'Available Credit')}: {formatMoney(availableCredit || 0, { code: 'USD', symbol: '$' })}
                   </p>
                 )}
+
+                {!isWalkIn && cart.length > 0 && (() => {
+                  const prev = formatBalance(prevBalanceUSD, USD, t);
+                  const next = formatBalance(newBalanceUSD, USD, t);
+                  const variantClass = (v: 'danger' | 'success' | 'neutral') =>
+                    v === 'danger' ? 'text-danger' : v === 'success' ? 'text-success' : 'text-text-3';
+                  return (
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+                      <span className="text-text-3">
+                        {t('pos_previous_balance', 'Previous balance')}: <span className={`num font-semibold ${variantClass(prev.variant)}`}>{prev.amount} {prev.label}</span>
+                      </span>
+                      <span className="text-text-3">
+                        {t('pos_this_sale', 'This sale')}: <span className="num font-semibold text-text">{formatMoney(Math.abs(thisSaleEffectUSD), USD)}</span>
+                      </span>
+                      <span className="text-text-3">
+                        {t('pos_new_balance', 'New balance')}: <span className={`num font-semibold ${variantClass(next.variant)}`}>{next.amount} {next.label}</span>
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="flex items-center gap-2">

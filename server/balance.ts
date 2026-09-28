@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { REAL_MONEY_SQL } from './paymentMethods.js';
 
 // Derived stakeholder balances.
 //
@@ -16,13 +17,27 @@ import { db } from './db.js';
 //
 // `balance_baseline` holds everything NOT explained by the current transactions — i.e. manual
 // balance payments/collections and the migration seed that preserves pre-existing balances.
-// A 'credit' payment is not real money received, so it never counts toward the paid amount.
+// A 'credit' payment is not real money received, and neither is 'store_credit' (paying a sale out
+// of the stakeholder's own positive balance) — see server/paymentMethods.ts. Neither ever counts
+// toward the paid amount here, which is what makes an invoice paid with store_credit still
+// "unpaid" in balance math: its effect keeps consuming the positive balance that funded it.
 
-function unpaidNonCredit(txId: number, total: number): number {
+// The real-money-only unpaid remainder of one transaction (BALANCE MATH — server/paymentMethods.ts).
+export function unpaidRealMoney(txId: number, total: number, paymentsTable: 'payments' | 'archived_payments' = 'payments'): number {
   const row = db.prepare(
-    "SELECT IFNULL(SUM(amount / exchange_rate), 0) as paid FROM payments WHERE transaction_id = ? AND method != 'credit'"
+    `SELECT IFNULL(SUM(amount / exchange_rate), 0) as paid FROM ${paymentsTable} WHERE transaction_id = ? AND ${REAL_MONEY_SQL}`
   ).get(txId) as any;
   return (total || 0) - (row?.paid || 0);
+}
+
+// This transaction's effect on its stakeholder's balance (BALANCE MATH sign convention above):
+// sale/purchase -> -(unpaid), refund -> +(unpaid). Shared by stakeholderTxEffect below,
+// GET /api/transactions/:id (balance_effect) and PUT /api/transactions/:id (available store credit).
+export function transactionBalanceEffect(type: string, txId: number, total: number, paymentsTable: 'payments' | 'archived_payments' = 'payments'): number {
+  const unpaid = unpaidRealMoney(txId, total, paymentsTable);
+  if (type === 'sale' || type === 'purchase') return -unpaid;
+  if (type === 'refund') return unpaid;
+  return 0;
 }
 
 // Effect of one stakeholder's active transactions on their balance, in the sign convention above.
@@ -32,14 +47,7 @@ export function stakeholderTxEffect(stakeholderId: number, tenantId: number): nu
   ).all(stakeholderId, tenantId) as any[];
 
   let effect = 0;
-  for (const t of txns) {
-    const unpaid = unpaidNonCredit(t.id, t.total_amount);
-    if (t.type === 'sale' || t.type === 'purchase') {
-      effect -= unpaid;              // outstanding debt → more negative
-    } else if (t.type === 'refund') {
-      effect += unpaid;              // a refund unwinds a sale → toward zero
-    }
-  }
+  for (const t of txns) effect += transactionBalanceEffect(t.type, t.id, t.total_amount);
   return effect;
 }
 

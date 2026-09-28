@@ -4,7 +4,7 @@ import { Drawer, Button, Badge, Tabs, Checkbox, SkeletonTable } from '../../comp
 import { useToast, useConfirm } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime } from '../../lib/format';
+import { formatMoney, formatDateTime, formatBalance, paymentMethodLabel } from '../../lib/format';
 import RefundModal, { type RefundableResponse } from './RefundModal';
 import type { CurrencyRow, TxType } from './types';
 
@@ -288,7 +288,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
                       const cur = currencies.find((c) => c.code === p.currency) || USD;
                       return (
                         <div key={p.id} className="flex items-center justify-between rounded-md border border-border px-3 py-1.5 text-sm">
-                          <span className="capitalize text-text-2">{p.method}</span>
+                          <span className="text-text-2">{paymentMethodLabel(p.method, t)}</span>
                           <span className="num text-text">{formatMoney(Number(p.amount), cur)}</span>
                           <span className="num text-xs text-text-3">{formatMoney(Number(p.amount) / (p.exchange_rate || 1), USD)}</span>
                           <span className="text-xs text-text-3">{formatDateTime(p.created_at, lang)}</span>

@@ -13,6 +13,7 @@ function PriceCheckerBody() {
   const productRef = useRef<Product | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [businessName, setBusinessName] = useState('');
+  const [priceLevelsEnabled, setPriceLevelsEnabled] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -25,6 +26,7 @@ function PriceCheckerBody() {
       .then(settings => {
         if (settings.language) setLang(settings.language);
         if (settings.store_name) setBusinessName(settings.store_name);
+        setPriceLevelsEnabled(settings.enable_price_levels !== '0');
       });
 
     // Real-time Sync
@@ -45,6 +47,7 @@ function PriceCheckerBody() {
         fetch('/api/settings').then(res => res.json()).then(settings => {
           if (settings.language) setLang(settings.language);
           if (settings.store_name) setBusinessName(settings.store_name);
+          setPriceLevelsEnabled(settings.enable_price_levels !== '0');
         });
       }
     };
@@ -128,19 +131,23 @@ function PriceCheckerBody() {
                   </div>
                   <h2 className="text-5xl font-black uppercase tracking-tight">{product.name}</h2>
 
-                  <div className="grid grid-cols-3 gap-6 w-full">
+                  <div className={`grid gap-6 w-full ${priceLevelsEnabled ? 'grid-cols-3' : 'grid-cols-1'}`}>
                     <div className="p-4 bg-bg rounded-2xl border border-border">
                       <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_retail', 'Retail')}</p>
                       <p className="text-3xl font-black num">${(product.price || 0).toFixed(2)}</p>
                     </div>
-                    <div className="p-4 bg-bg rounded-2xl border border-border">
-                      <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_wholesale', 'Wholesale')}</p>
-                      <p className="text-3xl font-black num">${((product as any).price_wholesale || product.price || 0).toFixed(2)}</p>
-                    </div>
-                    <div className="p-4 bg-bg rounded-2xl border border-border">
-                      <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_super_wholesale', 'Super Wholesale')}</p>
-                      <p className="text-3xl font-black num">${((product as any).price_super_wholesale || (product as any).price_wholesale || product.price || 0).toFixed(2)}</p>
-                    </div>
+                    {priceLevelsEnabled && (
+                      <>
+                        <div className="p-4 bg-bg rounded-2xl border border-border">
+                          <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_wholesale', 'Wholesale')}</p>
+                          <p className="text-3xl font-black num">${((product as any).price_wholesale || product.price || 0).toFixed(2)}</p>
+                        </div>
+                        <div className="p-4 bg-bg rounded-2xl border border-border">
+                          <p className="text-[10px] font-black uppercase text-text-3 tracking-wide mb-1">{t('pos_tier_super_wholesale', 'Super Wholesale')}</p>
+                          <p className="text-3xl font-black num">${((product as any).price_super_wholesale || (product as any).price_wholesale || product.price || 0).toFixed(2)}</p>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <div className="text-4xl font-black text-success tracking-tight num">
