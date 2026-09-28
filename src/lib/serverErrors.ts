@@ -165,6 +165,22 @@ export function translateServerError(err: unknown, t: Translate): string {
       });
     case 'PRODUCT_DISABLED':
       return t('err_product_disabled', 'This product is disabled.');
+    case 'RESET_SCOPE_INVALID':
+      return t('err_reset_scope_invalid', 'Choose at least one kind of data to delete.');
+    case 'RESET_SCOPE_DEPENDENCY':
+      return t('err_reset_scope_dependency', 'Deleting products or customers and suppliers also requires deleting all transactions.');
+    case 'RESET_CONFIRM_REQUIRED':
+      return t('err_reset_confirm_required', 'Type DELETE (in capitals) to confirm.');
+    case 'RESET_PIN_INVALID':
+      return t('err_reset_pin_invalid', 'Incorrect admin PIN.');
+    case 'RESET_BACKUP_FAILED':
+      return t('err_reset_backup_failed', 'The safety backup could not be created, so nothing was deleted.');
+    case 'RESET_NEEDS_CLOUD':
+      return t('err_reset_needs_cloud', 'Connect to the internet and log in, then retry. The cloud copy must be deleted too.');
+    case 'RESET_CLOUD_FAILED':
+      return t('err_reset_cloud_failed', 'The cloud copy could not be deleted. Nothing was deleted on this computer. Check the connection and retry.');
+    case 'RESET_IN_PROGRESS':
+      return t('err_reset_in_progress', 'A reset is already running.');
     case 'UOM_INVALID':
       return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
   }

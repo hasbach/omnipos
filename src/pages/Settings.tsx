@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Store, Tag, Coins, Printer, Globe, Shield } from 'lucide-react';
+import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
@@ -10,8 +10,9 @@ import { CurrenciesSection } from './settings/CurrenciesSection';
 import { PrintersSection } from './settings/PrintersSection';
 import { AppearanceSection } from './settings/AppearanceSection';
 import { UpdatesSection } from './settings/UpdatesSection';
+import { DataResetSection } from './settings/DataResetSection';
 
-type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates';
+type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates' | 'reset';
 
 export default function Settings({ onShowUpdate }: { onShowUpdate: () => void }) {
   const { t } = useI18n();
@@ -32,13 +33,14 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
     return () => window.removeEventListener('pos-sync', handleSync);
   }, []);
 
-  const NAV: { key: SectionKey; label: string; icon: typeof Store }[] = [
+  const NAV: { key: SectionKey; label: string; icon: typeof Store; danger?: boolean }[] = [
     { key: 'general', label: t('set_nav_general'), icon: Store },
     { key: 'pricing', label: t('set_nav_pricing'), icon: Tag },
     { key: 'currencies', label: t('set_nav_currencies'), icon: Coins },
     { key: 'printers', label: t('set_nav_printers'), icon: Printer },
     { key: 'appearance', label: t('set_nav_appearance'), icon: Globe },
     { key: 'updates', label: t('set_nav_updates'), icon: Shield },
+    { key: 'reset', label: t('set_nav_reset'), icon: AlertTriangle, danger: true },
   ];
 
   return (
@@ -57,7 +59,9 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
                 onClick={() => setSection(item.key)}
                 className={[
                   'flex shrink-0 items-center gap-2 rounded-[var(--radius-input)] px-3 py-2 text-start text-sm font-medium transition-colors duration-150 cursor-pointer',
-                  active ? 'bg-primary-soft text-primary' : 'text-text-2 hover:bg-surface-2 hover:text-text',
+                  item.danger
+                    ? active ? 'bg-danger-soft text-danger' : 'text-danger hover:bg-danger-soft'
+                    : active ? 'bg-primary-soft text-primary' : 'text-text-2 hover:bg-surface-2 hover:text-text',
                 ].join(' ')}
               >
                 <Icon size={16} />
@@ -74,6 +78,7 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
           {section === 'printers' && <PrintersSection settings={settings} onSaved={fetchSettings} />}
           {section === 'appearance' && <AppearanceSection />}
           {section === 'updates' && <UpdatesSection tenant={tenant} onShowUpdate={onShowUpdate} />}
+          {section === 'reset' && <DataResetSection />}
         </div>
       </div>
     </div>

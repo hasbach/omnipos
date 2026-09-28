@@ -44,6 +44,28 @@ function getLocalId(tableName: string, globalId: string) {
 
 const SYNC_INTERVAL_MS = 10000; // 10 seconds
 
+// Tenant data reset support (server/tenantReset.ts). While a reset runs, NO push or pull may touch
+// the cloud or the local tables: an in-flight pull would re-insert rows the reset just deleted, and
+// an in-flight push would upsert rows back into the cloud right after they were purged.
+// `pauseSync()` raises the flag and waits for any cycle already in flight to drain (the loops below
+// check the flag between tables, so the wait is short); `resumeSync()` lowers it.
+let syncPaused = false;
+const inFlight = new Set<Promise<unknown>>();
+function track<T>(p: Promise<T>): Promise<T> {
+  inFlight.add(p);
+  const done = () => { inFlight.delete(p); };
+  p.then(done, done);
+  return p;
+}
+export function isSyncPaused(): boolean { return syncPaused; }
+export async function pauseSync(): Promise<void> {
+  syncPaused = true;
+  while (inFlight.size > 0) {
+    await Promise.allSettled([...inFlight]);
+  }
+}
+export function resumeSync(): void { syncPaused = false; }
+
 // Local columns the cloud table doesn't have yet (e.g. a new column like stakeholders.address
 // before its Supabase migration has been run). PostgREST rejects the WHOLE upsert with PGRST204
 // for one unknown column, so rather than blocking all sync for that table we learn the column
@@ -104,6 +126,7 @@ function syncableTenant(email: string): boolean {
  */
 async function pushToCloud(client: SupabaseClient, localId: number) {
   for (const tableName of PUSH_TABLES) {
+    if (syncPaused) return;
     if (cloudMissingTables.has(tableName)) continue;
     try {
       let queryStr = `SELECT * FROM ${tableName} WHERE (last_synced_at IS NULL OR updated_at > last_synced_at)`;
@@ -181,6 +204,7 @@ async function pullFromCloud(client: SupabaseClient, localId: number, globalId: 
   }
 
   for (const tableName of PULL_TABLES) {
+    if (syncPaused) return;
     if (cloudMissingTables.has(tableName)) continue;
     try {
       // Latest updated_at we already hold locally for this tenant (our pull cursor).
@@ -275,7 +299,11 @@ async function pullFromCloud(client: SupabaseClient, localId: number, globalId: 
  * One full sync cycle for the currently logged-in tenant. No-op if nobody is logged in
  * (no active cloud session) or the active account is a seed/super-admin account.
  */
-async function runSyncCycle() {
+function runSyncCycle(): Promise<void> {
+  if (syncPaused) return Promise.resolve();
+  return track(runSyncCycleInner());
+}
+async function runSyncCycleInner() {
   const session = getActiveSession();
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   await pushToCloud(session.client, session.localId);
@@ -288,7 +316,11 @@ async function runSyncCycle() {
 /**
  * Forces an immediate pull for the active tenant (used right after login to populate local data).
  */
-export async function forceInitialSync() {
+export function forceInitialSync(): Promise<void> {
+  if (syncPaused) return Promise.resolve();
+  return track(forceInitialSyncInner());
+}
+async function forceInitialSyncInner() {
   const session = getActiveSession();
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   console.log('⚡ [SYNC] Forcing initial pull for tenant...');
@@ -297,7 +329,11 @@ export async function forceInitialSync() {
   console.log('⚡ [SYNC] Initial pull complete.');
 }
 
-export async function forcePushToCloud() {
+export function forcePushToCloud(): Promise<void> {
+  if (syncPaused) return Promise.resolve();
+  return track(forcePushToCloudInner());
+}
+async function forcePushToCloudInner() {
   const session = getActiveSession();
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   await pushToCloud(session.client, session.localId);

@@ -14,6 +14,10 @@ if (process.env.NODE_ENV === 'production' || process.env.ELECTRON_RUN_AS_NODE) {
   sessionsDir = appDataDir;
 }
 
+// Absolute folder holding the database, resolved once at import time (dbPath may be relative to the
+// cwd of that moment). Backups (e.g. the pre-reset backup) live in a subfolder next to it.
+export const dbDir = path.dirname(path.resolve(dbPath));
+
 console.log(`Initializing database at: ${dbPath}`);
 
 export let db: any;

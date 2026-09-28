@@ -15,6 +15,7 @@ import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from 
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
 import { setupImportRoutes } from "./importer.js";
+import { setupTenantResetRoutes } from "./tenantReset.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
 import {
   loadUnitsByProduct, loadUnitsForProduct, loadUnit, normalizeUnitsPayload, assertBarcodesFree, saveProductUnits,
@@ -330,6 +331,7 @@ async function establishLogin(
 export function setupRoutes(app: any, wss: any, broadcast: Function, authenticate: any) {
   setupReportRoutes(app, authenticate);
   setupImportRoutes(app, authenticate, broadcast);
+  setupTenantResetRoutes(app, authenticate, broadcast, { purgeCloudTransactionalData });
   // API Routes
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
