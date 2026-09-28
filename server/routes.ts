@@ -1554,16 +1554,32 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       filterParams.push(stakeholder_id);
     }
     if (date_from) {
-      filter += " AND date(created_at) >= date(?)";
+      filter += " AND date(created_at, 'localtime') >= date(?)";
       filterParams.push(date_from);
     }
     if (date_to) {
-      filter += " AND date(created_at) <= date(?)";
+      filter += " AND date(created_at, 'localtime') <= date(?)";
       filterParams.push(date_to);
     }
 
+    if (req.query.q) {
+      // Invoice number, reference, or party name.
+      filter += " AND (CAST(id AS TEXT) = ? OR reference LIKE ? OR stakeholder_id IN (SELECT id FROM stakeholders WHERE tenant_id = ? AND name LIKE ?))";
+      filterParams.push(String(req.query.q), `%${req.query.q}%`, tenantId, `%${req.query.q}%`);
+    }
+    // Callers that page through history (Invoices screen) can ask for more than the POS's 200.
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || 200), 10) || 200, 1), 5000);
+
+    // paid_amount = real money received in USD (credit "on account" payments are not money), so the
+    // list can show paid / due / status without one detail request per row.
     const query = `
-    SELECT t.*, s.name as stakeholder_name, u.name as user_name
+    SELECT t.*, s.name as stakeholder_name, u.name as user_name,
+      CASE WHEN t.archived = 1
+        THEN (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM archived_payments WHERE transaction_id = t.id AND method != 'credit')
+        ELSE (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM payments WHERE transaction_id = t.id AND method != 'credit') END as paid_amount,
+      CASE WHEN t.archived = 1
+        THEN (SELECT COUNT(*) FROM archived_transaction_items WHERE transaction_id = t.id)
+        ELSE (SELECT COUNT(*) FROM transaction_items WHERE transaction_id = t.id) END as item_count
     FROM (
       SELECT ${TX_LIVE_COLUMNS}, 0 as archived FROM transactions WHERE tenant_id = ?${filter}
       UNION ALL
@@ -1571,7 +1587,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     ) t
     LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
     LEFT JOIN users u ON t.user_id = u.id
-    ORDER BY t.created_at DESC LIMIT 200`;
+    ORDER BY t.created_at DESC LIMIT ${limit}`;
     const params = [tenantId, ...filterParams, tenantId, ...filterParams];
 
     const transactions = db.prepare(query).all(...params);
@@ -2156,58 +2172,35 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const { status, supplier_id, from, to, search } = req.query;
 
-    let query = `
-    SELECT 
-      t.id,
-      t.created_at,
-      t.total_amount,
-      t.currency,
-      t.exchange_rate,
-      t.status,
-      t.terminal_id,
-      t.terminal_sequence,
-      t.discount_type,
-      t.discount_value,
-      t.tax_type,
-      t.tax_value,
-      s.name as supplier_name,
-      s.id as supplier_id,
-      (SELECT COUNT(*) FROM transaction_items WHERE transaction_id = t.id) as item_count,
-      (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM payments WHERE transaction_id = t.id) as paid_amount
-    FROM transactions t
-    LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
-    WHERE t.tenant_id = ? AND t.type = 'purchase'
-  `;
-    const params: any[] = [tenantId];
-
-    if (supplier_id) {
-      query += " AND t.stakeholder_id = ?";
-      params.push(supplier_id);
-    }
-    if (from) {
-      query += " AND date(t.created_at) >= date(?)";
-      params.push(from);
-    }
-    if (to) {
-      query += " AND date(t.created_at) <= date(?)";
-      params.push(to);
-    }
-    if (search) {
-      query += " AND s.name LIKE ?";
-      params.push(`%${search}%`);
-    }
-
-    // Filter by paid/unpaid status
-    if (status === 'paid') {
-      query += " AND (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM payments WHERE transaction_id = t.id)) <= 0.01";
-    } else if (status === 'unpaid') {
-      query += " AND (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM payments WHERE transaction_id = t.id)) > 0.01";
-    }
-
-    query += " ORDER BY t.created_at DESC";
+    // Settled purchases live in archived_* — list both, the same way invoice history does, or a
+    // supplier's older purchase invoices vanish from this screen after every End-of-Day settlement.
+    // paid_amount excludes 'credit' (on-account) payments: they are not money paid to the supplier.
+    const branch = (txTable: string, itemsTable: string, paymentsTable: string, archivedFlag: number) => {
+      let sql = `
+      SELECT
+        t.id, t.created_at, t.total_amount, t.currency, t.exchange_rate, t.status, t.terminal_id, t.terminal_sequence,
+        t.discount_type, t.discount_value, t.tax_type, t.tax_value, t.reference, t.notes, t.edited_at, t.edit_count,
+        s.name as supplier_name, s.id as supplier_id, ${archivedFlag} as archived,
+        (SELECT COUNT(*) FROM ${itemsTable} WHERE transaction_id = t.id) as item_count,
+        (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit') as paid_amount
+      FROM ${txTable} t
+      LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
+      WHERE t.tenant_id = ? AND t.type = 'purchase'`;
+      const params: any[] = [tenantId];
+      if (supplier_id) { sql += " AND t.stakeholder_id = ?"; params.push(supplier_id); }
+      if (from) { sql += " AND date(t.created_at, 'localtime') >= date(?)"; params.push(from); }
+      if (to) { sql += " AND date(t.created_at, 'localtime') <= date(?)"; params.push(to); }
+      if (search) { sql += " AND (s.name LIKE ? OR t.reference LIKE ? OR CAST(t.id AS TEXT) = ?)"; params.push(`%${search}%`, `%${search}%`, String(search)); }
+      const paid = `(SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit')`;
+      if (status === 'paid') sql += ` AND (t.total_amount - ${paid}) <= 0.01`;
+      else if (status === 'unpaid') sql += ` AND (t.total_amount - ${paid}) > 0.01`;
+      return { sql, params };
+    };
+    const live = branch("transactions", "transaction_items", "payments", 0);
+    const arch = branch("archived_transactions", "archived_transaction_items", "archived_payments", 1);
 
     try {
-      const purchases = db.prepare(query).all(...params);
+      const purchases = db.prepare(`SELECT * FROM (${live.sql} UNION ALL ${arch.sql}) ORDER BY created_at DESC`).all(...live.params, ...arch.params);
       res.json(purchases);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -2218,33 +2211,39 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const tenantId = req.session.tenantId;
     const { id } = req.params;
 
-    const purchase = db.prepare(`
-    SELECT 
+    const findIn = (txTable: string) => db.prepare(`
+    SELECT
       t.*,
       s.name as supplier_name,
       s.email as supplier_email,
       s.phone as supplier_phone,
       u.name as user_name
-    FROM transactions t
+    FROM ${txTable} t
     LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
     LEFT JOIN users u ON t.user_id = u.id
     WHERE t.id = ? AND t.tenant_id = ? AND t.type = 'purchase'
   `).get(id, tenantId) as any;
+    // A settled purchase has moved to the archive — fall back there so it can still be opened.
+    let purchase = findIn("transactions");
+    let archived = 0;
+    if (!purchase) { purchase = findIn("archived_transactions"); archived = 1; }
 
     if (!purchase) return res.status(404).json({ error: "Purchase order not found" });
+    purchase.archived = archived;
 
     const items = db.prepare(`
     SELECT ti.*, p.name as product_name, p.barcode, p.category, p.unit, p.cost, p.cost_lbp
-    FROM transaction_items ti
+    FROM ${archived ? "archived_transaction_items" : "transaction_items"} ti
     JOIN products p ON ti.product_id = p.id
     WHERE ti.transaction_id = ?
   `).all(id);
 
     const payments = db.prepare(`
-    SELECT * FROM payments WHERE transaction_id = ? ORDER BY created_at ASC
+    SELECT * FROM ${archived ? "archived_payments" : "payments"} WHERE transaction_id = ? ORDER BY created_at ASC
   `).all(id);
 
-    const paidAmount = (payments as any[]).reduce((sum: number, p: any) => sum + (p.amount / (p.exchange_rate || 1)), 0);
+    // Credit ("on account") payments are not money paid — same rule as balances and GET /api/transactions/:id.
+    const paidAmount = (payments as any[]).reduce((sum: number, p: any) => p.method === 'credit' ? sum : sum + (p.amount / (p.exchange_rate || 1)), 0);
 
     res.json({
       ...purchase,
