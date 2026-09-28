@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useI18n } from '../../../intl/index';
+import { formatNumber } from '../../../lib/format';
 
 export interface BarChartDatum {
   label: string;
@@ -16,6 +18,12 @@ export interface BarChartProps {
 }
 
 export function BarChart({ data, height = 220, width = 640, valueFormatter, horizontal, className = '' }: BarChartProps) {
+  let chartLabel = 'Bar chart';
+  try {
+    chartLabel = useI18n().t('ui_bar_chart', 'Bar chart');
+  } catch {
+    /* charts can be used outside I18nProvider in rare cases. */
+  }
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const padding = horizontal
     ? { top: 8, right: 40, bottom: 8, left: 96 }
@@ -23,14 +31,14 @@ export function BarChart({ data, height = 220, width = 640, valueFormatter, hori
   const innerW = width - padding.left - padding.right;
   const innerH = height - padding.top - padding.bottom;
   const max = Math.max(1, ...data.map((d) => d.value));
-  const fmt = valueFormatter || ((v: number) => v.toLocaleString());
+  const fmt = valueFormatter || ((v: number) => formatNumber(v, { decimals: 0 }));
   const n = data.length || 1;
 
   if (horizontal) {
     const barH = Math.min(28, innerH / n - 8);
     return (
       <div className={['relative w-full', className].join(' ')}>
-        <svg viewBox={`0 0 ${width} ${Math.max(height, n * (barH + 12))}`} className="w-full h-auto" role="img" aria-label="Bar chart">
+        <svg viewBox={`0 0 ${width} ${Math.max(height, n * (barH + 12))}`} className="w-full h-auto" role="img" aria-label={chartLabel}>
           <g transform={`translate(${padding.left},${padding.top})`}>
             {data.map((d, i) => {
               const y = i * (barH + 12);
@@ -66,7 +74,7 @@ export function BarChart({ data, height = 220, width = 640, valueFormatter, hori
 
   return (
     <div className={['relative w-full', className].join(' ')}>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" role="img" aria-label="Bar chart">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" role="img" aria-label={chartLabel}>
         <g transform={`translate(${padding.left},${padding.top})`}>
           <line x1={0} x2={innerW} y1={innerH} y2={innerH} stroke="var(--color-border)" strokeWidth={1} />
           {data.map((d, i) => {

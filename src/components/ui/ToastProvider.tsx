@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useMemo, useRef, useStat
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, Info, X, XCircle } from 'lucide-react';
+import { useI18n } from '../../intl/index';
 
 export type ToastVariant = 'success' | 'error' | 'info';
 
@@ -38,6 +39,12 @@ const VARIANT_CLASSES: Record<ToastVariant, string> = {
 };
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
+  let dismissLabel = 'Dismiss';
+  try {
+    dismissLabel = useI18n().t('ui_dismiss', 'Dismiss');
+  } catch {
+    /* ToastProvider can sit outside I18nProvider in rare cases. */
+  }
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const idRef = useRef(0);
 
@@ -97,7 +104,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                     </div>
                     <button
                       type="button"
-                      aria-label="Dismiss"
+                      aria-label={dismissLabel}
                       onClick={() => dismiss(t.id)}
                       className="shrink-0 cursor-pointer text-text-3 hover:text-text"
                     >

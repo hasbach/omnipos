@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Modal, Button, Field, Input, Textarea, Badge, IconButton } from './ui';
-import { formatMoney, formatBalance, paymentMethodLabel } from '../lib/format';
+import { formatMoney, formatBalance, paymentMethodLabel, formatTime, formatDate, formatNumber } from '../lib/format';
 
 const QUICK_CASH_STEPS = [5, 10, 20, 50, 100];
 
@@ -30,7 +30,7 @@ export default function PaymentModal() {
     fetchDailyHistory, handleRefund, handleBarcodeSubmit,
     handleSuggestionClick, handleCheckout, printReceipt, totalUSD, dailyTransactions,
     showDailyHistory, setShowDailyHistory,
-    t, barcodeRef, showDebtModal, setShowDebtModal, handleReceiveDebt,
+    t, lang, barcodeRef, showDebtModal, setShowDebtModal, handleReceiveDebt,
     terminalId, editingCustomerId, closeCustomerModal, handleCreateCustomer, isDarkMode,
   } = pos as any;
   // What is left of the customer's positive balance after the store-credit payments already added to
@@ -163,7 +163,7 @@ export default function PaymentModal() {
                           <div className="text-xl font-bold">{p.name}</div>
                           <div className="text-end">
                             <div className="text-2xl font-mono font-black num">${(p.price || 0).toFixed(2)}</div>
-                            <div className="text-lg font-mono font-bold text-success num">{(p.price_lbp || Math.round((p.price || 0) * 89500)).toLocaleString()} LL</div>
+                            <div className="text-lg font-mono font-bold text-success num">{formatNumber(p.price_lbp || Math.round((p.price || 0) * 89500), { decimals: 0 })} LL</div>
                           </div>
                         </button>
                       ))}
@@ -197,7 +197,7 @@ export default function PaymentModal() {
                       </div>
                     </div>
                     <div className="text-4xl font-black text-success tracking-tight mt-6 text-center num">
-                      {(last.price_lbp || Math.round((last.price || 0) * 89500)).toLocaleString()} LL
+                      {formatNumber(last.price_lbp || Math.round((last.price || 0) * 89500), { decimals: 0 })} LL
                     </div>
                   </motion.div>
                 );
@@ -228,19 +228,19 @@ export default function PaymentModal() {
               <table className="w-full text-start border-collapse">
                 <thead>
                   <tr className="bg-surface-2 text-text-2 text-[10px] uppercase tracking-wide font-bold">
-                    <th className="p-3 text-start">ID</th>
-                    <th className="p-3 text-start">Time</th>
-                    <th className="p-3 text-start">Customer</th>
-                    <th className="p-3 text-start">User</th>
-                    <th className="p-3 text-end">Total</th>
-                    <th className="p-3 text-center">Type</th>
+                    <th className="p-3 text-start">{t('pos_hist_id', 'ID')}</th>
+                    <th className="p-3 text-start">{t('pos_hist_time', 'Time')}</th>
+                    <th className="p-3 text-start">{t('pos_hist_customer', 'Customer')}</th>
+                    <th className="p-3 text-start">{t('pos_hist_user', 'User')}</th>
+                    <th className="p-3 text-end">{t('pos_hist_total', 'Total')}</th>
+                    <th className="p-3 text-center">{t('pos_hist_type', 'Type')}</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm">
                   {loadingHistory ? (
-                    <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">Loading history...</td></tr>
+                    <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">{t('pos_hist_loading', 'Loading history...')}</td></tr>
                   ) : dailyTransactions.length === 0 ? (
-                    <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">No transactions found for this date.</td></tr>
+                    <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">{t('pos_hist_no_transactions', 'No transactions found for this date.')}</td></tr>
                   ) : (
                     dailyTransactions.map((tr: any) => (
                       <tr
@@ -249,12 +249,14 @@ export default function PaymentModal() {
                         className={`border-b border-border hover:bg-surface-2 transition-colors cursor-pointer ${selectedHistoryTransaction?.id === tr.id ? 'bg-primary-soft' : ''}`}
                       >
                         <td className="p-3 font-mono font-bold text-text">{formatTxId(tr)}</td>
-                        <td className="p-3 text-text-3">{new Date(tr.created_at).toLocaleTimeString()}</td>
-                        <td className="p-3 font-semibold text-text">{tr.stakeholder_name || 'Walk-in'}</td>
-                        <td className="p-3 text-text-2">{tr.user_name || 'System'}</td>
+                        <td className="p-3 text-text-3">{formatTime(tr.created_at, lang, { seconds: true })}</td>
+                        <td className="p-3 font-semibold text-text">{tr.stakeholder_name || t('pos_walk_in', 'Walk-in')}</td>
+                        <td className="p-3 text-text-2">{tr.user_name || t('pos_hist_system', 'System')}</td>
                         <td className="p-3 text-end font-mono font-bold num text-text">${tr.total_amount.toFixed(2)}</td>
                         <td className="p-3 text-center">
-                          <Badge variant={tr.type === 'refund' ? 'danger' : tr.type === 'purchase' ? 'info' : 'success'}>{tr.type}</Badge>
+                          <Badge variant={tr.type === 'refund' ? 'danger' : tr.type === 'purchase' ? 'info' : 'success'}>
+                            {tr.type === 'sale' ? t('pos_type_sale', 'sale') : tr.type === 'refund' ? t('pos_type_refund', 'refund') : tr.type === 'purchase' ? t('pos_type_purchase', 'purchase') : tr.type}
+                          </Badge>
                         </td>
                       </tr>
                     ))
@@ -305,7 +307,7 @@ export default function PaymentModal() {
               )}
             </div>
             <div className="text-xl font-black font-mono num text-text">
-              Total: ${dailyTransactions.reduce((sum: number, tr: any) => sum + (tr.type === 'refund' || tr.type === 'purchase' ? -tr.total_amount : tr.total_amount), 0).toFixed(2)}
+              {t('pos_hist_total_label', 'Total:')} ${dailyTransactions.reduce((sum: number, tr: any) => sum + (tr.type === 'refund' || tr.type === 'purchase' ? -tr.total_amount : tr.total_amount), 0).toFixed(2)}
             </div>
           </div>
         </div>
@@ -482,8 +484,8 @@ export default function PaymentModal() {
                         <span className="text-xs font-bold text-text">{paymentMethodLabel(p.method, t)}</span>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className="font-mono text-xs font-bold num text-text">{p.amount.toLocaleString()} {p.currency}</span>
-                        <IconButton aria-label="Remove payment" size="sm" onClick={() => setPayments((prev: any) => prev.filter((_: any, i: number) => i !== idx))}>
+                        <span className="font-mono text-xs font-bold num text-text">{formatNumber(p.amount, { decimals: 0 })} {p.currency}</span>
+                        <IconButton aria-label={t('pos_remove_payment', 'Remove payment')} size="sm" onClick={() => setPayments((prev: any) => prev.filter((_: any, i: number) => i !== idx))}>
                           <Trash2 size={12} />
                         </IconButton>
                       </div>
@@ -570,7 +572,7 @@ export default function PaymentModal() {
                             onClick={() => setPaymentAmount(String(rounded))}
                             className="px-2.5 py-1.5 min-h-[32px] rounded-md text-[10px] font-bold border border-border text-text-2 hover:border-primary hover:text-primary transition-all cursor-pointer num"
                           >
-                            {paymentCurrency.symbol}{rounded.toLocaleString()}
+                            {paymentCurrency.symbol}{formatNumber(rounded, { decimals: 0 })}
                           </button>
                         );
                       })}
@@ -759,7 +761,7 @@ export default function PaymentModal() {
         </div>
         <div className="flex gap-4">
           <span className="opacity-70">{t('pos_user_label', 'User: {name}', { name: currentUser?.name || 'Admin' })}</span>
-          <span>{new Date().toLocaleDateString()}</span>
+          <span>{formatDate(new Date(), lang)}</span>
         </div>
       </footer>
     </>

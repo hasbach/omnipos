@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { ShoppingCart, Activity, Banknote } from 'lucide-react';
+import { ShoppingCart, Activity, Banknote, Globe } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from './lib/supabase';
 import LiveMonitorWeb from './pages/LiveMonitorWeb';
 import OnlineSale from './pages/OnlineSale';
 import SuperAdminWeb from './pages/SuperAdminWeb';
 import { Tenant } from './types';
+import { I18nProvider, useI18n } from './intl/index';
+import type { Language } from './i18n';
 
 // Columns only — deliberately excludes `password` (the bcrypt hash) so it's never
 // transmitted to the browser at all, let alone stored anywhere client-side.
@@ -17,7 +19,32 @@ const TENANT_COLUMNS = 'global_id, local_id, name, email, local_license_type, lo
 const SUPER_ADMIN_LOGIN = 'hasbach';
 const SUPER_ADMIN_AUTH_EMAIL = 'hsalloum60+superadmin@gmail.com';
 
-export default function MonitorApp() {
+const LANGUAGE_OPTIONS: { value: Language; label: string }[] = [
+  { value: 'en', label: 'English' },
+  { value: 'ar', label: 'العربية' },
+  { value: 'fr', label: 'Français' },
+];
+
+function LanguageSwitch() {
+  const { lang, setLang } = useI18n();
+  return (
+    <div className="flex items-center gap-1 bg-app-bg border border-app-border rounded-lg px-2 py-1.5">
+      <Globe size={13} className="opacity-40" />
+      <select
+        className="bg-transparent text-xs font-bold uppercase outline-none"
+        value={lang}
+        onChange={(e) => setLang(e.target.value as Language)}
+      >
+        {LANGUAGE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function MonitorAppInner() {
+  const { t } = useI18n();
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [view, setView] = useState<'monitor' | 'sale'>('monitor');
   const [isAuthLoading, setIsAuthLoading] = useState(true);
@@ -75,14 +102,14 @@ export default function MonitorApp() {
       });
 
       if (error || !data.user) {
-        setAuthError('Invalid email or password');
+        setAuthError(t('web_invalid_credentials', 'Invalid email or password'));
         setIsProcessing(false);
         return;
       }
 
       await fetchTenantForSession(data.user.id);
     } catch (err) {
-      setAuthError('Network error connecting to cloud');
+      setAuthError(t('web_network_error', 'Network error connecting to cloud'));
     } finally {
       setIsProcessing(false);
     }
@@ -93,7 +120,7 @@ export default function MonitorApp() {
     setTenant(null);
   };
 
-  if (isAuthLoading) return <div className="h-screen bg-app-bg text-white flex items-center justify-center font-mono">LOADING SYSTEM...</div>;
+  if (isAuthLoading) return <div className="h-screen bg-app-bg text-white flex items-center justify-center font-mono">{t('web_loading_system', 'LOADING SYSTEM...')}</div>;
 
   if (!tenant) {
     return (
@@ -108,29 +135,32 @@ export default function MonitorApp() {
               <ShoppingCart size={32} />
             </div>
             <div className="text-center">
-              <h1 className="text-2xl font-bold tracking-tight uppercase">OmniPOS Live Monitor</h1>
-              <p className="text-xs opacity-50 font-mono mt-1">REMOTE DASHBOARD PWA</p>
+              <h1 className="text-2xl font-bold tracking-tight uppercase">{t('web_live_monitor_title', 'OmniPOS Live Monitor')}</h1>
+              <p className="text-xs opacity-50 font-mono mt-1">{t('web_remote_dashboard', 'REMOTE DASHBOARD PWA')}</p>
             </div>
           </div>
-          
+
           <div className="p-8">
+            <div className="flex justify-end mb-4">
+              <LanguageSwitch />
+            </div>
             <form onSubmit={handleLogin} className="flex flex-col gap-4">
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold uppercase opacity-50 ml-1">Business Email</label>
-                <input 
+                <label className="text-[10px] font-bold uppercase opacity-50 ml-1">{t('web_business_email', 'Business Email')}</label>
+                <input
                   required
-                  type="text" 
-                  placeholder="name@company.com"
+                  type="text"
+                  placeholder={t('web_email_placeholder', 'name@company.com')}
                   className="w-full px-4 py-3 bg-app-bg border border-app-border rounded-xl outline-none focus:border-app-ink transition-all"
                   value={authForm.email}
                   onChange={e => setAuthForm({ ...authForm, email: e.target.value })}
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold uppercase opacity-50 ml-1">Password</label>
-                <input 
+                <label className="text-[10px] font-bold uppercase opacity-50 ml-1">{t('web_password', 'Password')}</label>
+                <input
                   required
-                  type="password" 
+                  type="password"
                   placeholder="••••••••"
                   className="w-full px-4 py-3 bg-app-bg border border-app-border rounded-xl outline-none focus:border-app-ink transition-all"
                   value={authForm.password}
@@ -144,12 +174,12 @@ export default function MonitorApp() {
                 </div>
               )}
 
-              <button 
+              <button
                 disabled={isProcessing}
                 type="submit"
                 className="w-full bg-app-ink text-app-bg py-4 rounded-xl font-bold uppercase tracking-widest mt-4 hover:opacity-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {isProcessing ? 'Connecting...' : 'Access Monitor'}
+                {isProcessing ? t('web_connecting', 'Connecting...') : t('web_access_monitor', 'Access Monitor')}
               </button>
             </form>
           </div>
@@ -168,12 +198,15 @@ export default function MonitorApp() {
             </div>
             <div>
               <h1 className="font-bold text-sm uppercase">{tenant.name}</h1>
-              <p className="text-[10px] opacity-50 font-mono tracking-widest">SUPER ADMIN</p>
+              <p className="text-[10px] opacity-50 font-mono tracking-widest">{t('web_super_admin', 'SUPER ADMIN')}</p>
             </div>
           </div>
-          <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
-            Logout
-          </button>
+          <div className="flex items-center gap-2">
+            <LanguageSwitch />
+            <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
+              {t('web_logout', 'Logout')}
+            </button>
+          </div>
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <SuperAdminWeb />
@@ -191,7 +224,7 @@ export default function MonitorApp() {
           </div>
           <div>
             <h1 className="font-bold text-sm uppercase">{tenant.name}</h1>
-            <p className="text-[10px] opacity-50 font-mono tracking-widest">LIVE MONITOR</p>
+            <p className="text-[10px] opacity-50 font-mono tracking-widest">{t('web_live_monitor_badge', 'LIVE MONITOR')}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -200,17 +233,18 @@ export default function MonitorApp() {
               onClick={() => setView('monitor')}
               className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all ${view === 'monitor' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
             >
-              <Activity size={12} /> Live Monitor
+              <Activity size={12} /> {t('web_live_monitor_tab', 'Live Monitor')}
             </button>
             <button
               onClick={() => setView('sale')}
               className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all ${view === 'sale' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
             >
-              <Banknote size={12} /> Make a Sale
+              <Banknote size={12} /> {t('web_make_a_sale', 'Make a Sale')}
             </button>
           </div>
+          <LanguageSwitch />
           <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
-            Logout
+            {t('web_logout', 'Logout')}
           </button>
         </div>
       </header>
@@ -218,5 +252,13 @@ export default function MonitorApp() {
         {view === 'monitor' ? <LiveMonitorWeb tenant={tenant} /> : <OnlineSale tenant={tenant} />}
       </main>
     </div>
+  );
+}
+
+export default function MonitorApp() {
+  return (
+    <I18nProvider>
+      <MonitorAppInner />
+    </I18nProvider>
   );
 }

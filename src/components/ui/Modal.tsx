@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useFocusTrap } from './useFocusTrap';
 import { IconButton } from './IconButton';
+import { useI18n } from '../../intl/index';
 
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'full';
 
@@ -27,6 +28,12 @@ export interface ModalProps {
 
 export function Modal({ open, onClose, title, size = 'md', footer, children, className = '' }: ModalProps) {
   const ref = useFocusTrap<HTMLDivElement>(open, onClose);
+  let closeLabel = 'Close';
+  try {
+    closeLabel = useI18n().t('ui_close', 'Close');
+  } catch {
+    /* Modal can be used outside I18nProvider in rare cases. */
+  }
 
   return createPortal(
     <AnimatePresence>
@@ -61,7 +68,7 @@ export function Modal({ open, onClose, title, size = 'md', footer, children, cla
             {title && (
               <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
                 <h2 className="text-base font-semibold text-text">{title}</h2>
-                <IconButton aria-label="Close" size="sm" onClick={onClose}>
+                <IconButton aria-label={closeLabel} size="sm" onClick={onClose}>
                   <X size={16} />
                 </IconButton>
               </div>

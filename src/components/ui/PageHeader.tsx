@@ -1,5 +1,6 @@
 import React from 'react';
 import { ChevronRight } from 'lucide-react';
+import { useI18n } from '../../intl/index';
 
 export interface Breadcrumb {
   label: string;
@@ -15,11 +16,17 @@ export interface PageHeaderProps {
 }
 
 export function PageHeader({ title, subtitle, breadcrumbs, actions, className = '' }: PageHeaderProps) {
+  let breadcrumbLabel = 'Breadcrumb';
+  try {
+    breadcrumbLabel = useI18n().t('ui_breadcrumb', 'Breadcrumb');
+  } catch {
+    /* PageHeader can be used outside I18nProvider in rare cases. */
+  }
   return (
     <div className={['flex flex-col gap-2 pb-4 sm:flex-row sm:items-center sm:justify-between', className].join(' ')}>
       <div className="min-w-0">
         {breadcrumbs && breadcrumbs.length > 0 && (
-          <nav className="mb-1 flex items-center gap-1 text-xs text-text-3" aria-label="Breadcrumb">
+          <nav className="mb-1 flex items-center gap-1 text-xs text-text-3" aria-label={breadcrumbLabel}>
             {breadcrumbs.map((b, i) => (
               <React.Fragment key={i}>
                 {i > 0 && <ChevronRight size={12} className="rtl:rotate-180" aria-hidden="true" />}

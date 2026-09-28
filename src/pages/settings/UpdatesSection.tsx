@@ -19,6 +19,12 @@ function licenseActive(type?: string, expiry?: string): boolean {
 
 export function UpdatesSection({ tenant, onShowUpdate }: UpdatesSectionProps) {
   const { t, lang } = useI18n();
+  // License types are stored as 'year' | 'lifetime' (local) and 'monthly' | 'lifetime' (online).
+  const licenseTypeLabel = (type?: string | null) =>
+    type === 'lifetime' ? t('sa_lifetime', 'Lifetime')
+      : type === 'monthly' ? t('sa_monthly', 'Monthly')
+      : type === 'year' || type === 'yearly' ? t('sa_yearly', 'Yearly')
+      : (type || '');
   const [updateState, setUpdateState] = useState<UpdateState>('idle');
   const [updateInfo, setUpdateInfo] = useState<{ version?: string; percent?: number; message?: string }>({});
 
@@ -111,7 +117,7 @@ export function UpdatesSection({ tenant, onShowUpdate }: UpdatesSectionProps) {
                 </span>
                 <Badge variant={localActive ? 'success' : 'danger'}>{localActive ? t('set_license_active') : t('set_license_expired')}</Badge>
               </div>
-              <p className="text-lg font-bold capitalize text-text">{tenant.local_license_type}</p>
+              <p className="text-lg font-bold capitalize text-text">{licenseTypeLabel(tenant.local_license_type)}</p>
               {tenant.local_license_type !== 'lifetime' && tenant.local_license_expiry && (
                 <p className="text-xs text-text-3">{t('set_license_expires').replace('{date}', new Date(tenant.local_license_expiry).toLocaleDateString(dateLocale))}</p>
               )}
@@ -124,7 +130,7 @@ export function UpdatesSection({ tenant, onShowUpdate }: UpdatesSectionProps) {
                 </span>
                 <Badge variant={onlineActive ? 'success' : 'danger'}>{onlineActive ? t('set_license_active') : t('set_license_expired')}</Badge>
               </div>
-              <p className="text-lg font-bold capitalize text-text">{tenant.online_license_type}</p>
+              <p className="text-lg font-bold capitalize text-text">{licenseTypeLabel(tenant.online_license_type)}</p>
               {tenant.online_license_type !== 'lifetime' && tenant.online_license_expiry && (
                 <p className="text-xs text-text-3">{t('set_license_expires').replace('{date}', new Date(tenant.online_license_expiry).toLocaleDateString(dateLocale))}</p>
               )}

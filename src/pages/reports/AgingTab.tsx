@@ -11,15 +11,15 @@ export interface AgingTabProps extends ReportTabProps {
   onOpenStatement?: (stakeholderId: number) => void;
 }
 
-function StackedBar({ row, total }: { row: AgingRow; total: number }) {
+function StackedBar({ row, total, t }: { row: AgingRow; total: number; t: (key: string, fallback?: string) => string }) {
   if (total <= 0) return null;
   const pct = (n: number) => `${Math.max(0, (n / total) * 100)}%`;
   return (
     <div className="flex h-2 w-28 overflow-hidden rounded-full bg-surface-2">
-      <div style={{ width: pct(row.current) }} className="bg-success" title="Current" />
-      <div style={{ width: pct(row.d31_60) }} className="bg-info" title="31-60" />
-      <div style={{ width: pct(row.d61_90) }} className="bg-accent" title="61-90" />
-      <div style={{ width: pct(row.d90_plus) }} className="bg-danger" title="90+" />
+      <div style={{ width: pct(row.current) }} className="bg-success" title={t('rep_aging_current', 'Current')} />
+      <div style={{ width: pct(row.d31_60) }} className="bg-info" title={t('rep_aging_31_60', '31–60')} />
+      <div style={{ width: pct(row.d61_90) }} className="bg-accent" title={t('rep_aging_61_90', '61–90')} />
+      <div style={{ width: pct(row.d90_plus) }} className="bg-danger" title={t('rep_aging_90_plus', '90+')} />
     </div>
   );
 }
@@ -52,7 +52,7 @@ export function AgingTab({ businessName, onOpenStatement }: AgingTabProps) {
     { key: 'd61_90', header: t('rep_aging_61_90', '61–90'), sortable: true, align: 'end', render: (r) => usd(r.d61_90) },
     { key: 'd90_plus', header: t('rep_aging_90_plus', '90+'), sortable: true, align: 'end', render: (r) => <span className={r.d90_plus > 0 ? 'text-danger font-semibold' : ''}>{usd(r.d90_plus)}</span> },
     { key: 'total', header: t('rep_aging_total', 'Total outstanding'), sortable: true, align: 'end', sortValue: outstanding, render: (r) => usd(outstanding(r)) },
-    { key: 'mix', header: t('rep_aging_mix', 'Mix'), render: (r) => <StackedBar row={r} total={outstanding(r)} /> },
+    { key: 'mix', header: t('rep_aging_mix', 'Mix'), render: (r) => <StackedBar row={r} total={outstanding(r)} t={t} /> },
   ];
 
   const exportColumns: ExportColumn<AgingRow>[] = [

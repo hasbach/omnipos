@@ -3,6 +3,7 @@ import { Search, Plus, Minus, Trash2, ShoppingCart, Banknote, CreditCard, CheckC
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Tenant } from '../types';
+import { useI18n } from '../intl/index';
 
 // Minimal emergency fallback for when the local register is unreachable.
 // Deliberately out of scope: purchases, receipt printing, product create/edit/delete,
@@ -46,6 +47,7 @@ function lineTotal(item: CartLine): number {
 }
 
 export default function OnlineSale({ tenant }: { tenant: Tenant }) {
+  const { t } = useI18n();
   const [products, setProducts] = useState<OnlineProduct[]>([]);
   const [stakeholders, setStakeholders] = useState<OnlineStakeholder[]>([]);
   const [users, setUsers] = useState<OnlineUser[]>([]);
@@ -115,7 +117,7 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
   const handleCompleteSale = async () => {
     if (cart.length === 0) return;
     if (method === 'credit' && !selectedStakeholderId) {
-      setError('Select a customer for a credit sale.');
+      setError(t('web_select_customer_credit', 'Select a customer for a credit sale.'));
       return;
     }
 
@@ -132,7 +134,7 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
       });
 
       if (rpcError) {
-        setError(rpcError.message || 'Failed to record sale');
+        setError(rpcError.message || t('web_failed_to_record_sale', 'Failed to record sale'));
         return;
       }
 
@@ -141,20 +143,20 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
       setCart([]);
       setIdempotencyKey(crypto.randomUUID());
     } catch (err: any) {
-      setError(err.message || 'Network error connecting to cloud');
+      setError(err.message || t('web_network_error', 'Network error connecting to cloud'));
     } finally {
       setIsProcessing(false);
     }
   };
 
   if (loading) {
-    return <div className="p-20 text-center opacity-30 font-black uppercase tracking-widest">Loading catalog...</div>;
+    return <div className="p-20 text-center opacity-30 font-black uppercase tracking-widest">{t('web_loading_catalog', 'Loading catalog...')}</div>;
   }
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <div className="p-4 bg-orange-500/10 border border-orange-500/20 rounded-2xl text-orange-600 text-sm font-bold text-center">
-        Emergency mode — use this only when the local register is unreachable. Cash or credit sales only.
+        {t('web_emergency_mode', 'Emergency mode — use this only when the local register is unreachable. Cash or credit sales only.')}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -165,7 +167,7 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
               <input
                 type="text"
-                placeholder="Search products..."
+                placeholder={t('web_search_products', 'Search products...')}
                 className="w-full pl-12 pr-4 py-3 bg-app-bg border border-app-border rounded-xl outline-none focus:border-app-ink transition-all"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
@@ -184,7 +186,7 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
               </button>
             ))}
             {filteredProducts.length === 0 && (
-              <p className="col-span-full text-center opacity-30 py-12 font-bold uppercase text-xs tracking-widest">No products found</p>
+              <p className="col-span-full text-center opacity-30 py-12 font-bold uppercase text-xs tracking-widest">{t('web_no_products_found', 'No products found')}</p>
             )}
           </div>
         </div>
@@ -193,12 +195,12 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
         <div className="bg-app-surface border border-app-border rounded-[32px] overflow-hidden shadow-xl flex flex-col">
           <div className="p-6 border-b border-app-border flex items-center gap-2">
             <ShoppingCart size={18} />
-            <h3 className="font-black uppercase tracking-widest text-xs">Cart</h3>
+            <h3 className="font-black uppercase tracking-widest text-xs">{t('web_cart', 'Cart')}</h3>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-2 max-h-[40vh]">
             {cart.length === 0 ? (
-              <p className="text-center opacity-30 py-12 font-bold uppercase text-xs tracking-widest">Cart is empty</p>
+              <p className="text-center opacity-30 py-12 font-bold uppercase text-xs tracking-widest">{t('web_cart_empty', 'Cart is empty')}</p>
             ) : (
               cart.map(item => (
                 <div key={item.global_id} className="p-3 bg-app-bg rounded-xl flex items-center justify-between gap-2">
@@ -219,13 +221,13 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
 
           <div className="p-6 border-t border-app-border space-y-4">
             <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase opacity-50 flex items-center gap-1"><User size={12} /> Customer</label>
+              <label className="text-[10px] font-black uppercase opacity-50 flex items-center gap-1"><User size={12} /> {t('web_customer', 'Customer')}</label>
               <select
                 className="w-full p-2.5 bg-app-bg border border-app-border rounded-lg text-sm outline-none"
                 value={selectedStakeholderId}
                 onChange={e => setSelectedStakeholderId(e.target.value)}
               >
-                <option value="">Walk-in (no customer)</option>
+                <option value="">{t('web_walkin_no_customer', 'Walk-in (no customer)')}</option>
                 {stakeholders.map(s => (
                   <option key={s.global_id} value={s.global_id}>{s.name}</option>
                 ))}
@@ -234,13 +236,13 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
 
             {users.length > 0 && (
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase opacity-50">Staff (optional)</label>
+                <label className="text-[10px] font-black uppercase opacity-50">{t('web_staff_optional', 'Staff (optional)')}</label>
                 <select
                   className="w-full p-2.5 bg-app-bg border border-app-border rounded-lg text-sm outline-none"
                   value={selectedUserId}
                   onChange={e => setSelectedUserId(e.target.value)}
                 >
-                  <option value="">Unassigned</option>
+                  <option value="">{t('web_unassigned', 'Unassigned')}</option>
                   {users.map(u => (
                     <option key={u.global_id} value={u.global_id}>{u.name}</option>
                   ))}
@@ -253,18 +255,18 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
                 onClick={() => setMethod('cash')}
                 className={`p-3 rounded-xl font-black uppercase text-xs flex items-center justify-center gap-2 transition-all ${method === 'cash' ? 'bg-app-ink text-app-bg' : 'bg-app-bg border border-app-border'}`}
               >
-                <Banknote size={14} /> Cash
+                <Banknote size={14} /> {t('web_cash', 'Cash')}
               </button>
               <button
                 onClick={() => setMethod('credit')}
                 className={`p-3 rounded-xl font-black uppercase text-xs flex items-center justify-center gap-2 transition-all ${method === 'credit' ? 'bg-app-ink text-app-bg' : 'bg-app-bg border border-app-border'}`}
               >
-                <CreditCard size={14} /> Credit
+                <CreditCard size={14} /> {t('web_credit', 'Credit')}
               </button>
             </div>
 
             <div className="flex items-center justify-between py-2">
-              <span className="text-xs font-bold uppercase opacity-50">Total</span>
+              <span className="text-xs font-bold uppercase opacity-50">{t('web_total', 'Total')}</span>
               <span className="text-2xl font-black font-mono">${total.toFixed(2)}</span>
             </div>
 
@@ -277,7 +279,7 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
               disabled={cart.length === 0 || isProcessing}
               className="w-full py-4 bg-emerald-600 text-white rounded-xl font-black uppercase text-xs tracking-widest hover:opacity-90 transition-all disabled:opacity-40"
             >
-              {isProcessing ? 'Recording...' : 'Complete Sale'}
+              {isProcessing ? t('web_recording', 'Recording...') : t('web_complete_sale', 'Complete Sale')}
             </button>
           </div>
         </div>
@@ -290,11 +292,11 @@ export default function OnlineSale({ tenant }: { tenant: Tenant }) {
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-app-surface w-full max-w-sm rounded-2xl shadow-2xl border border-app-border p-8 text-center space-y-4">
               <CheckCircle2 size={56} className="mx-auto text-emerald-500" />
               <div>
-                <p className="font-black uppercase tracking-widest">Sale Recorded</p>
+                <p className="font-black uppercase tracking-widest">{t('web_sale_recorded', 'Sale Recorded')}</p>
                 <p className="text-2xl font-black font-mono mt-1">${successTotal.toFixed(2)}</p>
               </div>
-              <p className="text-xs opacity-50">Will sync to the register when it's back online.</p>
-              <button onClick={() => setSuccessTotal(null)} className="w-full py-3 bg-app-ink text-app-bg rounded-xl font-black uppercase text-xs">Close</button>
+              <p className="text-xs opacity-50">{t('web_will_sync', "Will sync to the register when it's back online.")}</p>
+              <button onClick={() => setSuccessTotal(null)} className="w-full py-3 bg-app-ink text-app-bg rounded-xl font-black uppercase text-xs">{t('web_close', 'Close')}</button>
             </motion.div>
           </div>
         )}

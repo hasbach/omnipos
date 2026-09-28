@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
 import { resolveDateRangePreset, type DateRange, type DateRangePreset } from '../../lib/format';
 import { Button } from './Button';
+import { useI18n } from '../../intl/index';
 
 export interface DateRangePickerProps {
   value: DateRange;
@@ -9,17 +10,17 @@ export interface DateRangePickerProps {
   className?: string;
 }
 
-const PRESETS: { value: DateRangePreset; label: string }[] = [
-  { value: 'today', label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: 'this_week', label: 'This week' },
-  { value: 'this_month', label: 'This month' },
-  { value: 'last_month', label: 'Last month' },
-  { value: 'this_year', label: 'This year' },
-  { value: 'custom', label: 'Custom' },
-];
-
 export function DateRangePicker({ value, onChange, className = '' }: DateRangePickerProps) {
+  const { t } = useI18n();
+  const PRESETS: { value: DateRangePreset; label: string }[] = [
+    { value: 'today', label: t('ui_preset_today', 'Today') },
+    { value: 'yesterday', label: t('ui_preset_yesterday', 'Yesterday') },
+    { value: 'this_week', label: t('ui_preset_this_week', 'This week') },
+    { value: 'this_month', label: t('ui_preset_this_month', 'This month') },
+    { value: 'last_month', label: t('ui_preset_last_month', 'Last month') },
+    { value: 'this_year', label: t('ui_preset_this_year', 'This year') },
+    { value: 'custom', label: t('ui_preset_custom', 'Custom') },
+  ];
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState<DateRange>(value);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -88,7 +89,7 @@ export function DateRangePicker({ value, onChange, className = '' }: DateRangePi
               />
             </div>
             <Button variant="primary" size="sm" className="w-full" onClick={applyCustom}>
-              Apply
+              {t('ui_apply', 'Apply')}
             </Button>
           </div>
         </div>

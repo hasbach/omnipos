@@ -2750,7 +2750,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         paperWidth: printer.paper_width,
         transaction,
         openDrawer: !!openDrawer,
-        arabic: printerArabicMode(printer)
+        arabic: printerArabicMode(printer),
+        language: settings.language
       });
 
       await sendToPrinter(printer, buffer);

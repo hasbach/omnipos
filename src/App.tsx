@@ -79,7 +79,7 @@ function AuthScreen({
               <Input
                 required
                 type="text"
-                placeholder="e.g. name@company.com"
+                placeholder={t('pos_email_placeholder', 'e.g. name@company.com')}
                 value={authForm.email}
                 onChange={e => setAuthForm({ ...authForm, email: e.target.value })}
               />
@@ -120,7 +120,7 @@ function AuthScreen({
 function LicenseExpiredScreen({ tenant, handleLogout }: { tenant: Tenant; handleLogout: () => void }) {
   const { t } = useI18n();
   return (
-    <WindowFrame title="License Expired" icon={<AlertTriangle size={14} />}>
+    <WindowFrame title={t('pos_license_expired_title', 'Software License Expired')} icon={<AlertTriangle size={14} />}>
       <div className="h-full flex items-center justify-center bg-bg p-6">
         <div className="max-w-md w-full bg-surface border border-border rounded-[var(--radius-card)] p-8 text-center space-y-6 shadow-[var(--shadow-modal)]">
           <div className="w-20 h-20 bg-danger-soft text-danger rounded-full flex items-center justify-center mx-auto">
@@ -275,7 +275,7 @@ function AppBody({
 
   if (tenant.email === 'hasbach') {
     return (
-      <WindowFrame title="Super Admin Control" icon={<Shield size={14} />}>
+      <WindowFrame title={t('sa_control', 'Super Admin Control')} icon={<Shield size={14} />}>
         <div className="flex justify-end p-4 border-b border-border bg-surface">
            <button onClick={handleLogout} className="text-xs font-bold uppercase text-text-3 hover:text-danger transition-colors cursor-pointer">{t('logout', 'Logout')}</button>
         </div>
@@ -310,7 +310,7 @@ function AppBody({
 
   return (
     <PosProvider tenant={tenant} setTenant={setTenant} currentUser={currentUser} setCurrentUser={setCurrentUser} users={users} setUsers={setUsers} handleLogout={handleLogout}>
-      <WindowFrame title="OmniPOS Terminal" icon={<ShoppingCart size={14} />}>
+      <WindowFrame title={`OmniPOS ${t('pos_terminal_title', 'Terminal')}`} icon={<ShoppingCart size={14} />}>
         <PosHeader />
         <main className="flex-1 flex overflow-hidden">
           <CartPanel />

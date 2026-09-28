@@ -5,6 +5,7 @@ import { SearchInput } from './SearchInput';
 import { Select } from './Select';
 import { EmptyState } from './EmptyState';
 import { SkeletonTable } from './Skeleton';
+import { useI18n } from '../../intl/index';
 
 export interface DataTableColumn<T> {
   key: string;
@@ -57,8 +58,8 @@ export function DataTable<T>({
   rowKey,
   loading,
   searchable,
-  searchPlaceholder = 'Search…',
-  emptyTitle = 'No results',
+  searchPlaceholder,
+  emptyTitle,
   emptyDescription,
   onRowClick,
   selectable,
@@ -70,6 +71,9 @@ export function DataTable<T>({
   defaultPageSize = 25,
   className = '',
 }: DataTableProps<T>) {
+  const { t } = useI18n();
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t('ui_search_placeholder', 'Search…');
+  const resolvedEmptyTitle = emptyTitle ?? t('ui_no_results', 'No results');
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -170,13 +174,13 @@ export function DataTable<T>({
                 setSearch(v);
                 setPage(1);
               }}
-              placeholder={searchPlaceholder}
+              placeholder={resolvedSearchPlaceholder}
               className="max-w-xs"
             />
           )}
           {selectable && selected.size > 0 && bulkActions && (
             <div className="flex items-center gap-2 rounded-[var(--radius-input)] border border-primary/30 bg-primary-soft px-3 py-1.5">
-              <span className="text-xs font-medium text-primary">{selected.size} selected</span>
+              <span className="text-xs font-medium text-primary">{t('ui_selected_count', '{count} selected').replace('{count}', String(selected.size))}</span>
               {bulkActions(selectedRows, clearSelection)}
             </div>
           )}
@@ -193,7 +197,7 @@ export function DataTable<T>({
                     checked={allOnPageSelected}
                     indeterminate={someOnPageSelected && !allOnPageSelected}
                     onChange={toggleAllOnPage}
-                    aria-label="Select all rows on this page"
+                    aria-label={t('ui_select_all_rows', 'Select all rows on this page')}
                   />
                 </th>
               )}
@@ -235,7 +239,7 @@ export function DataTable<T>({
             ) : pageRows.length === 0 ? (
               <tr>
                 <td colSpan={columns.length + (selectable ? 1 : 0)}>
-                  <EmptyState title={emptyTitle} description={emptyDescription} />
+                  <EmptyState title={resolvedEmptyTitle} description={emptyDescription} />
                 </td>
               </tr>
             ) : (
@@ -253,7 +257,7 @@ export function DataTable<T>({
                   >
                     {selectable && (
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
-                        <Checkbox checked={selected.has(key)} onChange={() => toggleRow(row)} aria-label="Select row" />
+                        <Checkbox checked={selected.has(key)} onChange={() => toggleRow(row)} aria-label={t('ui_select_row', 'Select row')} />
                       </td>
                     )}
                     {columns.map((col) => (
@@ -287,7 +291,7 @@ export function DataTable<T>({
       {!loading && sorted.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-text-3">
           <div className="flex items-center gap-2">
-            <span>Rows per page</span>
+            <span>{t('ui_rows_per_page', 'Rows per page')}</span>
             <Select
               value={String(pageSize)}
               onChange={(e) => {
@@ -300,14 +304,17 @@ export function DataTable<T>({
           </div>
           <div className="flex items-center gap-3">
             <span>
-              Page {clampedPage} of {totalPages} ({sorted.length} rows)
+              {t('ui_page_of', 'Page {page} of {total} ({rows} rows)')
+                .replace('{page}', String(clampedPage))
+                .replace('{total}', String(totalPages))
+                .replace('{rows}', String(sorted.length))}
             </span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 disabled={clampedPage <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                aria-label="Previous page"
+                aria-label={t('ui_previous_page', 'Previous page')}
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-border disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed hover:bg-surface-2"
               >
                 <ChevronLeft size={15} className="rtl:rotate-180" />
@@ -316,7 +323,7 @@ export function DataTable<T>({
                 type="button"
                 disabled={clampedPage >= totalPages}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                aria-label="Next page"
+                aria-label={t('ui_next_page', 'Next page')}
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-border disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed hover:bg-surface-2"
               >
                 <ChevronRight size={15} className="rtl:rotate-180" />

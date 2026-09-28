@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { Product } from './types';
 import { I18nProvider, useI18n } from './intl/index';
 import WindowFrame from './components/WindowFrame';
+import { formatNumber } from './lib/format';
 
 function PriceCheckerBody() {
   const { t, setLang } = useI18n();
@@ -151,7 +152,7 @@ function PriceCheckerBody() {
                   </div>
 
                   <div className="text-4xl font-black text-success tracking-tight num">
-                    {((product as any).price_lbp || Math.round((product.price || 0) * 89500)).toLocaleString()} LL
+                    {formatNumber((product as any).price_lbp || Math.round((product.price || 0) * 89500), { decimals: 0 })} LL
                   </div>
 
                   <div className="grid grid-cols-2 gap-8 w-full pt-6 border-t border-border">
@@ -179,7 +180,7 @@ function PriceCheckerBody() {
                     <X size={56} />
                   </div>
                   <h2 className="text-3xl font-black uppercase tracking-tight text-danger">{error}</h2>
-                  <p className="text-lg text-text-3 font-medium">Please try scanning again</p>
+                  <p className="text-lg text-text-3 font-medium">{t('pos_try_scanning_again', 'Please try scanning again')}</p>
                 </motion.div>
               ) : (
                 <motion.div

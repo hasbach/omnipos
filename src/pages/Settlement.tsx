@@ -25,7 +25,8 @@ import {
   useToast,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
-import { formatMoney } from '../lib/format';
+import { formatMoney, formatDate, userRoleLabel } from '../lib/format';
+import { translateServerError } from '../lib/serverErrors';
 import { api } from '../lib/api';
 import { DenominationCounter } from './finance/DenominationCounter';
 
@@ -104,7 +105,7 @@ interface YearlyReport {
 const DEFAULT_CURRENCIES: Currency[] = [{ code: 'USD', symbol: '$', rate: 1 }];
 
 export default function Settlement() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -162,7 +163,7 @@ export default function Settlement() {
         });
       }
     } catch (err: any) {
-      toast.error(err.message || String(err));
+      toast.error(translateServerError(err, t) || String(err));
     } finally {
       setLoading(false);
     }
@@ -243,9 +244,9 @@ export default function Settlement() {
         confirmLabel: t('fin_print', 'Print'),
         cancelLabel: t('fin_close', 'Close'),
       });
-      if (printIt) printXReport(data.shift, 'CASH OUT');
+      if (printIt) printXReport(data.shift, t('fin_xr_cash_out', 'CASH OUT'));
     } catch (err: any) {
-      toast.error(err.message || String(err));
+      toast.error(translateServerError(err, t) || String(err));
     } finally {
       setSubmittingCashOut(false);
     }
@@ -284,7 +285,7 @@ export default function Settlement() {
       try {
         settleData = await api.post<any>('/api/tenant/settlement');
       } catch (settleErr: any) {
-        toast.error(settleErr.message || String(settleErr));
+        toast.error(translateServerError(settleErr, t) || String(settleErr));
       }
 
       setActualBalances(currencies.reduce((acc, c) => ({ ...acc, [c.code]: '' }), {} as Record<string, string>));
@@ -307,9 +308,9 @@ export default function Settlement() {
         confirmLabel: t('fin_print', 'Print'),
         cancelLabel: t('fin_close', 'Close'),
       });
-      if (printIt) printXReport(report, 'END OF DAY');
+      if (printIt) printXReport(report, t('fin_xr_end_of_day', 'END OF DAY'));
     } catch (err: any) {
-      toast.error(err.message || String(err));
+      toast.error(translateServerError(err, t) || String(err));
     } finally {
       setSubmittingSettlement(false);
     }
@@ -324,11 +325,11 @@ export default function Settlement() {
       fetchData();
       toast.success(t('fin_stl_yearly_generated', 'Yearly settlement generated successfully.'));
     } catch (err: any) {
-      toast.error(err.message || String(err));
+      toast.error(translateServerError(err, t) || String(err));
     }
   };
 
-  const printXReport = (report: any, title: string = 'DAILY X-REPORT') => {
+  const printXReport = (report: any, title: string = t('fin_xr_daily_report', 'DAILY X-REPORT')) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
@@ -351,20 +352,20 @@ export default function Settlement() {
         <body>
           <h1>${title}</h1>
           <div class="meta">
-            Date: ${report.date}<br>
-            Time: ${new Date().toLocaleTimeString()}
+            ${t('fin_xr_date', 'Date')}: ${formatDate(report.date, lang)}<br>
+            ${t('fin_xr_time', 'Time')}: ${new Date().toLocaleTimeString(lang === 'ar' ? 'ar-LB' : lang === 'fr' ? 'fr-FR' : 'en-US')}
           </div>
-          <div class="row"><span>Opening Bal:</span> <span>$${(report.opening_balance || 0).toFixed(2)}</span></div>
-          <div class="row"><span>Cash Sales:</span> <span>+$${(report.total_sales || 0).toFixed(2)}</span></div>
-          ${(report.total_refunds || 0) > 0 ? `<div class="row"><span>Cash Refunds:</span> <span>-$${report.total_refunds.toFixed(2)}</span></div>` : ''}
-          <div class="row"><span>Cash Purchases:</span> <span>-$${(report.total_purchases || 0).toFixed(2)}</span></div>
-          <div class="row"><span>Manual In:</span> <span>+$${(report.total_cash_in || 0).toFixed(2)}</span></div>
-          <div class="row"><span>Manual Out:</span> <span>-$${(report.total_cash_out || 0).toFixed(2)}</span></div>
-          <div class="row total"><span>Expected Bal:</span> <span>$${(report.closing_balance || 0).toFixed(2)}</span></div>
-          <div class="row"><span>Actual Bal:</span> <span>$${(report.actual_balance || 0).toFixed(2)}</span></div>
-          <div class="row total"><span>Difference:</span> <span class="diff">${diff >= 0 ? '+' : ''}${diff.toFixed(2)}</span></div>
-          ${report.notes ? `<div style="margin-top: 15px; font-size: 12px; border-top: 1px dashed #000; padding-top: 5px;"><strong>Notes:</strong><br>${report.notes}</div>` : ''}
-          <div class="footer">${businessName || 'Business'}<br>${title}</div>
+          <div class="row"><span>${t('fin_xr_opening_bal', 'Opening Bal:')}</span> <span>$${(report.opening_balance || 0).toFixed(2)}</span></div>
+          <div class="row"><span>${t('fin_xr_cash_sales', 'Cash Sales:')}</span> <span>+$${(report.total_sales || 0).toFixed(2)}</span></div>
+          ${(report.total_refunds || 0) > 0 ? `<div class="row"><span>${t('fin_xr_cash_refunds', 'Cash Refunds:')}</span> <span>-$${report.total_refunds.toFixed(2)}</span></div>` : ''}
+          <div class="row"><span>${t('fin_xr_cash_purchases', 'Cash Purchases:')}</span> <span>-$${(report.total_purchases || 0).toFixed(2)}</span></div>
+          <div class="row"><span>${t('fin_xr_manual_in', 'Manual In:')}</span> <span>+$${(report.total_cash_in || 0).toFixed(2)}</span></div>
+          <div class="row"><span>${t('fin_xr_manual_out', 'Manual Out:')}</span> <span>-$${(report.total_cash_out || 0).toFixed(2)}</span></div>
+          <div class="row total"><span>${t('fin_xr_expected_bal', 'Expected Bal:')}</span> <span>$${(report.closing_balance || 0).toFixed(2)}</span></div>
+          <div class="row"><span>${t('fin_xr_actual_bal', 'Actual Bal:')}</span> <span>$${(report.actual_balance || 0).toFixed(2)}</span></div>
+          <div class="row total"><span>${t('fin_xr_difference', 'Difference:')}</span> <span class="diff">${diff >= 0 ? '+' : ''}${diff.toFixed(2)}</span></div>
+          ${report.notes ? `<div style="margin-top: 15px; font-size: 12px; border-top: 1px dashed #000; padding-top: 5px;"><strong>${t('fin_xr_notes', 'Notes:')}</strong><br>${report.notes}</div>` : ''}
+          <div class="footer">${businessName || t('fin_xr_business_fallback', 'Business')}<br>${title}</div>
           <script>window.print(); window.close();<\/script>
         </body>
       </html>
@@ -505,7 +506,7 @@ export default function Settlement() {
                     <div className="flex justify-between rounded-md bg-surface-2 px-2 py-1.5"><span className="text-text-3">{t('fin_stl_manual', 'Manual In/Out')}</span><span className={['num font-semibold', manualNet >= 0 ? 'text-success' : 'text-danger'].join(' ')}>{manualNet >= 0 ? '+' : ''}{formatMoney(manualNet, { code: 'USD', symbol: '$' })}</span></div>
                   </div>
                   <Field label={t('fin_stl_cashier', 'Cashier')}>
-                    <Select value={String(selectedUserId)} disabled options={users.map((u) => ({ value: String(u.id), label: `${u.name} (${u.role})` }))} />
+                    <Select value={String(selectedUserId)} disabled options={users.map((u) => ({ value: String(u.id), label: `${u.name} (${userRoleLabel(u.role, t)})` }))} />
                   </Field>
                   <Button variant="primary" className="w-full" onClick={() => setStep(2)}>
                     {t('fin_continue', 'Continue')} <ChevronRight size={15} className="rtl:rotate-180" />

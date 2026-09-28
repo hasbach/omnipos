@@ -24,10 +24,10 @@ export interface InvoiceDetailDrawerProps {
 
 const USD: CurrencyRow = { code: 'USD', symbol: '$', rate: 1 };
 
-function typeBadge(type: string) {
-  if (type === 'refund') return <Badge variant="danger">Refund</Badge>;
-  if (type === 'purchase') return <Badge variant="info">Purchase</Badge>;
-  return <Badge variant="success">Sale</Badge>;
+function typeBadge(type: string, t: (key: string, fallback?: string) => string) {
+  if (type === 'refund') return <Badge variant="danger">{t('inv_type_refund', 'Refund')}</Badge>;
+  if (type === 'purchase') return <Badge variant="info">{t('inv_type_purchase', 'Purchase')}</Badge>;
+  return <Badge variant="success">{t('inv_type_sale', 'Sale')}</Badge>;
 }
 
 export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAdmin, onEdit, onDeleted, onRefunded, onOpenInvoice }: InvoiceDetailDrawerProps) {
@@ -118,15 +118,15 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
         th,td{padding:4px 2px;border-bottom:1px solid #E2E8F0;text-align:start;}
         .totals{margin-top:12px;text-align:end;} .totals p{font-weight:bold;}
       </style></head><body>
-      <h1>Invoice #${invoice.id} — ${invoice.type}</h1>
+      <h1>Invoice #${invoice.id} — ${invoice.type === 'refund' ? t('inv_type_refund', 'Refund') : invoice.type === 'purchase' ? t('inv_type_purchase', 'Purchase') : t('inv_type_sale', 'Sale')}</h1>
       <p>${invoice.stakeholder_name || ''}</p>
-      <p>${new Date(invoice.created_at).toLocaleString()}</p>
-      <table><thead><tr><th>Product</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+      <p>${formatDateTime(invoice.created_at, lang)}</p>
+      <table><thead><tr><th>${t('inv_detail_col_product', 'Product')}</th><th>${t('inv_detail_col_qty', 'Qty')}</th><th>${t('inv_editor_col_unit_price', 'Price')}</th><th>${t('inv_detail_col_line_total', 'Line total')}</th></tr></thead>
       <tbody>${rows}</tbody></table>
       <div class="totals">
-        <p>Total: ${Number(invoice.total_amount).toFixed(2)}</p>
-        <p>Paid: ${Number(invoice.paid_amount).toFixed(2)}</p>
-        <p>Due: ${Math.max(0, Number(invoice.total_amount) - Number(invoice.paid_amount)).toFixed(2)}</p>
+        <p>${t('inv_col_total', 'Total')}: ${Number(invoice.total_amount).toFixed(2)}</p>
+        <p>${t('inv_col_paid', 'Paid')}: ${Number(invoice.paid_amount).toFixed(2)}</p>
+        <p>${t('inv_col_due', 'Due')}: ${Math.max(0, Number(invoice.total_amount) - Number(invoice.paid_amount)).toFixed(2)}</p>
       </div>
       </body></html>
     `);
@@ -147,7 +147,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
       title={invoice ? (
         <span className="inline-flex items-center gap-2">
           {t('inv_detail_title', 'Invoice #{id}').replace('{id}', String(invoice.id))}
-          {typeBadge(invoice.type)}
+          {typeBadge(invoice.type, t)}
           {invoice.archived ? <Badge variant="neutral">{t('inv_flag_settled', 'Settled')}</Badge> : null}
           {invoice.edit_count > 0 ? <Badge variant="warning">{t('inv_flag_edited_many', 'Edited ×{n}').replace('{n}', String(invoice.edit_count))}</Badge> : null}
         </span>
@@ -196,7 +196,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
             </div>
             <div>
               <p className="text-xs text-text-3">{t('inv_detail_price_level', 'Price level')}</p>
-              <p className="font-medium text-text capitalize">{(invoice.price_level || 'retail').replace('_', ' ')}</p>
+              <p className="font-medium text-text capitalize">{t(`inv_editor_price_level_${invoice.price_level || 'retail'}`, (invoice.price_level || 'retail').replace('_', ' '))}</p>
             </div>
             <div>
               <p className="text-xs text-text-3">{t('inv_detail_reference', 'Reference')}</p>

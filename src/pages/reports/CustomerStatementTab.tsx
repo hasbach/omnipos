@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardBody, Field, Select, DataTable, Badge, type DataTableColumn } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime } from '../../lib/format';
+import { formatMoney, formatDateTime, stakeholderTypeLabel } from '../../lib/format';
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { CustomerStatementRow, StakeholderLite } from './types';
@@ -89,7 +89,7 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
               value={id}
               onChange={(e) => setId(e.target.value)}
               placeholder={t('rep_statement_select_placeholder', 'Select a party…')}
-              options={stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${s.type})` }))}
+              options={stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${stakeholderTypeLabel(s.type, t)})` }))}
             />
           </Field>
         </CardBody>

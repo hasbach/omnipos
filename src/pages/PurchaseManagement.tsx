@@ -97,7 +97,7 @@ export default function PurchaseManagement() {
     const sheet = filteredRows.map((r) => ({
       'PO #': r.id,
       Supplier: r.supplier_name || '',
-      Date: new Date(r.created_at).toLocaleString(),
+      Date: formatDateTime(r.created_at, lang),
       Items: r.item_count,
       Total: r.total_amount,
       Paid: r.paid_amount,

@@ -3,6 +3,7 @@ import { Modal, Button, Field, Select, NumberInput, Textarea } from '../../compo
 import { useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
+import { translateServerError } from '../../lib/serverErrors';
 
 export interface AdjustStockTarget {
   id: number;
@@ -77,7 +78,7 @@ export function AdjustStockModal({ open, product, onClose, onSaved }: AdjustStoc
       onSaved(product.id, after);
       onClose();
     } catch (err: any) {
-      toast.error(err.message || t('stock_adjust_error_toast', 'Could not adjust stock.'));
+      toast.error(translateServerError(err, t) || t('stock_adjust_error_toast', 'Could not adjust stock.'));
     } finally {
       setSaving(false);
     }

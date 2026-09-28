@@ -286,7 +286,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                       {code}
                       <button
                         type="button"
-                        aria-label={`Remove ${code}`}
+                        aria-label={`${t('prod_remove_barcode', 'Remove barcode')} ${code}`}
                         onClick={() => removeBarcode(code)}
                         className="cursor-pointer text-text-3 hover:text-danger"
                       >

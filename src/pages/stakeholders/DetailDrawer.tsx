@@ -4,7 +4,7 @@ import type { DataTableColumn } from '../../components/ui';
 import { Mail, Phone, MapPin, CreditCard, Layers, Printer, FileDown, Edit2, HandCoins } from 'lucide-react';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatDate, formatDateTime, formatMoney } from '../../lib/format';
+import { formatDate, formatDateTime, formatMoney, transactionTypeLabel } from '../../lib/format';
 import { useSettings } from '../../lib/useSettings';
 import type { Currency, Stakeholder } from '../../types';
 
@@ -118,7 +118,7 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
   const invoiceColumns: DataTableColumn<InvoiceRow>[] = [
     { key: 'id', header: t('stk_invoices_col_id'), sortable: true, render: (r) => `#${r.id}` },
     { key: 'created_at', header: t('stk_invoices_col_date'), sortable: true, render: (r) => formatDate(r.created_at, lang) },
-    { key: 'type', header: t('stk_invoices_col_type'), render: (r) => <span className="capitalize">{r.type}</span> },
+    { key: 'type', header: t('stk_invoices_col_type'), render: (r) => <span>{transactionTypeLabel(r.type, t)}</span> },
     { key: 'total_amount', header: t('stk_invoices_col_total'), align: 'end', render: (r) => formatMoney(r.total_amount, usd) },
     { key: 'paid_amount', header: t('stk_invoices_col_paid'), align: 'end', render: (r) => formatMoney(r.paid_amount, usd) },
     {

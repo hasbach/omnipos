@@ -90,7 +90,7 @@ export function MovementsDrawer({ open, productId, productName, onClose }: Movem
             {rows.map((r, i) => {
               const qtyIn = r.quantity_change > 0 ? r.quantity_change : 0;
               const qtyOut = r.quantity_change < 0 ? -r.quantity_change : 0;
-              const ref = r.type === 'adjustment' ? (r.reason || '—') : `#${r.transaction_id}${r.archived ? ' (settled)' : ''}`;
+              const ref = r.type === 'adjustment' ? (r.reason || '—') : `#${r.transaction_id}${r.archived ? ` (${t('stock_mov_settled', 'settled')})` : ''}`;
               return (
                 <tr key={i} className="hover:bg-surface-2">
                   <td className="border-b border-border px-2 py-2 text-text-2 whitespace-nowrap">{formatDateTime(r.date, lang)}</td>

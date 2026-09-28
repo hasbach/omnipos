@@ -4,7 +4,7 @@ import { PageHeader, Toolbar, Select, DataTable, Badge, useToast } from '../comp
 import type { DataTableColumn } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
-import { formatDateTime } from '../lib/format';
+import { formatDateTime, logActionLabel } from '../lib/format';
 
 interface LogRow {
   id: number;
@@ -71,7 +71,7 @@ export default function UserLogs() {
       render: (l) => <span className="num text-xs text-text-3">{formatDateTime(l.created_at, lang)}</span>,
     },
     { key: 'user_name', header: t('log_col_user'), sortable: true, render: (l) => <span className="font-medium text-text">{l.user_name || t('log_system')}</span> },
-    { key: 'action', header: t('log_col_action'), sortable: true, render: (l) => <Badge variant="primary">{l.action}</Badge> },
+    { key: 'action', header: t('log_col_action'), sortable: true, render: (l) => <Badge variant="primary">{logActionLabel(l.action, t)}</Badge> },
     {
       key: 'details',
       header: t('log_col_details'),
@@ -108,7 +108,7 @@ export default function UserLogs() {
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
           className="w-52"
-          options={[{ value: 'all', label: t('log_all_actions') }, ...actions.map((a) => ({ value: a, label: a }))]}
+          options={[{ value: 'all', label: t('log_all_actions') }, ...actions.map((a) => ({ value: a, label: logActionLabel(a, t) }))]}
         />
         <div className="flex items-center gap-1.5 text-xs text-text-3">
           <span>{t('log_from')}</span>

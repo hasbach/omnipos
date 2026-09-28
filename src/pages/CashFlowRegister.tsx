@@ -57,7 +57,7 @@ interface Stakeholder {
 const DEFAULT_CURRENCIES: Currency[] = [{ code: 'USD', symbol: '$', rate: 1 }];
 
 export default function CashFlowRegister() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const toast = useToast();
 
   const [entries, setEntries] = useState<CashFlowEntry[]>([]);
@@ -194,7 +194,7 @@ export default function CashFlowRegister() {
       key: 'created_at',
       header: t('fin_time', 'Time'),
       sortable: true,
-      render: (row) => <span className="num text-xs text-text-3">{formatDateTime(row.created_at)}</span>,
+      render: (row) => <span className="num text-xs text-text-3">{formatDateTime(row.created_at, lang)}</span>,
     },
     {
       key: 'type',

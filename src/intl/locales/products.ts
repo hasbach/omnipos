@@ -3,6 +3,8 @@
 
 export default {
   en: {
+    stock_mov_settled: 'settled',
+    prod_remove_barcode: 'Remove barcode',
     // Products page
     prod_title: 'Products',
     prod_subtitle: 'Manage your catalog, pricing and inventory.',
@@ -233,6 +235,8 @@ export default {
     stock_empty_desc: 'Try a different search or filter.',
   },
   ar: {
+    stock_mov_settled: 'مُسوّاة',
+    prod_remove_barcode: 'إزالة الباركود',
     prod_title: 'المنتجات',
     prod_subtitle: 'إدارة الكتالوج والتسعير والمخزون.',
     prod_add: 'إضافة منتج',
@@ -458,6 +462,8 @@ export default {
     stock_empty_desc: 'جرّب بحثاً أو تصفية مختلفة.',
   },
   fr: {
+    stock_mov_settled: 'clôturée',
+    prod_remove_barcode: 'Retirer le code-barres',
     prod_title: 'Produits',
     prod_subtitle: 'Gérez votre catalogue, vos prix et votre stock.',
     prod_add: 'Ajouter un produit',

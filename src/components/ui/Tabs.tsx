@@ -1,4 +1,5 @@
 import React, { useId } from 'react';
+import { useI18n } from '../../intl/index';
 
 export interface TabItem {
   value: string;
@@ -16,9 +17,15 @@ export interface TabsProps {
 
 export function Tabs({ items, value, onChange, className = '' }: TabsProps) {
   const name = useId();
+  let tabsLabel = 'Tabs';
+  try {
+    tabsLabel = useI18n().t('ui_tabs', 'Tabs');
+  } catch {
+    /* Tabs can be used outside I18nProvider in rare cases. */
+  }
 
   return (
-    <div role="tablist" aria-label="Tabs" className={['flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border', className].join(' ')}>
+    <div role="tablist" aria-label={tabsLabel} className={['flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border', className].join(' ')}>
       {items.map((item) => {
         const active = item.value === value;
         return (

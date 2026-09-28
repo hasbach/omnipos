@@ -105,7 +105,7 @@ export default function InvoiceManagement() {
       '#': r.id,
       Type: r.type,
       Party: r.stakeholder_name || '',
-      Date: new Date(r.created_at).toLocaleString(),
+      Date: formatDateTime(r.created_at, lang),
       Items: r.item_count,
       Total: r.total_amount,
       Paid: r.paid_amount,

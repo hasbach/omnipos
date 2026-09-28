@@ -9,7 +9,7 @@ import {
   StatCard,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
-import { formatMoney, localToday } from '../lib/format';
+import { formatMoney, localToday, formatTime, transactionStatusLabel, paymentMethodLabel } from '../lib/format';
 import { api } from '../lib/api';
 
 interface Transaction {
@@ -35,7 +35,7 @@ interface CustomerBreakdown {
 }
 
 export default function DailySales() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [date, setDate] = useState(localToday());
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [byPayment, setByPayment] = useState<PaymentBreakdown[]>([]);
@@ -79,10 +79,10 @@ export default function DailySales() {
   const donutData = useMemo(
     () =>
       byPayment.map((p) => ({
-        label: p.method,
+        label: paymentMethodLabel(p.method, t),
         value: p.total_usd,
       })),
-    [byPayment],
+    [byPayment, t],
   );
 
   const columns: DataTableColumn<Transaction>[] = [
@@ -91,7 +91,7 @@ export default function DailySales() {
       key: 'created_at',
       header: t('fin_time', 'Time'),
       sortable: true,
-      render: (r) => <span className="num text-text-3">{new Date(r.created_at).toLocaleTimeString()}</span>,
+      render: (r) => <span className="num text-text-3">{formatTime(r.created_at, lang, { seconds: true })}</span>,
     },
     { key: 'stakeholder_name', header: t('fin_ds_customer', 'Customer'), render: (r) => r.stakeholder_name || t('fin_ds_walk_in', 'Walk-in') },
     { key: 'user_name', header: t('fin_ds_cashier', 'Cashier'), render: (r) => r.user_name || t('fin_ds_system', 'System') },
@@ -110,7 +110,7 @@ export default function DailySales() {
     {
       key: 'status',
       header: t('fin_ds_status', 'Status'),
-      render: (r) => <Badge variant={r.type === 'refund' ? 'danger' : 'success'}>{r.status}</Badge>,
+      render: (r) => <Badge variant={r.type === 'refund' ? 'danger' : 'success'}>{transactionStatusLabel(r.status, t)}</Badge>,
     },
     {
       key: 'view',

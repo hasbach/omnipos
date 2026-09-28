@@ -6,6 +6,7 @@ import {
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney, formatBalance } from '../../lib/format';
+import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, type PriceLevel } from '../../lib/pricing';
 import type { Product, Stakeholder } from '../../types';
@@ -318,9 +319,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       }
       setDirty(false);
     } catch (err: any) {
-      toast.error(err.message);
+      const translated = translateServerError(err, t) || err.message;
+      toast.error(translated);
       if (err instanceof ApiFieldError && err.field) {
-        setFieldErrors((prev) => ({ ...prev, [err.field as string]: err.message }));
+        setFieldErrors((prev) => ({ ...prev, [err.field as string]: translated }));
       }
     } finally {
       setSaving(false);
@@ -491,7 +493,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                           </td>
                           <td className="px-2 py-2 text-end num font-semibold text-text">{formatMoney(lineDraftTotal(l), USD)}</td>
                           <td className="px-2 py-2">
-                            <button type="button" aria-label="Remove line" className="text-danger hover:opacity-70 cursor-pointer" onClick={() => removeLine(l._key)}>
+                            <button type="button" aria-label={t('inv_editor_remove_line', 'Remove line')} className="text-danger hover:opacity-70 cursor-pointer" onClick={() => removeLine(l._key)}>
                               <Trash2 size={15} />
                             </button>
                           </td>

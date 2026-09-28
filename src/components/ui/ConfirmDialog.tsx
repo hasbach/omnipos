@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useMemo, useRef, useStat
 import { AlertTriangle } from 'lucide-react';
 import { Modal } from './Modal';
 import { Button } from './Button';
+import { useI18n } from '../../intl/index';
 
 export interface ConfirmOptions {
   title?: string;
@@ -22,6 +23,7 @@ interface PendingConfirm extends ConfirmOptions {
 }
 
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
   const [pending, setPending] = useState<PendingConfirm | null>(null);
   const [typed, setTyped] = useState('');
   const resolverRef = useRef<((value: boolean) => void) | null>(null);
@@ -50,18 +52,18 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
         open={!!pending}
         onClose={() => finish(false)}
         size="sm"
-        title={pending?.title || 'Are you sure?'}
+        title={pending?.title || t('ui_confirm_title', 'Are you sure?')}
         footer={
           <>
             <Button variant="secondary" onClick={() => finish(false)}>
-              {pending?.cancelLabel || 'Cancel'}
+              {pending?.cancelLabel || t('ui_cancel', 'Cancel')}
             </Button>
             <Button
               variant={pending?.variant === 'primary' ? 'primary' : 'danger'}
               disabled={!canConfirm}
               onClick={() => finish(true)}
             >
-              {pending?.confirmLabel || 'Confirm'}
+              {pending?.confirmLabel || t('ui_confirm', 'Confirm')}
             </Button>
           </>
         }
@@ -79,7 +81,9 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
             {requiresTyping && (
               <div>
                 <p className="mb-1.5 text-xs text-text-3">
-                  Type <span className="font-semibold text-text">{pending.confirmText}</span> to confirm.
+                  {t('ui_type_to_confirm', 'Type {text} to confirm.').split('{text}')[0]}
+                  <span className="font-semibold text-text">{pending.confirmText}</span>
+                  {t('ui_type_to_confirm', 'Type {text} to confirm.').split('{text}')[1]}
                 </p>
                 <input
                   autoFocus

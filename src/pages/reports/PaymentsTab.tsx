@@ -42,8 +42,8 @@ export function PaymentsTab({ range, businessName }: ReportTabProps) {
       if (r.kind !== 'sale') continue;
       byMethod.set(r.method, (byMethod.get(r.method) || 0) + r.amount_usd);
     }
-    return Array.from(byMethod.entries()).map(([label, value]) => ({ label, value }));
-  }, [rows]);
+    return Array.from(byMethod.entries()).map(([method, value]) => ({ label: paymentMethodLabel(method, t), value }));
+  }, [rows, t]);
 
   const columns: DataTableColumn<ByPaymentMethodRow>[] = [
     { key: 'kind', header: t('rep_col_type', 'Type'), sortable: true, render: (r) => <Badge variant={KIND_VARIANT[r.kind] || 'neutral'}>{kindLabel(r.kind)}</Badge> },

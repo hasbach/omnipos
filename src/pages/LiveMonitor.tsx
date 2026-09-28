@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Globe, Monitor, Users, Wallet, Zap } from 'lucide-react';
 import { Badge, EmptyState, PageHeader, StatCard } from '../components/ui';
 import { useI18n } from '../intl/index';
-import { formatMoney } from '../lib/format';
+import { formatMoney, formatTime, transactionTypeLabel } from '../lib/format';
 import { api } from '../lib/api';
 import type { Tenant } from '../types';
 
@@ -25,7 +25,7 @@ interface TerminalCart {
 }
 
 export default function LiveMonitor() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [activeTerminals, setActiveTerminals] = useState<Record<string, TerminalCart>>({});
   const [tenant, setTenant] = useState<Tenant | null>(null);
@@ -190,8 +190,8 @@ export default function LiveMonitor() {
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold capitalize text-text">{activity.type} #{activity.id}</p>
-                        <span className="text-[11px] text-text-3">{new Date(activity.created_at).toLocaleTimeString()}</span>
+                        <p className="text-sm font-semibold text-text">{transactionTypeLabel(activity.type, t)} #{activity.id}</p>
+                        <span className="text-[11px] text-text-3">{formatTime(activity.created_at, lang, { seconds: true })}</span>
                       </div>
                       <p className="text-xs text-text-3">
                         {t('fin_lm_processed_by', 'Processed by')} <span className="font-medium text-text-2">{activity.user_name}</span>

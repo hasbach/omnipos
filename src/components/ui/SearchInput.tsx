@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
+import { useI18n } from '../../intl/index';
 
 export interface SearchInputProps {
   value?: string;
@@ -18,12 +19,15 @@ export function SearchInput({
   value,
   defaultValue = '',
   onChange,
-  placeholder = 'Search…',
+  placeholder,
   debounce = 300,
   className = '',
   hotkey = true,
-  'aria-label': ariaLabel = 'Search',
+  'aria-label': ariaLabel,
 }: SearchInputProps) {
+  const { t } = useI18n();
+  const resolvedPlaceholder = placeholder ?? t('ui_search_placeholder', 'Search…');
+  const resolvedAriaLabel = ariaLabel ?? t('ui_search', 'Search');
   const [inner, setInner] = useState(value ?? defaultValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,14 +67,14 @@ export function SearchInput({
         ref={inputRef}
         value={inner}
         onChange={(e) => emit(e.target.value)}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
+        placeholder={resolvedPlaceholder}
+        aria-label={resolvedAriaLabel}
         className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-text outline-none placeholder:text-text-3"
       />
       {inner && (
         <button
           type="button"
-          aria-label="Clear search"
+          aria-label={t('ui_clear_search', 'Clear search')}
           onClick={() => emit('')}
           className="shrink-0 cursor-pointer text-text-3 hover:text-text"
         >

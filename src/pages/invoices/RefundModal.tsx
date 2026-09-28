@@ -4,6 +4,7 @@ import { Modal, Button, Field, NumberInput, Select, Textarea, Badge, useToast, u
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney, formatDateTime, formatBalance } from '../../lib/format';
+import { translateServerError } from '../../lib/serverErrors';
 import { postJson, ApiFieldError, type CurrencyRow } from './types';
 
 export interface RefundableLine {
@@ -83,7 +84,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
         setMethod(fullyPaid ? 'cash' : (res.stakeholder && res.stakeholder.name !== WALK_IN_NAME ? 'credit' : 'cash'));
         setPayCurrency('USD');
       })
-      .catch((err) => { toast.error(err.message); onClose(); })
+      .catch((err) => { toast.error(translateServerError(err, t) || err.message); onClose(); })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, invoiceId]);
@@ -166,8 +167,9 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
       toast.success(t('inv_refund_success', 'Refund #{id} created.').replace('{id}', String(res.id)));
       onDone(res.id);
     } catch (err: any) {
-      toast.error(err.message);
-      if (err instanceof ApiFieldError) setFormError(err.message);
+      const translated = translateServerError(err, t) || err.message;
+      toast.error(translated);
+      if (err instanceof ApiFieldError) setFormError(translated);
     } finally {
       setSubmitting(false);
     }

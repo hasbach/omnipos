@@ -8,7 +8,7 @@ import Fuse from 'fuse.js';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Badge } from './ui';
-import { formatMoney, formatBalance } from '../lib/format';
+import { formatMoney, formatBalance, formatNumber } from '../lib/format';
 
 export default function CartPanel() {
   const pos = usePosContext();
@@ -117,7 +117,7 @@ export default function CartPanel() {
                     </div>
                     <div className="font-mono font-bold text-end num">
                       <div>{formatMoney(unitPriceUSD(p, 1), { code: 'USD', symbol: '$' })}</div>
-                      <div className="text-[10px] text-success">{(p.price_lbp || Math.round((p.price || 0) * 89500)).toLocaleString()} LL</div>
+                      <div className="text-[10px] text-success">{formatNumber(p.price_lbp || Math.round((p.price || 0) * 89500), { decimals: 0 })} LL</div>
                     </div>
                   </button>
                 ))}
@@ -214,12 +214,12 @@ export default function CartPanel() {
                       </div>
                       <div className="w-24 text-end font-mono font-bold num text-text">
                         <div>{formatMoney(calculateItemTotal(item), { code: 'USD', symbol: '$' })}</div>
-                        <div className="text-[10px] text-success">{Math.round(calculateItemTotalLBP(item)).toLocaleString()} LL</div>
+                        <div className="text-[10px] text-success">{formatNumber(Math.round(calculateItemTotalLBP(item)), { decimals: 0 })} LL</div>
                       </div>
                       <button
                         onClick={() => updateQuantity(item.id, -item.quantity)}
                         className="h-11 w-11 flex items-center justify-center text-danger opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                        aria-label="Remove line"
+                        aria-label={t('pos_remove_line', 'Remove line')}
                       >
                         <Trash2 size={18} />
                       </button>
@@ -279,7 +279,7 @@ export default function CartPanel() {
                 <p className="text-xs uppercase tracking-wide text-text-3 mb-1">{t('total_amount', 'Total Amount')}</p>
                 <div className="flex items-baseline gap-2 flex-wrap">
                   <span className="text-3xl font-bold tracking-tight num text-text">{formatMoney(totalUSD, { code: 'USD', symbol: '$' })}</span>
-                  <span className="text-lg font-bold text-success num">{totalLBP.toLocaleString()} LL</span>
+                  <span className="text-lg font-bold text-success num">{formatNumber(totalLBP, { decimals: 0 })} LL</span>
                 </div>
                 {subtotalUSD !== totalUSD && (
                   <p className="text-xs text-text-3 line-through font-mono mt-1 num">{t('subtotal', 'Subtotal')}: {formatMoney(subtotalUSD, { code: 'USD', symbol: '$' })}</p>

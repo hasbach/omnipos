@@ -117,10 +117,10 @@ test("the printed receipt includes previous/this/new balance lines for a non-Wal
   assert.equal(sale.status, 200);
 
   // buildReceiptBuffer is exercised directly (network printing has no real printer in tests) —
-  // reuse the exact same data shape /api/print/receipt builds. The balance labels are bilingual
-  // (English + Arabic, per the spec), which routes the WHOLE kv() line through the same
-  // image-rasterization path as an Arabic customer address (see receipt-arabic-address.test.ts) —
-  // so, like that test, this checks for the three extra raster images rather than literal text.
+  // reuse the exact same data shape /api/print/receipt builds. The balance labels are in the
+  // receipt's own language (server/printing/receiptLabels.ts); for an English (default) receipt
+  // they're plain text, so no raster images are expected here (see receipt-language.test.ts for
+  // the Arabic case, which does route through the raster/code-page path).
   const { buildReceiptBuffer } = await import("../server/printing/receipt.js");
   const withoutBalance = buildReceiptBuffer({
     storeName: "Test Store",
@@ -139,8 +139,13 @@ test("the printed receipt includes previous/this/new balance lines for a non-Wal
     },
   });
   assert.equal(rasterImageCount(withoutBalance), 0, "no balance data -> no images");
-  assert.equal(rasterImageCount(withBalance), 3, "Previous/This/New balance -> one raster image per line");
-  assert.ok(!textOnly(withBalance).includes("?"), "Arabic balance labels were mangled into '?'");
+  assert.equal(rasterImageCount(withBalance), 0, "English balance labels are plain text, not rasterized");
+  const text = textOnly(withBalance);
+  assert.ok(!text.includes("?"), "balance labels were mangled into '?'");
+  // prevBalance = newBalance(-30) - balance_effect(-30) = 0 -> "Settled"
+  assert.ok(text.includes("Previous Balance") && text.includes("$0.00 Settled"), "previous balance line");
+  assert.ok(text.includes("This Invoice") && text.includes("$30.00 Due"), "this invoice line (balance_effect)");
+  assert.ok(text.includes("New Balance") && text.includes("$30.00 Due"), "new balance line");
 });
 
 test("the receipt omits the balance block for Walk-in Customer", async () => {

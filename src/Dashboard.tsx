@@ -350,8 +350,10 @@ export default function Dashboard() {
     }).catch((err) => console.error('Language save error:', err));
   };
 
+  const dashboardTitle = language === 'ar' ? 'لوحة تحكم OmniPOS' : language === 'fr' ? 'Tableau de bord OmniPOS' : 'OmniPOS Admin Dashboard';
+
   return (
-    <WindowFrame title="OmniPOS Admin Dashboard">
+    <WindowFrame title={dashboardTitle}>
       <I18nProvider language={language} onLanguageChange={handleLanguageChange}>
         <ToastProvider>
           <ConfirmProvider>

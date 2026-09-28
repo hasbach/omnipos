@@ -12,6 +12,8 @@ import {
   saleLineUnitPriceLbp,
 } from '../lib/pricing';
 import { useSettings } from '../lib/useSettings';
+import { translateServerError } from '../lib/serverErrors';
+import { formatDateTime } from '../lib/format';
 
 export const CURRENCIES = [
   { code: 'USD', symbol: '$', rate: 1 },
@@ -438,11 +440,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         toast.success(t('pos_refund_success', 'Refund processed successfully.'));
       } else {
         const err = await res.json().catch(() => ({}));
-        toast.error(err.error || t('pos_refund_failed', 'Failed to process refund.'));
+        toast.error(translateServerError(err, t) || t('pos_refund_failed', 'Failed to process refund.'));
       }
     } catch (err: any) {
       console.error(err);
-      toast.error(err?.message || t('pos_refund_failed', 'Failed to process refund.'));
+      toast.error(translateServerError(err, t) || t('pos_refund_failed', 'Failed to process refund.'));
     } finally {
       setIsProcessing(false);
     }
@@ -701,7 +703,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
           closeCustomerModal();
         } else {
           const err = await res.json().catch(() => ({ error: res.statusText }));
-          toast.error(err.error || 'Unknown error');
+          toast.error(translateServerError(err, t) || t('pos_unknown_error', 'Unknown error'));
         }
         return;
       }
@@ -719,7 +721,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         setShowCustomerDropdown(false);
       } else {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        toast.error(err.error || 'Unknown error');
+        toast.error(translateServerError(err, t) || t('pos_unknown_error', 'Unknown error'));
       }
     } catch (err) {
       console.error(err);
@@ -825,11 +827,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         }
       } else {
         const err = await res.json().catch(() => ({}));
-        if (err.code === 'CREDIT_LIMIT') {
-          toast.error(err.error || t('pos_credit_limit_warning', "This sale would exceed the customer's credit limit."));
-        } else {
-          toast.error(err.error || 'Failed to process transaction.');
-        }
+        toast.error(translateServerError(err, t) || t('pos_transaction_failed', 'Failed to process transaction.'));
       }
     } catch (err) {
       console.error(err);
@@ -926,7 +924,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       ...(printSettings.business_address ? [center(printSettings.business_address)] : []),
       ...(printSettings.business_phone ? [center(printSettings.business_phone)] : []),
       "================================",
-      `Date: ${new Date(transaction.created_at).toLocaleString()}`,
+      `Date: ${formatDateTime(transaction.created_at, lang)}`,
       `Receipt: ${
         transaction.terminal_id && transaction.terminal_sequence
           ? `${transaction.terminal_id}-${String(transaction.terminal_sequence).padStart(4, '0')}`

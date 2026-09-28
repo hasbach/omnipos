@@ -1,4 +1,13 @@
 // Tiny fetch wrappers used by page agents. Parses JSON and throws Error(server `error` message) on !ok.
+// The thrown Error also carries `code`/`field`/`available` (when the server sent them — see
+// server/errors.ts's ValidationError/validationErrorBody) so callers can pass it straight to
+// src/lib/serverErrors.ts's translateServerError() for a localized message.
+
+export interface ApiError extends Error {
+  code?: string;
+  field?: string;
+  available?: number;
+}
 
 async function parse(res: Response) {
   const contentType = res.headers.get('content-type') || '';
@@ -10,7 +19,13 @@ async function parse(res: Response) {
       (body && typeof body === 'object' && 'error' in body && (body as any).error) ||
       (typeof body === 'string' && body) ||
       `Request failed (${res.status})`;
-    throw new Error(message);
+    const err = new Error(message) as ApiError;
+    if (body && typeof body === 'object') {
+      if ('code' in body) err.code = (body as any).code;
+      if ('field' in body) err.field = (body as any).field;
+      if ('available' in body) err.available = (body as any).available;
+    }
+    throw err;
   }
 
   return body;

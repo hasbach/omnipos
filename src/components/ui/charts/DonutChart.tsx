@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useI18n } from '../../../intl/index';
+import { formatNumber } from '../../../lib/format';
 
 export interface DonutDatum {
   label: string;
@@ -37,12 +39,18 @@ function arcPath(cx: number, cy: number, r: number, startAngle: number, endAngle
 }
 
 export function DonutChart({ data, size = 180, thickness = 24, valueFormatter, centerLabel, className = '' }: DonutChartProps) {
+  let chartLabel = 'Donut chart';
+  try {
+    chartLabel = useI18n().t('ui_donut_chart', 'Donut chart');
+  } catch {
+    /* charts can be used outside I18nProvider in rare cases. */
+  }
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
   const r = size / 2 - thickness / 2 - 2;
   const cx = size / 2;
   const cy = size / 2;
-  const fmt = valueFormatter || ((v: number) => v.toLocaleString());
+  const fmt = valueFormatter || ((v: number) => formatNumber(v, { decimals: 0 }));
 
   let cursor = 0;
   const segments = data.map((d, i) => {
@@ -55,7 +63,7 @@ export function DonutChart({ data, size = 180, thickness = 24, valueFormatter, c
   return (
     <div className={['flex items-center gap-4', className].join(' ')}>
       <div className="relative shrink-0" style={{ width: size, height: size }}>
-        <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img" aria-label="Donut chart">
+        <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img" aria-label={chartLabel}>
           {segments.map((seg) => (
             <path
               key={seg.i}

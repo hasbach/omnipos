@@ -1,5 +1,6 @@
 import React from 'react';
 import { Minus, Square, X } from 'lucide-react';
+import { useI18n } from '../intl/index';
 
 interface WindowFrameProps {
   children: React.ReactNode;
@@ -8,6 +9,12 @@ interface WindowFrameProps {
 }
 
 export default function WindowFrame({ children, title, icon }: WindowFrameProps) {
+  let closeConfirmText = 'Close application?';
+  try {
+    closeConfirmText = useI18n().t('pos_close_application_confirm', 'Close application?');
+  } catch {
+    /* WindowFrame can render outside I18nProvider in rare cases. */
+  }
   const handleMinimize = () => {
     if (window.electronAPI) {
       window.electronAPI.minimize();
@@ -26,7 +33,7 @@ export default function WindowFrame({ children, title, icon }: WindowFrameProps)
     if (window.electronAPI) {
       window.electronAPI.close();
     } else {
-      if (confirm('Close application?')) {
+      if (confirm(closeConfirmText)) {
         window.close();
       }
     }

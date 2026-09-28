@@ -13,6 +13,8 @@ import {
   Zap
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useI18n } from '../intl/index';
+import { formatDate } from '../lib/format';
 
 // Tenants now come from the cloud (all businesses), keyed by their global_id UUID rather than
 // a local integer id — so a super-admin on any machine sees every tenant, not just the few
@@ -29,6 +31,7 @@ interface AdminTenant {
 }
 
 export default function SuperAdminDashboard() {
+  const { t, lang } = useI18n();
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -92,9 +95,9 @@ export default function SuperAdminDashboard() {
       <header className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-black tracking-tighter uppercase flex items-center gap-3">
-            <Shield className="text-app-ink" /> Super Admin Control
+            <Shield className="text-app-ink" /> {t('sa_control', 'Super Admin Control')}
           </h1>
-          <p className="opacity-50 font-medium">Manage business licenses and subscriptions.</p>
+          <p className="opacity-50 font-medium">{t('sa_manage_licenses', 'Manage business licenses and subscriptions.')}</p>
         </div>
         <button 
           onClick={fetchTenants}
@@ -112,25 +115,25 @@ export default function SuperAdminDashboard() {
         <div className="relative z-10 space-y-4">
           <div className="flex items-center gap-3">
             <Zap className="text-yellow-400" />
-            <h2 className="text-xl font-black uppercase tracking-tight">System-Wide Update</h2>
+            <h2 className="text-xl font-black uppercase tracking-tight">{t('sa_system_wide_update', 'System-Wide Update')}</h2>
           </div>
-          <p className="text-sm opacity-70 max-w-md">Push a new version to all connected terminals. This will notify all business owners to install or schedule the update.</p>
-          
+          <p className="text-sm opacity-70 max-w-md">{t('sa_push_update_desc', 'Push a new version to all connected terminals. This will notify all business owners to install or schedule the update.')}</p>
+
           <div className="flex gap-4 items-end">
             <div className="space-y-2">
-              <p className="text-[10px] font-black uppercase opacity-50">Target Version</p>
-              <input 
-                type="text" 
-                placeholder="e.g. 2.6.0"
+              <p className="text-[10px] font-black uppercase opacity-50">{t('sa_target_version', 'Target Version')}</p>
+              <input
+                type="text"
+                placeholder={t('sa_version_placeholder', 'e.g. 2.6.0')}
                 className="bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-sm outline-none focus:border-white transition-all"
                 id="update-version-input"
               />
             </div>
-            <button 
+            <button
               onClick={async () => {
                 const input = document.getElementById('update-version-input') as HTMLInputElement;
-                if (!input.value) return alert('Please enter a version number');
-                if (confirm(`Are you sure you want to push version ${input.value} to ALL tenants?`)) {
+                if (!input.value) return alert(t('sa_enter_version', 'Please enter a version number'));
+                if (confirm(t('sa_confirm_push', 'Are you sure you want to push version {version} to ALL tenants?').replace('{version}', input.value))) {
                   try {
                     const res = await fetch('/api/admin/tenants/trigger-update', {
                       method: 'POST',
@@ -138,7 +141,7 @@ export default function SuperAdminDashboard() {
                       body: JSON.stringify({ version: input.value })
                     });
                     if (res.ok) {
-                      alert('Update pushed successfully!');
+                      alert(t('sa_update_pushed', 'Update pushed successfully!'));
                       input.value = '';
                     }
                   } catch (err) {
@@ -148,7 +151,7 @@ export default function SuperAdminDashboard() {
               }}
               className="px-8 py-2 bg-white text-app-ink rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-yellow-400 transition-all"
             >
-              Push Update
+              {t('sa_push_update', 'Push Update')}
             </button>
           </div>
         </div>
@@ -177,14 +180,14 @@ export default function SuperAdminDashboard() {
                   onClick={() => handleSave(tenant.global_id)}
                   className="px-4 py-2 bg-app-ink text-app-bg rounded-lg font-bold uppercase text-[10px] flex items-center gap-2"
                 >
-                  <Save size={14} /> Save Changes
+                  <Save size={14} /> {t('sa_save_changes', 'Save Changes')}
                 </button>
               ) : (
-                <button 
+                <button
                   onClick={() => handleEdit(tenant)}
                   className="px-4 py-2 bg-app-bg border border-app-border rounded-lg font-bold uppercase text-[10px]"
                 >
-                  Edit License
+                  {t('sa_edit_license', 'Edit License')}
                 </button>
               )}
             </div>
@@ -193,21 +196,21 @@ export default function SuperAdminDashboard() {
               {/* Local Software License */}
               <div className="space-y-3 p-4 bg-app-bg/50 rounded-xl border border-app-border">
                 <div className="flex items-center gap-2 text-[10px] font-black uppercase opacity-40">
-                  <Monitor size={14} /> Local Software
+                  <Monitor size={14} /> {t('sa_local_software', 'Local Software')}
                 </div>
-                
+
                 {editingId === tenant.global_id ? (
                   <div className="space-y-3">
-                    <select 
+                    <select
                       className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"
                       value={editForm.local_license_type}
                       onChange={e => setEditForm({...editForm, local_license_type: e.target.value as any})}
                     >
-                      <option value="year">Yearly</option>
-                      <option value="lifetime">Lifetime</option>
+                      <option value="year">{t('sa_yearly', 'Yearly')}</option>
+                      <option value="lifetime">{t('sa_lifetime', 'Lifetime')}</option>
                     </select>
                     {editForm.local_license_type === 'year' && (
-                      <input 
+                      <input
                         type="date"
                         className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"
                         value={editForm.local_license_expiry?.split('T')[0] || ''}
@@ -218,10 +221,10 @@ export default function SuperAdminDashboard() {
                 ) : (
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                      <span className="font-black uppercase text-sm">{tenant.local_license_type}</span>
+                      <span className="font-black uppercase text-sm">{tenant.local_license_type === 'year' ? t('sa_yearly', 'Yearly') : t('sa_lifetime', 'Lifetime')}</span>
                       {tenant.local_license_type === 'year' && (
                         <span className="text-[10px] opacity-50">
-                          Exp: {tenant.local_license_expiry ? new Date(tenant.local_license_expiry).toLocaleDateString() : 'N/A'}
+                          {t('sa_expires', 'Exp: {date}').replace('{date}', tenant.local_license_expiry ? formatDate(tenant.local_license_expiry, lang) : t('sa_not_available', 'N/A'))}
                         </span>
                       )}
                     </div>
@@ -237,21 +240,21 @@ export default function SuperAdminDashboard() {
               {/* Online Monitor License */}
               <div className="space-y-3 p-4 bg-app-bg/50 rounded-xl border border-app-border">
                 <div className="flex items-center gap-2 text-[10px] font-black uppercase opacity-40">
-                  <Globe size={14} /> Online Monitor
+                  <Globe size={14} /> {t('sa_online_monitor', 'Online Monitor')}
                 </div>
-                
+
                 {editingId === tenant.global_id ? (
                   <div className="space-y-3">
-                    <select 
+                    <select
                       className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"
                       value={editForm.online_license_type}
                       onChange={e => setEditForm({...editForm, online_license_type: e.target.value as any})}
                     >
-                      <option value="monthly">Monthly</option>
-                      <option value="lifetime">Lifetime</option>
+                      <option value="monthly">{t('sa_monthly', 'Monthly')}</option>
+                      <option value="lifetime">{t('sa_lifetime', 'Lifetime')}</option>
                     </select>
                     {editForm.online_license_type === 'monthly' && (
-                      <input 
+                      <input
                         type="date"
                         className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"
                         value={editForm.online_license_expiry?.split('T')[0] || ''}
@@ -262,10 +265,10 @@ export default function SuperAdminDashboard() {
                 ) : (
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                      <span className="font-black uppercase text-sm">{tenant.online_license_type}</span>
+                      <span className="font-black uppercase text-sm">{tenant.online_license_type === 'monthly' ? t('sa_monthly', 'Monthly') : t('sa_lifetime', 'Lifetime')}</span>
                       {tenant.online_license_type === 'monthly' && (
                         <span className="text-[10px] opacity-50">
-                          Exp: {tenant.online_license_expiry ? new Date(tenant.online_license_expiry).toLocaleDateString() : 'N/A'}
+                          {t('sa_expires', 'Exp: {date}').replace('{date}', tenant.online_license_expiry ? formatDate(tenant.online_license_expiry, lang) : t('sa_not_available', 'N/A'))}
                         </span>
                       )}
                     </div>

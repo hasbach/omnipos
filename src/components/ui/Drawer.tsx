@@ -30,9 +30,12 @@ export interface DrawerProps {
 export function Drawer({ open, onClose, title, size = 'md', footer, children, className = '' }: DrawerProps) {
   const ref = useFocusTrap<HTMLDivElement>(open, onClose);
   let dir: 'ltr' | 'rtl' = 'ltr';
+  let closeLabel = 'Close';
   try {
     // Drawer can be used outside I18nProvider in rare cases; fall back to document direction.
-    dir = useI18n().dir;
+    const i18n = useI18n();
+    dir = i18n.dir;
+    closeLabel = i18n.t('ui_close', 'Close');
   } catch {
     dir = (typeof document !== 'undefined' && document.documentElement.dir === 'rtl') ? 'rtl' : 'ltr';
   }
@@ -70,7 +73,7 @@ export function Drawer({ open, onClose, title, size = 'md', footer, children, cl
             {title && (
               <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
                 <h2 className="text-base font-semibold text-text">{title}</h2>
-                <IconButton aria-label="Close" size="sm" onClick={onClose}>
+                <IconButton aria-label={closeLabel} size="sm" onClick={onClose}>
                   <X size={16} />
                 </IconButton>
               </div>

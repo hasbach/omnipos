@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { formatNumber } from '../../lib/format';
+import { useI18n } from '../../intl/index';
 
 export interface CurrencyLike {
   code: string;
@@ -32,6 +33,7 @@ export interface DenominationCounterProps {
 
 /** A per-denomination quantity counter for one currency; reports the counted subtotal. */
 export function DenominationCounter({ currency, onTotalChange, className = '' }: DenominationCounterProps) {
+  const { t } = useI18n();
   const denoms = useMemo(() => denominationsFor(currency), [currency.code, currency.rate]);
   const [qty, setQty] = useState<Record<number, string>>({});
 
@@ -71,7 +73,7 @@ export function DenominationCounter({ currency, onTotalChange, className = '' }:
         );
       })}
       <div className="mt-1 flex items-center justify-between border-t border-border pt-2 text-sm font-semibold">
-        <span className="text-text-2">Subtotal</span>
+        <span className="text-text-2">{t('fin_stl_subtotal', 'Subtotal')}</span>
         <span className="num text-text">
           {currency.symbol} {formatNumber(total, { decimals: currency.rate && currency.rate > 100 ? 0 : 2 })}
         </span>

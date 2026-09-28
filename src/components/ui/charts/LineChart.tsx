@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useI18n } from '../../../intl/index';
+import { formatNumber } from '../../../lib/format';
 
 export interface LineChartSeries {
   name: string;
@@ -18,6 +20,12 @@ export interface LineChartProps {
 const DEFAULT_COLORS = ['var(--color-primary)', 'var(--color-accent)', 'var(--color-success)', 'var(--color-info)'];
 
 export function LineChart({ labels, series, height = 220, width = 640, valueFormatter, className = '' }: LineChartProps) {
+  let chartLabel = 'Line chart';
+  try {
+    chartLabel = useI18n().t('ui_line_chart', 'Line chart');
+  } catch {
+    /* charts can be used outside I18nProvider in rare cases. */
+  }
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const padding = { top: 16, right: 16, bottom: 28, left: 44 };
   const innerW = width - padding.left - padding.right;
@@ -43,11 +51,11 @@ export function LineChart({ labels, series, height = 220, width = 640, valueForm
   const xFor = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * innerW);
   const yFor = (v: number) => innerH - ((v - min) / range) * innerH;
 
-  const fmt = valueFormatter || ((v: number) => v.toLocaleString());
+  const fmt = valueFormatter || ((v: number) => formatNumber(v, { decimals: 0 }));
 
   return (
     <div className={['relative w-full', className].join(' ')}>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" role="img" aria-label="Line chart">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" role="img" aria-label={chartLabel}>
         <g transform={`translate(${padding.left},${padding.top})`}>
           {/* gridlines */}
           {Array.from({ length: Math.round(range / step) + 1 }, (_, i) => i / Math.round(range / step)).map((t) => {

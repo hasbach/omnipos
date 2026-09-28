@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Lock, User, CheckCircle2, X, Delete } from 'lucide-react';
 import { Tenant } from '../types';
 import { useI18n } from '../intl/index';
+import { userRoleLabel } from '../lib/format';
 
 interface LockScreenProps {
   tenant: Tenant;
@@ -153,7 +154,7 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
                     <div className="min-w-0">
                       <p className="font-bold text-lg truncate">{u.name}</p>
                       <p className={`text-[10px] font-bold uppercase tracking-wide ${selectedUser?.id === u.id ? 'opacity-90' : 'text-text-3'}`}>
-                        {u.role}
+                        {userRoleLabel(u.role, t)}
                       </p>
                     </div>
                   </div>

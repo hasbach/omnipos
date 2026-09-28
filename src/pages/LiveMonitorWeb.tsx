@@ -3,6 +3,8 @@ import { Zap, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Tenant } from '../types';
+import { useI18n } from '../intl/index';
+import { formatMoney, formatDateTime } from '../lib/format';
 
 // Normalize a timestamp coming from Supabase/Postgres into a value `new Date()` parses as UTC.
 // PostgREST returns timestamptz as e.g. "2026-07-13T07:00:00+00:00" (offset, no "Z"), while the
@@ -19,6 +21,7 @@ function normalizeCloudTimestamp(raw: string | null | undefined): string {
 }
 
 export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
+  const { t, lang } = useI18n();
   const [activities, setActivities] = useState<any[]>([]);
   const [stats, setStats] = useState({
     todayTotal: 0,
@@ -51,7 +54,7 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
         const formatted = data.map((tx: any) => ({
           ...tx,
           created_at: normalizeCloudTimestamp(tx.created_at),
-          user_name: tx.users?.name || 'Unknown',
+          user_name: tx.users?.name || t('web_unknown_user', 'Unknown'),
           stakeholder_name: tx.stakeholders?.name
         }));
         setActivities(formatted.slice(0, 50));
@@ -87,7 +90,7 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
         const formattedTx = {
           ...newTx,
           created_at: normalizeCloudTimestamp(newTx.created_at),
-          user_name: user?.name || 'Unknown',
+          user_name: user?.name || t('web_unknown_user', 'Unknown'),
           stakeholder_name: stakeholder?.name
         };
 
@@ -114,8 +117,8 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
           <Globe size={40} />
         </div>
         <div className="max-w-md space-y-2">
-          <h2 className="text-2xl font-black uppercase tracking-tight">Online Monitor Expired</h2>
-          <p className="opacity-50 text-sm">Your online monitoring subscription has expired. Please renew to access real-time terminal tracking.</p>
+          <h2 className="text-2xl font-black uppercase tracking-tight">{t('web_online_monitor_expired', 'Online Monitor Expired')}</h2>
+          <p className="opacity-50 text-sm">{t('web_online_monitor_expired_body', 'Your online monitoring subscription has expired. Please renew to access real-time terminal tracking.')}</p>
         </div>
       </div>
     );
@@ -126,15 +129,15 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
       {/* Real-time Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
-          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">Sales Today</p>
-          <p className="text-4xl font-black font-mono">${stats.todayTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">{t('web_sales_today', 'Sales Today')}</p>
+          <p className="text-4xl font-black font-mono">{formatMoney(stats.todayTotal, { code: 'USD', symbol: '$' })}</p>
         </div>
         <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
-          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">Transactions</p>
+          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">{t('web_transactions', 'Transactions')}</p>
           <p className="text-4xl font-black font-mono">{stats.todayCount}</p>
         </div>
         <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
-          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">Active Staff</p>
+          <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">{t('web_active_staff', 'Active Staff')}</p>
           <p className="text-4xl font-black font-mono">{stats.activeUsers.size}</p>
         </div>
       </div>
@@ -144,9 +147,9 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
         <div className="p-8 border-b border-app-border flex items-center justify-between bg-app-bg/10">
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse" />
-            <h2 className="font-black uppercase tracking-widest text-xs">Live Cloud Feed</h2>
+            <h2 className="font-black uppercase tracking-widest text-xs">{t('web_live_cloud_feed', 'Live Cloud Feed')}</h2>
           </div>
-          <span className="text-[10px] font-bold opacity-30 uppercase">Showing last 50 events</span>
+          <span className="text-[10px] font-bold opacity-30 uppercase">{t('web_showing_last_50', 'Showing last 50 events')}</span>
         </div>
         <div className="divide-y divide-app-border/5">
           <AnimatePresence initial={false}>
@@ -167,18 +170,20 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
                     </div>
                     <div>
                       <div className="flex items-center gap-3">
-                        <p className="font-black uppercase tracking-tight">{activity.type}</p>
-                        <span className="text-[10px] font-bold opacity-30">{new Date(activity.created_at).toLocaleTimeString()}</span>
+                        <p className="font-black uppercase tracking-tight">
+                          {activity.type === 'sale' ? t('web_type_sale', 'Sale') : activity.type === 'refund' ? t('web_type_refund', 'Refund') : activity.type === 'purchase' ? t('web_type_purchase', 'Purchase') : activity.type}
+                        </p>
+                        <span className="text-[10px] font-bold opacity-30">{formatDateTime(activity.created_at, lang)}</span>
                       </div>
                       <p className="text-xs font-bold opacity-50">
-                        Processed by <span className="text-app-ink">{activity.user_name}</span> 
-                        {activity.stakeholder_name && <> for <span className="text-app-ink">{activity.stakeholder_name}</span></>}
+                        {t('web_processed_by', 'Processed by')} <span className="text-app-ink">{activity.user_name}</span>
+                        {activity.stakeholder_name && <> {t('web_for', 'for')} <span className="text-app-ink">{activity.stakeholder_name}</span></>}
                       </p>
                     </div>
                   </div>
                   <div className="text-right">
                     <p className={`text-xl font-black font-mono ${activity.type === 'refund' ? 'text-red-500' : 'text-app-ink'}`}>
-                      {activity.type === 'refund' ? '-' : ''}${activity.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {activity.type === 'refund' ? '-' : ''}{formatMoney(activity.total_amount, { code: 'USD', symbol: '$' })}
                     </p>
                     <p className="text-[10px] font-black uppercase opacity-30 tracking-widest">{activity.currency}</p>
                   </div>
@@ -187,7 +192,7 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
             ) : (
               <div className="p-20 text-center opacity-20">
                 <Zap size={48} className="mx-auto mb-4" strokeWidth={1} />
-                <p className="font-black uppercase tracking-widest">Waiting for activity...</p>
+                <p className="font-black uppercase tracking-widest">{t('web_waiting_for_activity', 'Waiting for activity...')}</p>
               </div>
             )}
           </AnimatePresence>

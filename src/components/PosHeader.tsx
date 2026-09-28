@@ -141,7 +141,7 @@ export default function PosHeader() {
                           {s.name !== 'Walk-in Customer' && (
                             <button
                               onClick={() => openEditCustomer(s)}
-                              title="Edit customer"
+                              title={t('pos_edit_customer_title', 'Edit customer')}
                               className="px-3 opacity-40 hover:opacity-100 transition-opacity cursor-pointer"
                             >
                               <Pencil size={12} />
@@ -179,8 +179,8 @@ export default function PosHeader() {
         </div>
 
         <IconButton
-          aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label={isDarkMode ? t('pos_switch_light_mode', 'Switch to light mode') : t('pos_switch_dark_mode', 'Switch to dark mode')}
+          title={isDarkMode ? t('pos_switch_light_mode', 'Switch to light mode') : t('pos_switch_dark_mode', 'Switch to dark mode')}
           onClick={() => setIsDarkMode((v: boolean) => !v)}
         >
           {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}

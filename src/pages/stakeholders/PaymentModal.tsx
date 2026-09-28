@@ -3,6 +3,7 @@ import { Modal, Field, MoneyInput, Select, Button, useToast, useConfirm } from '
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney } from '../../lib/format';
+import { translateServerError } from '../../lib/serverErrors';
 import type { Currency, Stakeholder } from '../../types';
 
 export interface PaymentModalProps {
@@ -68,7 +69,7 @@ export function PaymentModal({ open, onClose, stakeholder, currencies, onDone }:
       onDone();
       onClose();
     } catch (err: any) {
-      toast.error(err?.message || 'Error');
+      toast.error(translateServerError(err, t) || t('stk_payment_error', 'Error'));
     } finally {
       setSaving(false);
     }

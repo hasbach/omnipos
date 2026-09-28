@@ -3,6 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   X, Printer, CheckSquare, Square, Tag, RefreshCw, Eye
 } from 'lucide-react';
+import { useI18n } from '../intl/index';
+import type { Translate } from '../lib/format';
+import { formatNumber } from '../lib/format';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -120,7 +123,7 @@ function LabelPreview({ product, fields, size, showBarcode }: {
         )}
         {fields.find(f => f.key === 'price_lbp' && f.enabled) && product.price_lbp && (
           <span className="font-mono text-emerald-700" style={{ fontSize: Math.min(8, size.heightMm / 4.5) + 'px' }}>
-            {product.price_lbp.toLocaleString()} LL
+            {formatNumber(product.price_lbp, { decimals: 0 })} LL
           </span>
         )}
       </div>
@@ -147,7 +150,8 @@ function buildPrintHtml(
   fields: LabelField[],
   showBarcode: boolean,
   size: LabelSize,
-  copies: number
+  copies: number,
+  t: Translate
 ): string {
   const labelItems: string[] = [];
 
@@ -188,7 +192,7 @@ function buildPrintHtml(
       const priceHtml = (fields.find(f => f.key === 'price' && f.enabled) || fields.find(f => f.key === 'price_lbp' && f.enabled))
         ? `<div class="label-prices">
             ${fields.find(f => f.key === 'price' && f.enabled) ? `<span class="price-usd">$${product.price.toFixed(2)}</span>` : ''}
-            ${fields.find(f => f.key === 'price_lbp' && f.enabled) && product.price_lbp ? `<span class="price-lbp">${product.price_lbp.toLocaleString()} LL</span>` : ''}
+            ${fields.find(f => f.key === 'price_lbp' && f.enabled) && product.price_lbp ? `<span class="price-lbp">${formatNumber(product.price_lbp, { decimals: 0 })} LL</span>` : ''}
            </div>` : '';
 
       const metaHtml = (fields.find(f => f.key === 'unit' && f.enabled) || fields.find(f => f.key === 'category' && f.enabled))
@@ -205,7 +209,7 @@ function buildPrintHtml(
 <html>
 <head>
 <meta charset="utf-8">
-<title>Product Labels</title>
+<title>${t('lbl_print_title', 'Product Labels')}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   @page { margin: 5mm; }
@@ -248,16 +252,21 @@ const LABEL_SIZES: LabelSize[] = [
   { id: 'xl', label: '90 × 50 mm', widthMm: 90, heightMm: 50 },
 ];
 
-const DEFAULT_FIELDS: LabelField[] = [
-  { key: 'name',      label: 'Product Name', enabled: true  },
-  { key: 'price',     label: 'Price (USD)',   enabled: true  },
-  { key: 'price_lbp', label: 'Price (LBP)',   enabled: false },
-  { key: 'unit',      label: 'Unit',          enabled: true  },
-  { key: 'category',  label: 'Category',      enabled: false },
-];
+function buildDefaultFields(t: Translate): LabelField[] {
+  return [
+    { key: 'name',      label: t('lbl_field_name', 'Product Name'),     enabled: true  },
+    { key: 'price',     label: t('lbl_field_price_usd', 'Price (USD)'), enabled: true  },
+    { key: 'price_lbp', label: t('lbl_field_price_lbp', 'Price (LBP)'), enabled: false },
+    { key: 'unit',      label: t('lbl_field_unit', 'Unit'),             enabled: true  },
+    { key: 'category',  label: t('lbl_field_category', 'Category'),     enabled: false },
+  ];
+}
 
 export default function LabelPrinter({ products, preSelected = [], onClose }: Props) {
-  const [fields, setFields] = useState<LabelField[]>(DEFAULT_FIELDS);
+  const { t } = useI18n();
+  // '50 × 30 mm' with the unit in the active language (مم in Arabic).
+  const sizeLabel = (sz: { widthMm: number; heightMm: number }) => `${sz.widthMm} × ${sz.heightMm} ${t('lbl_unit_mm', 'mm')}`;
+  const [fields, setFields] = useState<LabelField[]>(() => buildDefaultFields(t));
   const [showBarcode, setShowBarcode] = useState(true);
   const [sizeId, setSizeId] = useState<string>('m');
   const [copies, setCopies] = useState(1);
@@ -291,7 +300,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
   const handlePrint = () => {
     if (selectedProducts.length === 0) return;
     setIsPrinting(true);
-    const html = buildPrintHtml(selectedProducts, fields, showBarcode, size, copies);
+    const html = buildPrintHtml(selectedProducts, fields, showBarcode, size, copies, t);
     const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) { setIsPrinting(false); return; }
     win.document.write(html);
@@ -323,9 +332,13 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-app-ink text-app-bg rounded-xl"><Tag size={18} /></div>
             <div>
-              <h2 className="text-xl font-black uppercase tracking-tighter">Print Product Labels</h2>
+              <h2 className="text-xl font-black uppercase tracking-tighter">{t('lbl_print_product_labels', 'Print Product Labels')}</h2>
               <p className="text-[10px] opacity-40 font-bold uppercase">
-                {selected.size} product{selected.size !== 1 ? 's' : ''} selected · {selected.size * copies} label{selected.size * copies !== 1 ? 's' : ''} total
+                {t('lbl_selected_summary', '{count} product{s} selected · {labels} label{ls} total')
+                  .replace('{count}', String(selected.size))
+                  .replace('{s}', selected.size !== 1 ? 's' : '')
+                  .replace('{labels}', String(selected.size * copies))
+                  .replace('{ls}', selected.size * copies !== 1 ? 's' : '')}
               </p>
             </div>
           </div>
@@ -339,13 +352,13 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
           <div className="w-72 flex-shrink-0 border-r border-app-border flex flex-col">
             <div className="p-4 border-b border-app-border space-y-2 flex-shrink-0">
               <div className="flex gap-2">
-                <button onClick={selectAll} className="flex-1 py-1.5 text-[10px] font-black uppercase bg-app-ink text-app-bg rounded-lg hover:opacity-90 transition-all">All</button>
-                <button onClick={clearAll} className="flex-1 py-1.5 text-[10px] font-black uppercase border border-app-border rounded-lg hover:bg-app-bg transition-all">Clear</button>
+                <button onClick={selectAll} className="flex-1 py-1.5 text-[10px] font-black uppercase bg-app-ink text-app-bg rounded-lg hover:opacity-90 transition-all">{t('lbl_all', 'All')}</button>
+                <button onClick={clearAll} className="flex-1 py-1.5 text-[10px] font-black uppercase border border-app-border rounded-lg hover:bg-app-bg transition-all">{t('lbl_clear', 'Clear')}</button>
               </div>
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Search products..."
+                  placeholder={t('lbl_search_products', 'Search products...')}
                   className="w-full pl-3 pr-3 py-2 bg-app-bg border border-app-border rounded-xl text-xs outline-none"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
@@ -377,7 +390,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
 
               {/* Label Size */}
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase opacity-50 tracking-widest">Label Size</label>
+                <label className="text-[10px] font-black uppercase opacity-50 tracking-widest">{t('lbl_label_size', 'Label Size')}</label>
                 <div className="grid grid-cols-4 gap-2">
                   {LABEL_SIZES.map(s => (
                     <button
@@ -387,7 +400,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
                         sizeId === s.id ? 'border-app-ink bg-app-ink text-app-bg' : 'border-app-border hover:border-app-ink/40'
                       }`}
                     >
-                      {s.label}
+                      {sizeLabel(s)}
                     </button>
                   ))}
                 </div>
@@ -395,7 +408,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
 
               {/* Fields */}
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase opacity-50 tracking-widest">Fields to Display</label>
+                <label className="text-[10px] font-black uppercase opacity-50 tracking-widest">{t('lbl_fields_to_display', 'Fields to Display')}</label>
                 <div className="grid grid-cols-2 gap-2">
                   {/* Barcode toggle separately */}
                   <button
@@ -407,7 +420,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
                     <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${showBarcode ? 'bg-app-ink border-app-ink' : 'border-app-border'}`}>
                       {showBarcode && <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3"><path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                     </div>
-                    <span className="text-xs font-black uppercase">Barcode</span>
+                    <span className="text-xs font-black uppercase">{t('lbl_barcode', 'Barcode')}</span>
                   </button>
                   {fields.map(f => (
                     <button
@@ -428,7 +441,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
 
               {/* Copies */}
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase opacity-50 tracking-widest">Copies per Product</label>
+                <label className="text-[10px] font-black uppercase opacity-50 tracking-widest">{t('lbl_copies_per_product', 'Copies per Product')}</label>
                 <div className="flex items-center gap-3">
                   <button
                     onClick={() => setCopies(c => Math.max(1, c - 1))}
@@ -440,7 +453,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
                     className="w-10 h-10 rounded-xl border-2 border-app-border hover:bg-app-bg transition-all font-black text-lg flex items-center justify-center"
                   >+</button>
                   <span className="text-[10px] opacity-40 font-bold ml-2">
-                    = {selected.size * copies} total labels
+                    {t('lbl_total_labels', '= {count} total labels').replace('{count}', String(selected.size * copies))}
                   </span>
                 </div>
               </div>
@@ -449,7 +462,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
               {previewProduct && (
                 <div className="space-y-3">
                   <label className="text-[10px] font-black uppercase opacity-50 tracking-widest flex items-center gap-2">
-                    <Eye size={12} /> Preview (actual size)
+                    <Eye size={12} /> {t('lbl_preview', 'Preview (actual size)')}
                   </label>
                   <div className="p-6 bg-app-bg rounded-2xl border border-app-border/30 flex items-center justify-center">
                     <div style={{ transform: 'scale(2)', transformOrigin: 'center center', margin: `${size.heightMm * 3.78}px ${size.widthMm * 3.78 / 2}px` }}>
@@ -461,7 +474,7 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
                       />
                     </div>
                   </div>
-                  <p className="text-[9px] opacity-30 text-center">Preview shown at 2× scale — will print at {size.label}</p>
+                  <p className="text-[9px] opacity-30 text-center">{t('lbl_preview_scale_note', 'Preview shown at 2× scale — will print at {size}').replace('{size}', sizeLabel(size))}</p>
                 </div>
               )}
             </div>
@@ -474,12 +487,12 @@ export default function LabelPrinter({ products, preSelected = [], onClose }: Pr
                 className="w-full py-4 bg-app-ink text-app-bg rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-30"
               >
                 {isPrinting
-                  ? <><RefreshCw size={18} className="animate-spin" /> Preparing...</>
-                  : <><Printer size={18} /> Print {selected.size * copies} Label{selected.size * copies !== 1 ? 's' : ''}</>
+                  ? <><RefreshCw size={18} className="animate-spin" /> {t('lbl_preparing', 'Preparing...')}</>
+                  : <><Printer size={18} /> {t('lbl_print_n_labels', 'Print {count} Label{s}').replace('{count}', String(selected.size * copies)).replace('{s}', selected.size * copies !== 1 ? 's' : '')}</>
                 }
               </button>
               {selected.size === 0 && (
-                <p className="text-[10px] opacity-30 text-center mt-2">Select at least one product from the list</p>
+                <p className="text-[10px] opacity-30 text-center mt-2">{t('lbl_select_at_least_one', 'Select at least one product from the list')}</p>
               )}
             </div>
           </div>

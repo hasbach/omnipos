@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardBody, Field, Select, Input, Button, DataTable, Badge, type DataTableColumn } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatDateTime } from '../../lib/format';
+import { formatMoney, formatDateTime, stakeholderTypeLabel } from '../../lib/format';
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { CustomBuilderRow, ProductLite, StakeholderLite } from './types';
@@ -100,7 +100,7 @@ export function CustomBuilderTab({ businessName }: CustomBuilderTabProps) {
                 value={filters.stakeholderId}
                 onChange={(e) => setFilters((f) => ({ ...f, stakeholderId: e.target.value }))}
                 placeholder={t('rep_builder_all_stakeholders', 'All stakeholders')}
-                options={stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${s.type})` }))}
+                options={stakeholders.map((s) => ({ value: String(s.id), label: `${s.name} (${stakeholderTypeLabel(s.type, t)})` }))}
               />
             </Field>
             <Field label={t('rep_builder_type', 'Invoice type')}>
@@ -149,7 +149,7 @@ export function CustomBuilderTab({ businessName }: CustomBuilderTabProps) {
               />
             </Field>
             <Field label={t('rep_builder_invoice_no', 'Invoice #')}>
-              <Input placeholder="e.g. 1042" value={filters.invoiceNumber} onChange={(e) => setFilters((f) => ({ ...f, invoiceNumber: e.target.value }))} />
+              <Input placeholder={t('rep_builder_invoice_placeholder', 'e.g. 1042')} value={filters.invoiceNumber} onChange={(e) => setFilters((f) => ({ ...f, invoiceNumber: e.target.value }))} />
             </Field>
           </div>
           <div className="flex justify-end gap-2">

@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
+import { useI18n } from '../intl/index';
+import { formatDate } from '../lib/format';
 
 // Web counterpart to src/components/SuperAdminDashboard.tsx (desktop). That version reads/
 // writes a local SQLite database via local Express endpoints, which only ever reflects
@@ -35,6 +37,7 @@ interface AdminTenant {
 }
 
 export default function SuperAdminWeb() {
+  const { t, lang } = useI18n();
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -81,7 +84,7 @@ export default function SuperAdminWeb() {
         setEditingId(null);
         fetchTenants();
       } else {
-        alert(`Failed to save: ${error.message}`);
+        alert(t('web_failed_to_save', 'Failed to save: {message}').replace('{message}', error.message));
       }
     } catch (err) {
       console.error('Save license error:', err);
@@ -108,9 +111,9 @@ export default function SuperAdminWeb() {
       <header className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-black tracking-tighter uppercase flex items-center gap-3">
-            <Shield className="text-app-ink" /> Super Admin Control
+            <Shield className="text-app-ink" /> {t('web_super_admin_control', 'Super Admin Control')}
           </h1>
-          <p className="opacity-50 font-medium">Manage business licenses and subscriptions.</p>
+          <p className="opacity-50 font-medium">{t('web_manage_licenses', 'Manage business licenses and subscriptions.')}</p>
         </div>
         <button
           onClick={fetchTenants}
@@ -144,14 +147,14 @@ export default function SuperAdminWeb() {
                   disabled={saving}
                   className="px-4 py-2 bg-app-ink text-app-bg rounded-lg font-bold uppercase text-[10px] flex items-center gap-2 disabled:opacity-50"
                 >
-                  <Save size={14} /> {saving ? 'Saving...' : 'Save Changes'}
+                  <Save size={14} /> {saving ? t('web_saving', 'Saving...') : t('web_save_changes', 'Save Changes')}
                 </button>
               ) : (
                 <button
                   onClick={() => handleEdit(tenant)}
                   className="px-4 py-2 bg-app-bg border border-app-border rounded-lg font-bold uppercase text-[10px]"
                 >
-                  Edit License
+                  {t('web_edit_license', 'Edit License')}
                 </button>
               )}
             </div>
@@ -160,7 +163,7 @@ export default function SuperAdminWeb() {
               {/* Local Software License */}
               <div className="space-y-3 p-4 bg-app-bg/50 rounded-xl border border-app-border">
                 <div className="flex items-center gap-2 text-[10px] font-black uppercase opacity-40">
-                  <Monitor size={14} /> Local Software
+                  <Monitor size={14} /> {t('web_local_software', 'Local Software')}
                 </div>
 
                 {editingId === tenant.global_id ? (
@@ -170,8 +173,8 @@ export default function SuperAdminWeb() {
                       value={editForm.local_license_type}
                       onChange={e => setEditForm({ ...editForm, local_license_type: e.target.value as any })}
                     >
-                      <option value="year">Yearly</option>
-                      <option value="lifetime">Lifetime</option>
+                      <option value="year">{t('web_yearly', 'Yearly')}</option>
+                      <option value="lifetime">{t('web_lifetime', 'Lifetime')}</option>
                     </select>
                     {editForm.local_license_type === 'year' && (
                       <input
@@ -185,10 +188,10 @@ export default function SuperAdminWeb() {
                 ) : (
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                      <span className="font-black uppercase text-sm">{tenant.local_license_type}</span>
+                      <span className="font-black uppercase text-sm">{tenant.local_license_type === 'year' ? t('web_yearly', 'Yearly') : t('web_lifetime', 'Lifetime')}</span>
                       {tenant.local_license_type === 'year' && (
                         <span className="text-[10px] opacity-50">
-                          Exp: {tenant.local_license_expiry ? new Date(tenant.local_license_expiry).toLocaleDateString() : 'N/A'}
+                          {t('web_expires', 'Exp: {date}').replace('{date}', tenant.local_license_expiry ? formatDate(tenant.local_license_expiry, lang) : t('web_not_available', 'N/A'))}
                         </span>
                       )}
                     </div>
@@ -204,7 +207,7 @@ export default function SuperAdminWeb() {
               {/* Online Monitor License */}
               <div className="space-y-3 p-4 bg-app-bg/50 rounded-xl border border-app-border">
                 <div className="flex items-center gap-2 text-[10px] font-black uppercase opacity-40">
-                  <Globe size={14} /> Online Monitor
+                  <Globe size={14} /> {t('web_online_monitor', 'Online Monitor')}
                 </div>
 
                 {editingId === tenant.global_id ? (
@@ -214,8 +217,8 @@ export default function SuperAdminWeb() {
                       value={editForm.online_license_type}
                       onChange={e => setEditForm({ ...editForm, online_license_type: e.target.value as any })}
                     >
-                      <option value="monthly">Monthly</option>
-                      <option value="lifetime">Lifetime</option>
+                      <option value="monthly">{t('web_monthly', 'Monthly')}</option>
+                      <option value="lifetime">{t('web_lifetime', 'Lifetime')}</option>
                     </select>
                     {editForm.online_license_type === 'monthly' && (
                       <input
@@ -229,10 +232,10 @@ export default function SuperAdminWeb() {
                 ) : (
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                      <span className="font-black uppercase text-sm">{tenant.online_license_type}</span>
+                      <span className="font-black uppercase text-sm">{tenant.online_license_type === 'monthly' ? t('web_monthly', 'Monthly') : t('web_lifetime', 'Lifetime')}</span>
                       {tenant.online_license_type === 'monthly' && (
                         <span className="text-[10px] opacity-50">
-                          Exp: {tenant.online_license_expiry ? new Date(tenant.online_license_expiry).toLocaleDateString() : 'N/A'}
+                          {t('web_expires', 'Exp: {date}').replace('{date}', tenant.online_license_expiry ? formatDate(tenant.online_license_expiry, lang) : t('web_not_available', 'N/A'))}
                         </span>
                       )}
                     </div>
