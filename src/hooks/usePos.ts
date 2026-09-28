@@ -364,23 +364,29 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       return;
     }
 
-    const calculateRefundAmount = (item: any, qty: number) => {
-      let price = item.unit_price * qty;
-      if (item.discount_type === 'percentage') {
-        price -= (price * (item.discount_value || 0)) / 100;
-      } else if (item.discount_type === 'fixed') {
-        price -= (item.discount_value || 0) * (qty / item.quantity); // Pro-rated fixed discount
-      }
-      return price;
-    };
-
-    const totalRefund = itemsToRefund.reduce((sum: number, item: any) => {
-      const originalItem = selectedHistoryTransaction.items.find((i: any) => i.product_id === item.id);
-      return sum + calculateRefundAmount(originalItem, item.quantity);
-    }, 0);
-
     setIsProcessing(true);
     try {
+      // The refund amount actually charged back must come from the server's own math (per-unit
+      // price after the ORIGINAL invoice's whole-invoice discount/tax, via chargedFactor) — not
+      // just this line's own price/discount, which ignores that global adjustment and can pay
+      // back more than the server will record for this refund (see GET
+      // /api/transactions/:id/refundable + the type==='refund' branch of POST /api/transactions
+      // in server/routes.ts). Fetch it fresh right before submitting so the cash payment we send
+      // matches exactly what the server will total.
+      const refundableRes = await fetch(`/api/transactions/${selectedHistoryTransaction.id}/refundable`);
+      if (!refundableRes.ok) {
+        const err = await refundableRes.json().catch(() => ({}));
+        throw new Error(err.error || t('pos_refund_failed', 'Failed to process refund.'));
+      }
+      const refundable = await refundableRes.json();
+      const unitRefundByProduct: Record<number, number> = {};
+      for (const line of refundable.lines || []) unitRefundByProduct[line.product_id] = line.unit_refund;
+
+      const totalRefund = itemsToRefund.reduce((sum: number, item: any) => {
+        const unitRefund = unitRefundByProduct[item.id] ?? 0;
+        return sum + unitRefund * item.quantity;
+      }, 0);
+
       const res = await fetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -411,9 +417,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         const err = await res.json().catch(() => ({}));
         toast.error(err.error || t('pos_refund_failed', 'Failed to process refund.'));
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      toast.error(t('pos_refund_failed', 'Failed to process refund.'));
+      toast.error(err?.message || t('pos_refund_failed', 'Failed to process refund.'));
     } finally {
       setIsProcessing(false);
     }

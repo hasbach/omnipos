@@ -123,7 +123,23 @@ export default function InvoiceManagement() {
   const columns: DataTableColumn<InvoiceListRow>[] = [
     { key: 'id', header: t('inv_col_number', '#'), sortable: true, render: (r) => <span className="num font-medium">#{r.id}</span> },
     { key: 'created_at', header: t('inv_col_date', 'Date'), sortable: true, sortValue: (r) => new Date(r.created_at).getTime(), render: (r) => <span className="num text-text-2">{formatDateTime(r.created_at, lang)}</span> },
-    { key: 'type', header: t('inv_col_type', 'Type'), sortable: true, render: (r) => <Badge variant={typeBadgeVariant(r.type)}>{t(`inv_type_${r.type}`, r.type)}</Badge> },
+    {
+      key: 'type', header: t('inv_col_type', 'Type'), sortable: true,
+      render: (r) => (
+        <div className="flex flex-col gap-0.5">
+          <Badge variant={typeBadgeVariant(r.type)}>{t(`inv_type_${r.type}`, r.type)}</Badge>
+          {r.type === 'refund' && r.original_transaction_id ? (
+            <button
+              type="button"
+              className="w-fit cursor-pointer text-xs text-text-3 underline-offset-2 hover:text-primary hover:underline"
+              onClick={(e) => { e.stopPropagation(); openDetail(r.original_transaction_id as number); }}
+            >
+              {t('inv_refund_of', 'Refund of #{id}').replace('{id}', String(r.original_transaction_id))}
+            </button>
+          ) : null}
+        </div>
+      ),
+    },
     { key: 'stakeholder_name', header: t('inv_col_party', 'Party'), sortable: true, render: (r) => r.stakeholder_name || '—' },
     { key: 'item_count', header: t('inv_col_items', 'Items'), align: 'center', sortable: true },
     { key: 'total_amount', header: t('inv_col_total', 'Total'), align: 'end', sortable: true, render: (r) => formatMoney(r.total_amount, USD) },
@@ -222,6 +238,8 @@ export default function InvoiceManagement() {
         isAdmin={isAdmin}
         onEdit={(id, type) => openEditor(type === 'purchase' ? 'purchase' : 'sale', id)}
         onDeleted={fetchRows}
+        onRefunded={fetchRows}
+        onOpenInvoice={(id) => openDetail(id)}
       />
 
       <InvoiceEditor

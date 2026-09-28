@@ -32,6 +32,8 @@ export interface InvoiceListRow {
   item_count: number;
   reference?: string | null;
   notes?: string | null;
+  /** Set on a refund row — the sale it refunds (server's TX_LIVE_COLUMNS/TX_ARCHIVED_COLUMNS). */
+  original_transaction_id?: number | null;
 }
 
 /** Row shape returned by GET /api/purchases. */

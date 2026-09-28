@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Edit2, FileClock, Printer, Trash2 } from 'lucide-react';
+import { Edit2, FileClock, Printer, RotateCcw, Trash2, Undo2 } from 'lucide-react';
 import { Drawer, Button, Badge, Tabs, Checkbox, SkeletonTable } from '../../components/ui';
 import { useToast, useConfirm } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney, formatDateTime } from '../../lib/format';
+import RefundModal, { type RefundableResponse } from './RefundModal';
 import type { CurrencyRow, TxType } from './types';
 
 export interface InvoiceDetailDrawerProps {
@@ -15,6 +16,10 @@ export interface InvoiceDetailDrawerProps {
   isAdmin: boolean;
   onEdit: (id: number, type: TxType) => void;
   onDeleted: () => void;
+  /** Called after a refund is created against this invoice — the outer list/table should refresh. */
+  onRefunded?: () => void;
+  /** Open another invoice's detail (e.g. a refund's original sale) in this same drawer. */
+  onOpenInvoice?: (id: number) => void;
 }
 
 const USD: CurrencyRow = { code: 'USD', symbol: '$', rate: 1 };
@@ -25,7 +30,7 @@ function typeBadge(type: string) {
   return <Badge variant="success">Sale</Badge>;
 }
 
-export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAdmin, onEdit, onDeleted }: InvoiceDetailDrawerProps) {
+export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAdmin, onEdit, onDeleted, onRefunded, onOpenInvoice }: InvoiceDetailDrawerProps) {
   const { t, lang } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
@@ -34,24 +39,41 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
   const [edits, setEdits] = useState<any[]>([]);
   const [tab, setTab] = useState<'lines' | 'audit'>('lines');
   const [showCost, setShowCost] = useState(false);
+  const [refundable, setRefundable] = useState<RefundableResponse | null>(null);
+  const [refundModalOpen, setRefundModalOpen] = useState(false);
 
   const local = currencies.find((c) => c.code !== 'USD') || null;
 
-  useEffect(() => {
-    if (!open || !invoiceId) return;
-    setLoading(true);
-    setTab('lines');
-    Promise.all([
-      api.get(`/api/transactions/${invoiceId}`),
-      api.get(`/api/transactions/${invoiceId}/edits`).catch(() => []),
+  const loadInvoice = (id: number, opts: { showSkeleton: boolean }) => {
+    if (opts.showSkeleton) setLoading(true);
+    setRefundable(null);
+    return Promise.all([
+      api.get(`/api/transactions/${id}`),
+      api.get(`/api/transactions/${id}/edits`).catch(() => []),
     ])
       .then(([inv, ed]) => {
         setInvoice(inv);
         setEdits(Array.isArray(ed) ? ed : []);
+        // Only a sale can be refunded — fetch what's still eligible so the Refund action can be
+        // hidden once nothing remains (GET /api/transactions/:id/refundable).
+        if (inv.type === 'sale') {
+          api.get<RefundableResponse>(`/api/transactions/${id}/refundable`)
+            .then(setRefundable)
+            .catch(() => setRefundable(null));
+        }
       })
       .catch((err) => toast.error(err.message))
-      .finally(() => setLoading(false));
+      .finally(() => { if (opts.showSkeleton) setLoading(false); });
+  };
+
+  useEffect(() => {
+    if (!open || !invoiceId) return;
+    setTab('lines');
+    loadInvoice(invoiceId, { showSkeleton: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, invoiceId]);
+
+  const hasRemainingRefund = !!refundable && refundable.lines.some((l) => l.remaining_qty > 0.0001);
 
   const handleDelete = async () => {
     if (!invoice) return;
@@ -136,6 +158,9 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
           {!invoice.archived && invoice.type !== 'refund' && (
             <Button variant="danger" onClick={handleDelete}><Trash2 size={15} /> {t('inv_action_delete', 'Delete')}</Button>
           )}
+          {invoice.type === 'sale' && hasRemainingRefund && (
+            <Button variant="secondary" onClick={() => setRefundModalOpen(true)}><RotateCcw size={15} /> {t('inv_action_refund', 'Refund')}</Button>
+          )}
           {invoice.type !== 'refund' && (
             <Button variant="primary" onClick={() => onEdit(invoice.id, invoice.type)}><Edit2 size={15} /> {t('inv_action_edit', 'Edit')}</Button>
           )}
@@ -146,6 +171,20 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
         <SkeletonTable cols={4} rows={6} />
       ) : (
         <div className="space-y-4">
+          {invoice.type === 'refund' && invoice.original_transaction_id ? (
+            <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 px-3 py-2 text-sm">
+              <span className="inline-flex items-center gap-1.5 text-text-2">
+                <Undo2 size={14} className="text-text-3" />
+                {t('inv_refund_of', 'Refund of #{id}').replace('{id}', String(invoice.original_transaction_id))}
+              </span>
+              {onOpenInvoice && (
+                <Button variant="ghost" size="sm" onClick={() => onOpenInvoice(invoice.original_transaction_id)}>
+                  {t('inv_refund_view_original', 'View original sale')}
+                </Button>
+              )}
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <p className="text-xs text-text-3">{invoice.type === 'purchase' ? t('inv_detail_supplier', 'Supplier') : t('inv_detail_party', 'Party')}</p>
@@ -294,6 +333,18 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
           )}
         </div>
       )}
+
+      <RefundModal
+        open={refundModalOpen}
+        onClose={() => setRefundModalOpen(false)}
+        invoiceId={invoice?.id ?? invoiceId}
+        currencies={currencies}
+        onDone={() => {
+          setRefundModalOpen(false);
+          if (invoiceId) loadInvoice(invoiceId, { showSkeleton: false });
+          onRefunded?.();
+        }}
+      />
     </Drawer>
   );
 }

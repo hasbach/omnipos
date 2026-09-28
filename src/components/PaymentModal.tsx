@@ -335,13 +335,7 @@ export default function PaymentModal() {
                       </button>
                     </div>
                     <div className="w-20 text-end font-mono font-bold num text-danger">
-                      -${(() => {
-                        const qty = refundQuantities[item.id] || 0;
-                        let price = item.unit_price * qty;
-                        if (item.discount_type === 'percentage') price -= (price * (item.discount_value || 0)) / 100;
-                        else if (item.discount_type === 'fixed') price -= (item.discount_value || 0) * (qty / item.quantity);
-                        return price.toFixed(2);
-                      })()}
+                      -${refundLineAmount(item, refundQuantities[item.id] || 0, selectedHistoryTransaction).toFixed(2)}
                     </div>
                   </div>
                 </div>
@@ -352,13 +346,8 @@ export default function PaymentModal() {
               <div className="flex justify-between items-center">
                 <span className="text-sm font-bold text-text-3 uppercase">{t('pos_total_refund_amount', 'Total Refund Amount')}</span>
                 <span className="text-2xl font-black font-mono num text-danger">
-                  -${selectedHistoryTransaction.items.reduce((sum: number, item: any) => {
-                    const qty = refundQuantities[item.id] || 0;
-                    let price = item.unit_price * qty;
-                    if (item.discount_type === 'percentage') price -= (price * (item.discount_value || 0)) / 100;
-                    else if (item.discount_type === 'fixed') price -= (item.discount_value || 0) * (qty / item.quantity);
-                    return sum + price;
-                  }, 0).toFixed(2)}
+                  -${selectedHistoryTransaction.items.reduce((sum: number, item: any) =>
+                    sum + refundLineAmount(item, refundQuantities[item.id] || 0, selectedHistoryTransaction), 0).toFixed(2)}
                 </span>
               </div>
               <div className="flex gap-3">
@@ -678,4 +667,20 @@ export default function PaymentModal() {
       </footer>
     </>
   );
+}
+
+// What refunding `qty` units of a line pays back — the same rule the server applies (see
+// chargedFactor / originalAdjustmentPcts in server/routes.ts, and GET /api/transactions/:id/refundable
+// which usePos uses for the amount actually submitted): the line's own discount prorated, then the
+// fraction of the invoice's line subtotal that was actually charged (invoice discount and tax).
+function discountedLine(item: any, qty: number): number {
+  let price = item.unit_price * qty;
+  if (item.discount_type === 'percentage') price -= (price * (item.discount_value || 0)) / 100;
+  else if (item.discount_type === 'fixed') price -= (item.discount_value || 0) * (qty / (item.quantity || 1));
+  return Math.max(0, price);
+}
+function refundLineAmount(item: any, qty: number, tx: any): number {
+  const subtotal = (tx.items || []).reduce((sum: number, i: any) => sum + discountedLine(i, i.quantity), 0);
+  const factor = subtotal > 0 ? (tx.total_amount || 0) / subtotal : 1;
+  return discountedLine(item, qty) * factor;
 }

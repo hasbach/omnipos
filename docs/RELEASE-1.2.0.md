@@ -31,6 +31,9 @@ no GitHub release. Publishing is a separate, deliberate step (see README).
   keeps its number. Stock, cost and customer/supplier balances are adjusted automatically; editing a settled invoice
   adjusts the carried balance, and new cash payments on it go into today's cash register.
 - Every edit requires a reason and is kept in an audit history (before → after).
+- Refund screen (from any sale, including settled ones): pick quantities per line, see what was already
+  refunded and what remains, refund in cash or card (USD or local currency) or as credit to the customer's
+  account, with a required reason. Refunds link back to their original sale.
 
 **Reports**
 - KPIs, P&L, sales trend, and analysis by product, category, customer, supplier, cashier and payment method.
@@ -54,3 +57,5 @@ no GitHub release. Publishing is a separate, deliberate step (see README).
 - Daily sales reports used UTC days (sales after 9 pm / midnight local landed on the wrong day).
 - Yearly report ignored settled transactions and refunds.
 - Purchases screen hid settled purchases.
+- Refunds ignored the original invoice's global discount and tax, so a partial refund from a discounted
+  invoice paid back more than the customer paid (POS and back office now both use the charged amount).
