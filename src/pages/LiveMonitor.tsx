@@ -6,6 +6,7 @@ import { useI18n } from '../intl/index';
 import { formatMoney, formatTime, transactionTypeLabel, partyDisplayName } from '../lib/format';
 import { api } from '../lib/api';
 import type { Tenant } from '../types';
+import AccessLinksCard from './monitor/AccessLinksCard';
 
 interface Activity {
   id: number;
@@ -97,6 +98,7 @@ export default function LiveMonitor() {
           title={t('fin_lm_expired_title', 'Online Monitor Expired')}
           description={t('fin_lm_expired_desc', 'Your online monitoring subscription has expired. Please renew to access real-time terminal tracking.')}
         />
+        <div className="mt-6 w-full max-w-4xl"><AccessLinksCard tenantEmail={tenant?.email} /></div>
       </div>
     );
   }
@@ -111,6 +113,8 @@ export default function LiveMonitor() {
         title={t('fin_lm_title', 'Store Monitor')}
         subtitle={t('fin_lm_subtitle', 'Real-time activity from all POS terminals.')}
       />
+
+      <AccessLinksCard tenantEmail={tenant?.email} />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label={t('fin_lm_sales_today', 'Sales Today')} icon={Wallet} value={formatMoney(stats.todayTotal, { code: 'USD', symbol: '$' })} />

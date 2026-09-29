@@ -1,3 +1,4 @@
+import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect } from "./balance.js";
 import bcrypt from "bcryptjs";
@@ -397,6 +398,14 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     req.session.destroy(() => {
       res.json({ success: true });
     });
+  });
+
+  // The addresses other registers / a browser on the same network use to reach THIS host (shown on the
+  // Live Monitor page so the owner can always find the link again). Loopback/virtual-only machines
+  // return an empty list.
+  app.get("/api/system/network-info", authenticate, (req: any, res) => {
+    const port = Number(process.env.PORT) || 3000;
+    res.json({ port, addresses: getLanAddresses().map((ip) => ({ ip, url: `http://${ip}:${port}` })) });
   });
 
   app.get("/api/auth/me", async (req: any, res) => {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -265,6 +265,7 @@ function launchMain(config) {
 
   // Force all child windows (e.g. dashboard) to be frameless
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (openOutsideLinkExternally(mainWindow, url)) return { action: 'deny' };
     return {
       action: 'allow',
       overrideBrowserWindowOptions: {
@@ -282,7 +283,24 @@ function launchMain(config) {
   // Also remove menu from any child windows after they're created
   mainWindow.webContents.on('did-create-window', (childWindow) => {
     childWindow.setMenu(null);
+    // The dashboard (Live Monitor page included) is a child window: same external-link rule there.
+    childWindow.webContents.setWindowOpenHandler(({ url }) =>
+      openOutsideLinkExternally(childWindow, url) ? { action: 'deny' } : { action: 'allow' });
   });
+}
+
+// Links to anything other than this app's own server (the online Live Monitor, or this host's LAN
+// address copied from the Live Monitor page) open in the system browser instead of an app window.
+function openOutsideLinkExternally(win, url) {
+  try {
+    const target = new URL(url);
+    const own = new URL(win.webContents.getURL());
+    if (/^https?:$/.test(target.protocol) && target.origin !== own.origin) {
+      shell.openExternal(url);
+      return true;
+    }
+  } catch { /* not a URL we can reason about */ }
+  return false;
 }
 
 function startLocalServer(config, onReady) {

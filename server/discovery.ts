@@ -5,7 +5,7 @@ const DISCOVERY_PORT = 47777;
 const BEACON_INTERVAL_MS = 3000;
 const BEACON_PREFIX = 'OMNIPOS_SERVER:';
 
-function getLocalIPs(): string[] {
+export function getLocalIPs(): string[] {
   const interfaces = os.networkInterfaces();
   const ips: string[] = [];
   for (const iface of Object.values(interfaces)) {
@@ -17,6 +17,24 @@ function getLocalIPs(): string[] {
     }
   }
   return ips;
+}
+
+// Adapters that are never the store's real network: Hyper-V/WSL virtual switches ("vEthernet (…)"),
+// VirtualBox/VMware host-only nets, Docker, VPN tunnels, Bluetooth PAN. Shown to the owner as "the
+// address to connect a cashier to", those only cause failed connections.
+const VIRTUAL_ADAPTER = /vethernet|virtualbox|vmware|vmnet|hyper-v|wsl|docker|vbox|loopback|bluetooth|tailscale|zerotier|hamachi|tap-|tun/i;
+
+/** Real LAN addresses of this machine (virtual adapters filtered out; falls back to all when that leaves none). */
+export function getLanAddresses(): string[] {
+  const interfaces = os.networkInterfaces();
+  const real: string[] = [];
+  for (const [name, iface] of Object.entries(interfaces)) {
+    if (!iface || VIRTUAL_ADAPTER.test(name)) continue;
+    for (const addr of iface) {
+      if (addr.family === 'IPv4' && !addr.internal && !addr.address.startsWith('169.254.')) real.push(addr.address);
+    }
+  }
+  return real.length ? real : getLocalIPs();
 }
 
 export function startDiscoveryBeacon(port: number = 3000) {
