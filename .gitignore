@@ -15,3 +15,4 @@ coverage/
 .claude/scheduled_tasks.lock
 
 .vercel
+.test-lock/
