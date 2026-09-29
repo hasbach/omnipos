@@ -447,7 +447,9 @@ export default function PaymentModal() {
       {/* Checkout Modal */}
       <Modal
         open={showCheckout}
-        onClose={() => setShowCheckout(false)}
+        // Closing the success screen (Esc / ×) finishes it like "New Sale", so the next checkout
+        // doesn't reopen on the previous sale's receipt.
+        onClose={() => { setLastTransaction(null); setShowCheckout(false); }}
         size="sm"
         title={lastTransaction ? t('pos_transaction_success', 'Transaction Success') : t('pos_finalize_payment', 'Finalize Payment')}
       >

@@ -89,6 +89,9 @@ export interface EditTransactionBody {
   reference?: string | null;
   price_level?: string | null;
   created_at?: string | null;
+  /** Entry-currency metadata only (items/totals stay USD); both optional. */
+  currency?: string;
+  exchange_rate?: number;
   reason?: string | null;
   user_id?: number | null;
 }
@@ -265,6 +268,18 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     const d = new Date(body.created_at);
     if (isNaN(d.getTime())) throw new ValidationError("Invalid invoice date.");
     createdAt = d.toISOString().replace('T', ' ').slice(0, 19);
+  }
+
+  // Entry-currency metadata (how the invoice was keyed in); never affects totals, which are USD.
+  let entryCurrency: string | null = null;
+  let entryRate: number | null = null;
+  if (body.currency !== undefined && body.currency !== null) {
+    if (typeof body.currency !== 'string' || !body.currency.trim()) throw new ValidationError("Invalid invoice currency.");
+    entryCurrency = body.currency.trim();
+  }
+  if (body.exchange_rate !== undefined && body.exchange_rate !== null) {
+    if (!(Number.isFinite(body.exchange_rate) && Number(body.exchange_rate) > 0)) throw new ValidationError("Invalid invoice exchange rate.");
+    entryRate = Number(body.exchange_rate);
   }
 
   const productCache: Record<number, any> = {};
@@ -465,6 +480,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       UPDATE ${txTable}
       SET stakeholder_id = ?, total_amount = ?, discount_type = ?, discount_value = ?, tax_type = ?, tax_value = ?,
           notes = ?, reference = ?, price_level = ?, created_at = COALESCE(?, created_at),
+          currency = COALESCE(?, currency), exchange_rate = COALESCE(?, exchange_rate),
           edited_at = CURRENT_TIMESTAMP, edit_count = IFNULL(edit_count, 0) + 1
       WHERE id = ? AND tenant_id = ?
     `).run(
@@ -478,6 +494,8 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       body.reference ?? tx.reference ?? null,
       priceLevel,
       createdAt,
+      entryCurrency,
+      entryRate,
       id,
       tenantId
     );

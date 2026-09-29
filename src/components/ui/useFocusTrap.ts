@@ -31,6 +31,8 @@ export function useFocusTrap<T extends HTMLElement>(active: boolean, onEscape?: 
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // A field inside the dialog can claim Esc for itself (e.g. to clear a search first).
+        if ((e.target as HTMLElement | null)?.closest?.('[data-escape-local="true"]')) return;
         e.stopPropagation();
         onEscapeRef.current?.();
         return;

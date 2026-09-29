@@ -374,3 +374,42 @@ test("a back-office sale invoice keeps the price typed in the editor", async () 
   });
   assert.equal((app.db.prepare("SELECT total_amount FROM transactions WHERE id = ?").get(pos.body.id) as any).total_amount, 30);
 });
+
+test("a purchase entered in LBP stores total_amount in USD from USD item prices, with LBP as metadata", async () => {
+  const productId = seedProduct(app.db, tenantId, { barcode: "LBP-PUR", name: "LBP Item", price: 10, stock: 0 });
+  const res = await app.api("POST", "/api/transactions", {
+    tenantId, body: { type: "purchase", items: [{ id: productId, quantity: 4, price: 2.5 }], currency: "LBP", exchange_rate: 89500, payments: [] },
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const row = app.db.prepare("SELECT total_amount, currency, exchange_rate FROM transactions WHERE id = ?").get(res.body.id) as any;
+  assert.equal(row.total_amount, 10, "4 x $2.5 stays in USD regardless of the entry currency");
+  assert.equal(row.currency, "LBP");
+  assert.equal(row.exchange_rate, 89500);
+});
+
+test("PUT accepts entry-currency metadata (currency/exchange_rate) without touching totals, and validates it", async () => {
+  const productId = seedProduct(app.db, tenantId, { barcode: "LBP-EDIT", name: "LBP Edit", price: 10, stock: 0 });
+  const res = await app.api("POST", "/api/transactions", {
+    tenantId, body: { type: "purchase", items: [{ id: productId, quantity: 2, price: 3 }], currency: "USD", exchange_rate: 1, payments: [] },
+  });
+  const id = res.body.id;
+  const put = await app.api("PUT", `/api/transactions/${id}`, {
+    tenantId, body: { items: [{ product_id: productId, quantity: 2, unit_price: 3 }], currency: "LBP", exchange_rate: 90000 },
+  });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  let row = app.db.prepare("SELECT total_amount, currency, exchange_rate FROM transactions WHERE id = ?").get(id) as any;
+  assert.equal(row.total_amount, 6);
+  assert.equal(row.currency, "LBP");
+  assert.equal(row.exchange_rate, 90000);
+
+  // Omitted metadata leaves the stored values alone.
+  await app.api("PUT", `/api/transactions/${id}`, { tenantId, body: { items: [{ product_id: productId, quantity: 2, unit_price: 3 }] } });
+  row = app.db.prepare("SELECT currency, exchange_rate FROM transactions WHERE id = ?").get(id) as any;
+  assert.equal(row.currency, "LBP");
+  assert.equal(row.exchange_rate, 90000);
+
+  const badRate = await app.api("PUT", `/api/transactions/${id}`, { tenantId, body: { items: [{ product_id: productId, quantity: 2, unit_price: 3 }], exchange_rate: 0 } });
+  assert.equal(badRate.status, 400);
+  const badCur = await app.api("PUT", `/api/transactions/${id}`, { tenantId, body: { items: [{ product_id: productId, quantity: 2, unit_price: 3 }], currency: "  " } });
+  assert.equal(badCur.status, 400);
+});

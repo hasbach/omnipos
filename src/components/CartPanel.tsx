@@ -16,7 +16,7 @@ export default function CartPanel() {
   const pos = usePosContext();
   const {
     products, cart, barcodeInput, setBarcodeInput, isProcessing,
-    currencies = CURRENCIES, selectedCurrency, setSelectedCurrency, setShowCheckout, setPaymentCurrency,
+    currencies = CURRENCIES, selectedCurrency, setSelectedCurrency, setShowCheckout, setLastTransaction, setPaymentCurrency,
     globalDiscount, setGlobalDiscount, searchTerm, suggestions, setSuggestions,
     handleBarcodeSubmit, handleSuggestionClick, updateQuantity, setItemQuantity, applyItemDiscount, setItemUnit,
     calculateItemTotal, calculateItemTotalLBP, handleQuickCash, subtotalUSD, totalUSD, totalLBP,
@@ -412,6 +412,7 @@ export default function CartPanel() {
             <button
               disabled={cart.length === 0 || isProcessing}
               onClick={() => {
+                setLastTransaction?.(null);
                 setPaymentCurrency(selectedCurrency);
                 setShowCheckout(true);
               }}

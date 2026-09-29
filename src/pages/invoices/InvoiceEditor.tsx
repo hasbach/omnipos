@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Plus, Search, Trash2 } from 'lucide-react';
 import {
   Modal, Badge, Button, Field, Input, Select, Combobox, NumberInput, MoneyInput, Textarea, useToast, useConfirm,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatMoney, formatBalance, partyDisplayName } from '../../lib/format';
+import { formatMoney, formatBalance, parseServerDate, partyDisplayName } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, uomUnitPrice, type PriceLevel } from '../../lib/pricing';
@@ -17,6 +17,43 @@ import {
 } from './types';
 
 type FieldErrors = Record<string, string>;
+
+/**
+ * Money field shown in the invoice's entry currency while the line/discount stays stored in USD:
+ * shown = usd × rate, typed value ÷ rate → usd. While focused it keeps its own text so the
+ * USD round-trip never re-formats what the user is typing; it re-syncs from the value on blur.
+ */
+interface EntryMoneyInputProps extends Omit<React.ComponentProps<typeof Input>, 'value' | 'onChange' | 'type'> {
+  usd: number;
+  rate: number;
+  onUsdChange: (usd: number) => void;
+  /** Decimals shown while NOT focused (the stored USD value keeps full precision). */
+  decimals?: number;
+}
+const EntryMoneyInput = forwardRef<HTMLInputElement, EntryMoneyInputProps>(function EntryMoneyInput(
+  { usd, rate, onUsdChange, decimals = 6, className = '', onFocus, onBlur, ...rest },
+  ref,
+) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <Input
+      ref={ref}
+      type="number"
+      inputMode="decimal"
+      step="any"
+      value={draft ?? String(Number(scaled(usd * rate).toFixed(decimals)))}
+      className={['num text-end', className].join(' ')}
+      onFocus={(e) => { e.target.select(); onFocus?.(e); }}
+      onBlur={(e) => { setDraft(null); onBlur?.(e); }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setDraft(raw);
+        onUsdChange(raw === '' ? 0 : Number(raw) / (rate || 1));
+      }}
+      {...rest}
+    />
+  );
+});
 
 /** Default price of ONE unit of the line's UoM: sale = tier price, purchase = product cost x factor. */
 // Strips float noise from a per-piece value scaled up to a unit (1.1 × 24 = 26.400000000000002).
@@ -98,9 +135,28 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const [newPayAmount, setNewPayAmount] = useState<number>(0);
   const [newPayMethod, setNewPayMethod] = useState<PaymentMethod>('cash');
   const [newPayCurrency, setNewPayCurrency] = useState<string>('USD');
+  // Currency the invoice is keyed in. Line prices stay USD internally; this only changes how they
+  // are shown/typed (display = usd × rate) and what currency/exchange_rate metadata is saved.
+  const [entryCurrency, setEntryCurrency] = useState<string>('USD');
+  // An edited invoice reopens at the rate it was keyed with, so its local amounts read as typed.
+  const [savedRate, setSavedRate] = useState<number | null>(null);
   const [reason, setReason] = useState('');
   const [productSearch, setProductSearch] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const qtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const pendingFocusKey = useRef<string | null>(null);
+
+  const entryOptions = useMemo(() => (currencies.some((c) => c.code === 'USD') ? currencies : [USD, ...currencies]), [currencies]);
+  const entryCur = entryOptions.find((c) => c.code === entryCurrency) || USD;
+  const rate = savedRate ?? (entryCur.rate || 1);
+  // Local currencies with big rates (LBP) have no useful decimals; USD-like ones show cents.
+  const totalDecimals = rate >= 100 ? 0 : 2;
+  const priceDecimals = rate >= 100 ? 0 : 4;
+  /** USD amount → entry-currency text (display only; never rounds to cents). */
+  const fmt = (usd: number) => formatMoney(usd * rate, entryCur);
+
+  // Default new payments to the invoice's entry currency.
+  useEffect(() => { setNewPayCurrency(entryCurrency); }, [entryCurrency]);
 
   const party = stakeholders.find((s) => s.id === partyId) || null;
 
@@ -124,7 +180,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
         setInitialDateTime(loaded);
         setReference(tx.reference || '');
         setNotes(tx.notes || '');
-        setGlobalDiscount(tx.discount || { type: 'percentage', value: 0 });
+        const known = currencies.some((c) => c.code === tx.currency);
+        setEntryCurrency(known ? tx.currency : 'USD');
+        setSavedRate(known && tx.currency !== 'USD' && Number(tx.exchange_rate) > 0 ? Number(tx.exchange_rate) : null);
+        setGlobalDiscount({ type: tx.discount?.type === 'fixed' ? 'fixed' : 'percentage', value: Number(tx.discount?.value) || 0 });
         setGlobalTax({ type: (tx.tax_type as any) || 'percentage', value: tx.tax_value || 0 });
         setLines((tx.items || []).map((it: any) => ({
           _key: nextKey('l'),
@@ -153,6 +212,8 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       setArchived(false);
       setBaseBalance(null);
       setPartyId('');
+      setEntryCurrency('USD');
+      setSavedRate(null);
       setPriceLevel('retail');
       setDateTime(nowLocalDateTime());
       setReference('');
@@ -193,8 +254,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
 
   const addProduct = (p: Product, unit?: ProductUnit | null) => {
     const unit_price = defaultLinePrice(p, unit, isPurchase, priceLevel, 1);
+    const _key = nextKey('l');
+    pendingFocusKey.current = _key;
     setLines((prev) => [...prev, {
-      _key: nextKey('l'),
+      _key,
       product_id: p.id,
       name: p.name,
       barcode: unit?.barcode || p.barcode,
@@ -210,8 +273,18 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     }]);
     setProductSearch('');
     setDirty(true);
-    setTimeout(() => searchRef.current?.focus(), 30);
   };
+
+  // After a product is added, jump straight to its quantity (search → Enter → qty → Enter → search).
+  useEffect(() => {
+    const key = pendingFocusKey.current;
+    if (!key) return;
+    const el = qtyRefs.current[key];
+    if (!el) return;
+    pendingFocusKey.current = null;
+    el.focus();
+    el.select();
+  }, [lines]);
 
   // Matches name, primary barcode, extra barcodes and unit barcodes. A unit-barcode hit adds that
   // unit (carton/pack) rather than a single piece.
@@ -254,6 +327,20 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const updateLine = (key: string, patch: Partial<LineDraft>) => {
     setLines((prev) => prev.map((l) => (l._key === key ? { ...l, ...patch } : l)));
     setDirty(true);
+  };
+  /** The user typed a line total (entry currency, already converted to USD): back-solve the unit price. */
+  const setLineTotalUsd = (l: LineDraft, totalUsd: number) => {
+    if (!(l.quantity > 0)) return;
+    let unit_price: number;
+    if (l.discount.type === 'percentage') {
+      const d = l.discount.value || 0;
+      if (d >= 100) return;
+      unit_price = totalUsd / (l.quantity * (1 - d / 100));
+    } else {
+      unit_price = (totalUsd + (l.discount.value || 0)) / l.quantity;
+    }
+    updateLine(l._key, { unit_price });
+    clearFieldError(`items.${lines.indexOf(l)}.unit_price`);
   };
   const removeLine = (key: string) => { setLines((prev) => prev.filter((l) => l._key !== key)); setDirty(true); };
 
@@ -337,6 +424,8 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           tax: globalTax,
           notes,
           reference,
+          currency: entryCurrency,
+          exchange_rate: rate,
           price_level: priceLevelsEnabled ? priceLevel : 'retail',
           created_at: dateTime !== initialDateTime ? fromLocalInput(dateTime) : undefined,
           reason,
@@ -355,8 +444,8 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           // `price` is still what a purchase line is costed at.
           source: 'backoffice',
           items: lines.map((l) => ({ id: l.product_id, uom_id: l.uom_id ?? undefined, quantity: l.quantity, price: l.unit_price, unit_price: l.unit_price, discount: l.discount })),
-          currency: 'USD',
-          exchange_rate: 1,
+          currency: entryCurrency,
+          exchange_rate: rate,
           payments: payload,
           discount: globalDiscount,
           tax: globalTax,
@@ -453,6 +542,14 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                 <Input type="datetime-local" value={dateTime} onChange={(e) => { setDateTime(e.target.value); setDirty(true); }} />
               </Field>
 
+              <Field label={t('inv_editor_currency', 'Invoice currency')}>
+                <Select
+                  value={entryCurrency}
+                  onChange={(e) => { setEntryCurrency(e.target.value); setSavedRate(null); setDirty(true); }}
+                  options={entryOptions.map((c) => ({ value: c.code, label: c.code }))}
+                />
+              </Field>
+
               <Field label={t('inv_editor_reference', 'Reference')} helper={isPurchase ? t('inv_editor_reference_hint_purchase') : undefined}>
                 <Input value={reference} onChange={(e) => { setReference(e.target.value); setDirty(true); }} />
               </Field>
@@ -467,56 +564,63 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
               <div className="relative">
                 <Input
                   ref={searchRef}
+                  data-escape-local={productSearch ? 'true' : undefined}
                   value={productSearch}
                   onChange={(e) => setProductSearch(e.target.value)}
                   placeholder={t('inv_editor_search_product')}
                   startAdornment={<Search size={14} />}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && searchResults.length > 0) { e.preventDefault(); addProduct(searchResults[0].p, searchResults[0].unit); }
-                    if (e.key === 'Escape') setProductSearch('');
+                    // Escape clears the search first; only an empty search lets Escape reach the modal.
+                    if (e.key === 'Escape' && productSearch) { e.preventDefault(); e.stopPropagation(); setProductSearch(''); }
                   }}
                 />
                 {productSearch && (
-                  <div className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface shadow-[var(--shadow-modal)]">
+                  // In the flow (not floating) so the results push the line items down instead of hiding them.
+                  <div className="mt-1 max-h-64 w-full overflow-y-auto rounded-[var(--radius-card)] border-2 border-primary/40 bg-surface shadow-[var(--shadow-card)]">
+                    <div className="sticky top-0 flex items-center gap-1.5 border-b border-primary/30 bg-primary-soft px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
+                      <Search size={12} />
+                      <span>{t('inv_editor_search_results', 'Search results')} ({searchResults.length})</span>
+                    </div>
                     {searchResults.length === 0 ? (
                       <p className="p-3 text-center text-xs text-text-3">{t('inv_editor_no_results')}</p>
                     ) : searchResults.map(({ p, unit }) => (
-                      <button key={`${p.id}:${unit?.id ?? 'base'}`} type="button" className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-surface-2 cursor-pointer" onClick={() => addProduct(p, unit)}>
+                      <button key={`${p.id}:${unit?.id ?? 'base'}`} type="button" className="flex w-full items-center justify-between border-b border-border px-3 py-2 text-start text-sm last:border-b-0 hover:bg-primary-soft cursor-pointer" onClick={() => addProduct(p, unit)}>
                         <span className="font-medium text-text">
                           {p.name}
                           {unit && <span className="ms-2 text-xs font-semibold text-primary">{unit.name} ×{unit.factor}</span>}
                           {p.active === 0 && <Badge variant="neutral" className="ms-2">{t('prod_disabled_badge', 'Disabled')}</Badge>}
                         </span>
-                        <span className="num text-xs text-text-3">{formatMoney(defaultLinePrice(p, unit, isPurchase, priceLevel, 1), USD)}</span>
+                        <span className="num text-xs text-text-3">{fmt(defaultLinePrice(p, unit, isPurchase, priceLevel, 1))}</span>
                       </button>
                     ))}
                   </div>
                 )}
               </div>
 
-              <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border">
+              <div className="overflow-x-auto rounded-[var(--radius-card)] border border-primary/30 bg-primary-soft/40">
                 <table className="w-full border-collapse text-sm">
-                  <thead className="bg-surface-2">
-                    <tr className="text-xs uppercase tracking-wide text-text-3">
+                  <thead className="bg-primary-soft">
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-primary">
                       <th className="px-2 py-2 text-start">{t('inv_editor_col_product', 'Product')}</th>
                       <th className="px-2 py-2 w-20 text-end">{t('inv_editor_col_qty', 'Qty')}</th>
-                      <th className="px-2 py-2 w-28 text-end">{t('inv_editor_col_unit_price', 'Unit price')}</th>
+                      <th className="px-2 py-2 w-32 text-end">{t('inv_editor_col_unit_price', 'Unit price')}</th>
                       <th className="px-2 py-2 w-24 text-end">{t('inv_editor_col_discount', 'Discount')}</th>
-                      <th className="px-2 py-2 w-24 text-end">{t('inv_editor_col_total', 'Total')}</th>
+                      <th className="px-2 py-2 w-32 text-end">{t('inv_editor_col_total', 'Total')}</th>
                       <th className="w-8" />
                     </tr>
                   </thead>
                   <tbody>
                     {lines.length === 0 ? (
-                      <tr><td colSpan={6} className="p-6 text-center text-xs text-text-3">{t('inv_editor_empty_lines')}</td></tr>
+                      <tr><td colSpan={6} className="border border-dashed border-primary/40 bg-primary-soft/40 p-6 text-center text-xs font-medium text-primary">{t('inv_editor_empty_lines')}</td></tr>
                     ) : lines.map((l, idx) => {
                       const below = !isPurchase && l.minPrice && l.unit_price < l.minPrice;
                       const qtyError = fieldErrors[`items.${idx}.quantity`];
                       const priceError = fieldErrors[`items.${idx}.unit_price`];
                       return (
-                        <tr key={l._key} className="border-t border-border align-top">
-                          <td className="px-2 py-2">
-                            <p className="font-medium text-text">{l.name}</p>
+                        <tr key={l._key} className="border-t border-primary/20 align-top">
+                          <td className="border-s-[3px] border-s-primary/60 px-2 py-2">
+                            <p className="font-semibold text-text">{l.name}</p>
                             {(() => {
                               const product = products.find((p) => p.id === l.product_id);
                               const units = product?.units || [];
@@ -541,22 +645,37 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                               <p className="text-xs text-text-3 num">= {l.quantity * l.uom_factor} {products.find((p) => p.id === l.product_id)?.unit || t('uom_piece_short', 'pcs')}</p>
                             ) : null}
                             {!isPurchase && l.catalogPrice !== undefined && (
-                              <p className="text-xs text-text-3">{t('inv_editor_tier_price_hint', 'Catalog price: {price}').replace('{price}', formatMoney(l.catalogPrice, USD))}</p>
+                              <p className="text-xs text-text-3">{t('inv_editor_tier_price_hint', 'Catalog price: {price}').replace('{price}', fmt(l.catalogPrice))}</p>
                             )}
-                            {below && <p className="text-xs text-danger">{t('inv_editor_min_price_warning', 'Below minimum price of {min}').replace('{min}', formatMoney(l.minPrice || 0, USD))}</p>}
+                            {below && <p className="text-xs text-danger">{t('inv_editor_min_price_warning', 'Below minimum price of {min}').replace('{min}', fmt(l.minPrice || 0))}</p>}
                             {priceError && <p className="text-xs text-danger">{priceError}</p>}
                             {qtyError && <p className="text-xs text-danger">{qtyError}</p>}
                           </td>
                           <td className="px-2 py-2">
-                            <NumberInput value={l.quantity} min={0.01} step={1} invalid={!!qtyError} onChange={(v) => { updateLine(l._key, { quantity: v }); clearFieldError(`items.${idx}.quantity`); }} className="w-20" />
+                            <NumberInput
+                              ref={(el) => { qtyRefs.current[l._key] = el; }}
+                              value={l.quantity}
+                              min={0.01}
+                              step={1}
+                              invalid={!!qtyError}
+                              onChange={(v) => { updateLine(l._key, { quantity: v }); clearFieldError(`items.${idx}.quantity`); }}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); searchRef.current?.focus(); } }}
+                              className="w-20"
+                            />
                           </td>
                           <td className="px-2 py-2">
-                            <MoneyInput value={l.unit_price} onChange={(v) => { updateLine(l._key, { unit_price: v }); clearFieldError(`items.${idx}.unit_price`); }} invalid={!!below || !!priceError} className="w-28" />
+                            <EntryMoneyInput usd={l.unit_price} rate={rate} decimals={priceDecimals} onUsdChange={(v) => { updateLine(l._key, { unit_price: v }); clearFieldError(`items.${idx}.unit_price`); }} invalid={!!below || !!priceError} className="w-32" />
                           </td>
                           <td className="px-2 py-2">
-                            <NumberInput value={l.discount.value} min={0} onChange={(v) => updateLine(l._key, { discount: { ...l.discount, value: v } })} className="w-20" endAdornment={l.discount.type === 'percentage' ? '%' : '$'} />
+                            {l.discount.type === 'percentage' ? (
+                              <NumberInput value={l.discount.value} min={0} onChange={(v) => updateLine(l._key, { discount: { ...l.discount, value: v } })} className="w-20" endAdornment="%" />
+                            ) : (
+                              <EntryMoneyInput usd={l.discount.value} rate={rate} decimals={totalDecimals} min={0} onUsdChange={(v) => updateLine(l._key, { discount: { ...l.discount, value: v } })} className="w-24" endAdornment={entryCur.symbol} />
+                            )}
                           </td>
-                          <td className="px-2 py-2 text-end num font-semibold text-text">{formatMoney(lineDraftTotal(l), USD)}</td>
+                          <td className="px-2 py-2">
+                            <EntryMoneyInput usd={lineDraftTotal(l)} rate={rate} decimals={totalDecimals} min={0} aria-label={t('inv_editor_col_total', 'Total')} onUsdChange={(v) => setLineTotalUsd(l, v)} className="w-32 font-semibold" />
+                          </td>
                           <td className="px-2 py-2">
                             <button type="button" aria-label={t('inv_editor_remove_line', 'Remove line')} className="text-danger hover:opacity-70 cursor-pointer" onClick={() => removeLine(l._key)}>
                               <Trash2 size={15} />
@@ -576,8 +695,12 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
               <div className="grid grid-cols-2 gap-2">
                 <Field label={t('inv_editor_global_discount', 'Global discount')}>
                   <div className="flex gap-1">
-                    <NumberInput value={globalDiscount.value} min={0} onChange={(v) => { setGlobalDiscount((d) => ({ ...d, value: v })); setDirty(true); }} className="flex-1" />
-                    <Select value={globalDiscount.type} onChange={(e) => { setGlobalDiscount((d) => ({ ...d, type: e.target.value as any })); setDirty(true); }} options={[{ value: 'percentage', label: '%' }, { value: 'fixed', label: '$' }]} className="w-16" />
+                    {globalDiscount.type === 'fixed' ? (
+                      <EntryMoneyInput usd={globalDiscount.value} rate={rate} decimals={totalDecimals} min={0} onUsdChange={(v) => { setGlobalDiscount((d) => ({ ...d, value: v })); setDirty(true); }} className="flex-1" />
+                    ) : (
+                      <NumberInput value={globalDiscount.value} min={0} onChange={(v) => { setGlobalDiscount((d) => ({ ...d, value: v })); setDirty(true); }} className="flex-1" />
+                    )}
+                    <Select value={globalDiscount.type} onChange={(e) => { setGlobalDiscount((d) => ({ ...d, type: e.target.value as any })); setDirty(true); }} options={[{ value: 'percentage', label: '%' }, { value: 'fixed', label: entryCur.symbol }]} className="w-16" />
                   </div>
                 </Field>
                 <Field label={t('inv_editor_global_tax', 'Tax %')}>
@@ -585,11 +708,13 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                 </Field>
               </div>
               <div className="space-y-1 border-t border-border pt-2 text-sm">
-                <div className="flex justify-between text-text-3"><span>{t('inv_editor_totals_subtotal', 'Subtotal')}</span><span className="num">{formatMoney(totals.subtotal, USD)}</span></div>
-                {totals.discountAmount > 0 && <div className="flex justify-between text-text-3"><span>{t('inv_editor_totals_discount', 'Discount')}</span><span className="num">-{formatMoney(totals.discountAmount, USD)}</span></div>}
-                {totals.taxAmount > 0 && <div className="flex justify-between text-text-3"><span>{t('inv_editor_totals_tax', 'Tax')}</span><span className="num">+{formatMoney(totals.taxAmount, USD)}</span></div>}
-                <div className="flex justify-between text-base font-semibold text-text"><span>{t('inv_editor_totals_total', 'Total')}</span><span className="num">{formatMoney(totals.total, USD)}</span></div>
-                {local && <div className="flex justify-between text-xs text-text-3"><span>{t('inv_detail_local', 'Local')}</span><span className="num">{formatMoney(totals.total * local.rate, local)}</span></div>}
+                <div className="flex justify-between text-text-3"><span>{t('inv_editor_totals_subtotal', 'Subtotal')}</span><span className="num">{fmt(totals.subtotal)}</span></div>
+                {totals.discountAmount > 0 && <div className="flex justify-between text-text-3"><span>{t('inv_editor_totals_discount', 'Discount')}</span><span className="num">-{fmt(totals.discountAmount)}</span></div>}
+                {totals.taxAmount > 0 && <div className="flex justify-between text-text-3"><span>{t('inv_editor_totals_tax', 'Tax')}</span><span className="num">+{fmt(totals.taxAmount)}</span></div>}
+                <div className="flex justify-between text-base font-semibold text-text"><span>{t('inv_editor_totals_total', 'Total')}</span><span className="num">{fmt(totals.total)}</span></div>
+                {entryCurrency !== 'USD'
+                  ? <div className="flex justify-between text-xs text-text-3"><span>{t('inv_editor_saved_in_usd', 'Saved in USD: {amount}').replace('{amount}', formatMoney(totals.total, USD))}</span></div>
+                  : local && <div className="flex justify-between text-xs text-text-3"><span>{t('inv_detail_local', 'Local')}</span><span className="num">{formatMoney(totals.total * local.rate, local)}</span></div>}
               </div>
             </div>
 
@@ -659,8 +784,8 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                 <Button variant="ghost" size="sm" onClick={() => { const cur = currencies.find((c) => c.code === newPayCurrency) || USD; addPayment(Number((due * cur.rate).toFixed(2))); }}>{t('inv_editor_pay_remaining', 'Pay remaining')}</Button>
               </div>
               <div className="flex justify-between text-xs text-text-3 pt-1">
-                <span>{t('inv_editor_paid', 'Paid')}: <span className="num text-success">{formatMoney(paid, USD)}</span></span>
-                <span>{t('inv_editor_due', 'Due')}: <span className="num text-danger">{formatMoney(due, USD)}</span></span>
+                <span>{t('inv_editor_paid', 'Paid')}: <span className="num text-success">{fmt(paid)}</span></span>
+                <span>{t('inv_editor_due', 'Due')}: <span className="num text-danger">{fmt(due)}</span></span>
               </div>
             </div>
 
@@ -677,7 +802,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
 }
 
 function toLocalInput(iso: string): string {
-  const d = new Date(iso);
+  const d = parseServerDate(iso); // SQLite "YYYY-MM-DD HH:MM:SS" is UTC
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

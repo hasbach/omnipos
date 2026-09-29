@@ -999,6 +999,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F1') {
         e.preventDefault();
+        setLastTransaction(null);
         setPaymentCurrency(selectedCurrency);
         setShowCheckout(true);
       }
