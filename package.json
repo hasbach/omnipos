@@ -1,7 +1,7 @@
 {
   "name": "omnipos-terminal",
   "private": true,
-  "version": "1.6.2",
+  "version": "1.7.0",
   "description": "OmniPOS Terminal Application",
   "author": "OmniPOS",
   "type": "module",
