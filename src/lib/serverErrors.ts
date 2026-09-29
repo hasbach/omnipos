@@ -189,6 +189,16 @@ export function translateServerError(err: unknown, t: Translate): string {
       return t('err_correction_kind_invalid', 'Choose what kind of correction to make.');
     case 'CORRECTION_AMOUNT_INVALID':
       return t('err_correction_amount_invalid', 'Enter a valid amount.');
+    case 'CASHFLOW_CATEGORY_NAME_TAKEN':
+      return t('cf_err_cat_name_taken', 'A category with this name already exists.');
+    case 'CASHFLOW_CATEGORY_NAME_INVALID':
+      return t('cf_err_cat_name_invalid', 'The name must be 1 to 40 characters.');
+    case 'CASHFLOW_CATEGORY_DIRECTION_INVALID':
+      return t('cf_err_cat_direction_invalid', 'Choose cash in, cash out or both.');
+    case 'CASHFLOW_CATEGORY_DIRECTION_IN_USE':
+      return t('cf_err_cat_direction_in_use', 'Movements of the opposite type already use this category, so its direction cannot be narrowed.');
+    case 'CASHFLOW_CATEGORY_NOT_FOUND':
+      return t('cf_err_cat_not_found', 'This category no longer exists.');
     case 'UOM_INVALID':
       return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
   }

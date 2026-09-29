@@ -4,6 +4,13 @@ import { usePosContext } from '../context/PosContext';
 import { useI18n } from '../intl/index';
 import { Badge } from './ui';
 import { formatMoney } from '../lib/format';
+import { usePosLayout } from '../hooks/usePosLayout';
+
+const TILE = {
+  sm: { min: 112, h: 'min-h-[68px]', pad: 'p-2', name: 'text-xs', price: 'text-xs' },
+  md: { min: 150, h: 'min-h-[92px]', pad: 'p-3', name: 'text-sm', price: 'text-sm' },
+  lg: { min: 210, h: 'min-h-[120px]', pad: 'p-4', name: 'text-base', price: 'text-base' },
+} as const;
 
 const COLLAPSE_KEY = 'pos_categories_collapsed';
 
@@ -21,6 +28,8 @@ export default function ProductGrid() {
     currentPage, setCurrentPage, unitPriceUSD, priceLevel, t,
   } = pos as any;
 
+  const { layout } = usePosLayout();
+  const tile = TILE[layout.tileSize];
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [canPrev, setCanPrev] = useState(false);
@@ -79,7 +88,7 @@ export default function ProductGrid() {
   const toggleLabel = collapsed ? t('pos_categories_expand', 'Show all categories') : t('pos_categories_collapse', 'Show only the selected category');
 
   return (
-    <div className="w-1/3 bg-bg flex flex-col overflow-hidden">
+    <div className="w-full h-full bg-bg flex flex-col overflow-hidden">
       <div className="p-3 border-b border-border flex flex-col gap-2 flex-shrink-0">
         <div className="flex items-center gap-2">
           <Package size={16} className="text-text-3" />
@@ -156,7 +165,7 @@ export default function ProductGrid() {
       </div>
 
       {/* Scrollable Product Grid */}
-      <div className="flex-1 overflow-y-auto p-3 grid grid-cols-2 gap-2 content-start">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 grid gap-2 content-start" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${tile.min}px, 1fr))` }}>
         {paginatedProducts.map((p: any) => {
           const unit = unitPriceUSD(p, 1);
           return (
@@ -164,12 +173,12 @@ export default function ProductGrid() {
             key={p.id}
             onClick={() => addToCart(p)}
             disabled={p.track_inventory !== 0 && (p.stock ?? 0) <= 0}
-            className="p-3 min-h-[92px] bg-surface border border-border rounded-[var(--radius-card)] text-start hover:border-primary hover:shadow-[var(--shadow-card)] transition-all active:scale-[0.98] group flex flex-col justify-between gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            className={`${tile.pad} ${tile.h} bg-surface border border-border rounded-[var(--radius-card)] text-start hover:border-primary hover:shadow-[var(--shadow-card)] transition-all active:scale-[0.98] group flex flex-col justify-between gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
           >
-            <div className="text-sm font-semibold text-text truncate group-hover:text-primary transition-colors">{p.name}</div>
+            <div className={`${tile.name} font-semibold text-text truncate group-hover:text-primary transition-colors`} title={p.name}>{p.name}</div>
             <div className="flex justify-between items-end gap-1">
               <div className="min-w-0">
-                <div className="text-sm font-bold num text-text">{formatMoney(unit, { code: 'USD', symbol: '$' })}</div>
+                <div className={`${tile.price} font-bold num text-text`}>{formatMoney(unit, { code: 'USD', symbol: '$' })}</div>
                 <div className="text-[10px] text-text-3 uppercase font-semibold truncate">{p.category}</div>
               </div>
               {stockBadge(p)}
@@ -177,7 +186,7 @@ export default function ProductGrid() {
           </button>
         );})}
         {filteredProducts.length === 0 && (
-          <div className="col-span-2 py-8 text-center text-text-3 italic text-xs">
+          <div className="col-span-full py-8 text-center text-text-3 italic text-xs">
             {t('no_products_found', 'No products found')}
           </div>
         )}

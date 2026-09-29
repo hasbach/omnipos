@@ -610,7 +610,12 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                       <th className="w-8" />
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody
+                    // Enter in any line field (qty, price, discount, total) returns to the product search.
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); searchRef.current?.focus(); }
+                    }}
+                  >
                     {lines.length === 0 ? (
                       <tr><td colSpan={6} className="border border-dashed border-primary/40 bg-primary-soft/40 p-6 text-center text-xs font-medium text-primary">{t('inv_editor_empty_lines')}</td></tr>
                     ) : lines.map((l, idx) => {
@@ -659,7 +664,6 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                               step={1}
                               invalid={!!qtyError}
                               onChange={(v) => { updateLine(l._key, { quantity: v }); clearFieldError(`items.${idx}.quantity`); }}
-                              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); searchRef.current?.focus(); } }}
                               className="w-20"
                             />
                           </td>

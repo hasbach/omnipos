@@ -539,6 +539,24 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_cfe_row ON cash_flow_edits(tenant_id, cash_flow_id);
 `);
+// Admin-defined cash-flow categories (Settings -> Cash flow categories). `key` is the stable slug
+// stored in cash_flow.category (built-ins keep their fixed keys and are NOT rows here); rename or hide
+// a category and old rows keep resolving through the key. Synced (created before the sync-metadata
+// block so it gets global_id/updated_at/deleted_at + triggers); hiding = active 0, never deleted.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cash_flow_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK(direction IN ('in', 'out', 'both')),
+    active INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_cfc_tenant_key ON cash_flow_categories(tenant_id, key);
+`);
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_atx_settlement ON archived_transactions(settlement_id);
   CREATE INDEX IF NOT EXISTS idx_acf_settlement ON archived_cash_flow(settlement_id);

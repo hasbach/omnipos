@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Shield, ShoppingCart, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Tenant } from './types';
@@ -8,6 +8,8 @@ import { PosProvider } from './context/PosContext';
 import CartPanel from './components/CartPanel';
 import ProductGrid from './components/ProductGrid';
 import PosHeader from './components/PosHeader';
+import PosSplitter from './components/PosSplitter';
+import { usePosLayout } from './hooks/usePosLayout';
 import PaymentModal from './components/PaymentModal';
 import LockScreen from './components/LockScreen';
 import { I18nProvider, useI18n } from './intl/index';
@@ -312,12 +314,34 @@ function AppBody({
     <PosProvider tenant={tenant} setTenant={setTenant} currentUser={currentUser} setCurrentUser={setCurrentUser} users={users} setUsers={setUsers} handleLogout={handleLogout}>
       <WindowFrame title={`OmniPOS ${t('pos_terminal_title', 'Terminal')}`} icon={<ShoppingCart size={14} />}>
         <PosHeader />
-        <main className="flex-1 flex overflow-hidden">
-          <CartPanel />
-          <ProductGrid />
-        </main>
+        <PosMain />
         <PaymentModal />
       </WindowFrame>
     </PosProvider>
+  );
+}
+
+// Cart | splitter | catalog. The cart width is a user-adjustable percentage (persisted per register);
+// in RTL the flex row mirrors automatically, so the cart sits on the right.
+function PosMain() {
+  const mainRef = useRef<HTMLElement | null>(null);
+  const { layout } = usePosLayout();
+  return (
+    <main ref={mainRef} className="flex-1 flex overflow-hidden min-h-0">
+      <div
+        className="flex flex-col min-w-0 min-h-0 border-e border-border"
+        style={layout.hideCatalog ? { flex: '1 1 0%' } : { width: `${layout.cartPct}%`, flex: '0 0 auto' }}
+      >
+        <CartPanel />
+      </div>
+      {!layout.hideCatalog && (
+        <>
+          <PosSplitter containerRef={mainRef} />
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+            <ProductGrid />
+          </div>
+        </>
+      )}
+    </main>
   );
 }

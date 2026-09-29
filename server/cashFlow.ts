@@ -7,6 +7,7 @@
 import { db, logAction } from "./db.js";
 import { lastRegisterClose } from "./settlement.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
+import { randomBytes } from "node:crypto";
 
 export const CASH_FLOW_CATEGORIES = [
   "top_up", "loan_in", "loan_repayment", "owner_withdrawal", "expense",
@@ -47,15 +48,29 @@ function cleanText(v: any, max = 200): string | null {
   return s ? s.slice(0, max) : null;
 }
 
-function validateCategory(category: any, type: string): CashFlowCategory {
-  const c = (category === undefined || category === null || category === "" ? "other" : String(category)) as CashFlowCategory;
-  if (!CASH_FLOW_CATEGORIES.includes(c)) {
+interface CustomCategoryRow { id: number; key: string; name: string; direction: "in" | "out" | "both"; active: number; sort_order: number }
+
+function customCategory(tenantId: number, key: string): CustomCategoryRow | undefined {
+  return db.prepare("SELECT id, key, name, direction, active, sort_order FROM cash_flow_categories WHERE tenant_id = ? AND key = ? AND deleted_at IS NULL")
+    .get(tenantId, key) as CustomCategoryRow | undefined;
+}
+
+// Built-ins as today, OR an active custom category of THIS tenant whose direction allows the type.
+// `keep` is the category the row already has (edit): an inactive custom category may stay on the row
+// until the category itself is changed — hiding a category never blocks editing an old movement.
+function validateCategory(category: any, type: string, tenantId: number, keep?: string | null): string {
+  const c = category === undefined || category === null || category === "" ? "other" : String(category);
+  const mismatch = () => new ValidationError("This category does not match the movement type (cash in / cash out).", 400,
+    { code: "CASHFLOW_CATEGORY_TYPE_MISMATCH", field: "category" });
+  if ((CASH_FLOW_CATEGORIES as readonly string[]).includes(c)) {
+    if (!CATEGORY_TYPES[c as CashFlowCategory].includes(type as any)) throw mismatch();
+    return c;
+  }
+  const custom = customCategory(tenantId, c);
+  if (!custom || (!custom.active && c !== keep)) {
     throw new ValidationError("Unknown cash-flow category.", 400, { code: "CASHFLOW_CATEGORY_INVALID", field: "category" });
   }
-  if (!CATEGORY_TYPES[c].includes(type as any)) {
-    throw new ValidationError("This category does not match the movement type (cash in / cash out).", 400,
-      { code: "CASHFLOW_CATEGORY_TYPE_MISMATCH", field: "category" });
-  }
+  if (custom.direction !== "both" && custom.direction !== type) throw mismatch();
   return c;
 }
 
@@ -108,7 +123,7 @@ export function editCashFlow(tenantId: number, id: number, userId: number | null
   const { amount, rate } = validateMoney(body.amount !== undefined ? body.amount : row.amount, body.exchange_rate !== undefined ? body.exchange_rate : (row.exchange_rate || 1));
   const currency = body.currency !== undefined ? (cleanText(body.currency, 10) || "USD") : (row.currency || "USD");
   // A row with no category reads as 'other'; keep that unless the caller sets one.
-  const category = validateCategory(body.category !== undefined ? body.category : (row.category || "other"), type);
+  const category = validateCategory(body.category !== undefined ? body.category : (row.category || "other"), type, tenantId, row.category || "other");
   const counterparty = body.counterparty !== undefined ? cleanText(body.counterparty) : (row.counterparty ?? null);
   const reason = body.reason !== undefined ? (cleanText(body.reason, 500) ?? "") : (row.reason ?? "");
 
@@ -172,7 +187,7 @@ function whereFor(f: AnalyticsFilters, opts: { ignoreFrom?: boolean; ignoreTypeC
   }
   if (f.counterparty) { parts.push("LOWER(IFNULL(counterparty, '')) LIKE @cp ESCAPE '\\'"); params.cp = `%${escapeLike(f.counterparty.toLowerCase())}%`; }
   if (f.q) {
-    parts.push("(LOWER(IFNULL(reason, '')) LIKE @q ESCAPE '\\' OR LOWER(IFNULL(counterparty, '')) LIKE @q ESCAPE '\\' OR LOWER(category) LIKE @q ESCAPE '\\')");
+    parts.push("(LOWER(IFNULL(reason, '')) LIKE @q ESCAPE '\\' OR LOWER(IFNULL(counterparty, '')) LIKE @q ESCAPE '\\' OR LOWER(category) LIKE @q ESCAPE '\\' OR category IN (SELECT key FROM cash_flow_categories WHERE tenant_id = @tenant AND deleted_at IS NULL AND LOWER(name) LIKE @q ESCAPE '\\'))");
     params.q = `%${escapeLike(f.q.toLowerCase())}%`;
   }
   return { sql: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
@@ -224,6 +239,39 @@ export function computeCashFlowAnalytics(tenantId: number, query: any) {
   };
 }
 
+function listCategories(tenantId: number) {
+  const custom = db.prepare("SELECT id, key, name, direction, active, sort_order FROM cash_flow_categories WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY sort_order, LOWER(name), id")
+    .all(tenantId) as CustomCategoryRow[];
+  return {
+    builtin: CASH_FLOW_CATEGORIES.map((key) => {
+      const d = CATEGORY_TYPES[key];
+      return { key, direction: d.length === 2 ? "both" : d[0] };
+    }),
+    custom: custom.map((c) => ({ ...c, active: !!c.active })),
+  };
+}
+
+function cleanCategoryName(v: any): string {
+  const name = typeof v === "string" ? v.trim().replace(/\s+/g, " ") : "";
+  if (name.length < 1 || name.length > 40) {
+    throw new ValidationError("The category name must be 1 to 40 characters.", 400, { code: "CASHFLOW_CATEGORY_NAME_INVALID", field: "name" });
+  }
+  return name;
+}
+
+function cleanDirection(v: any): "in" | "out" | "both" {
+  if (v !== "in" && v !== "out" && v !== "both") {
+    throw new ValidationError("Choose whether the category is for cash in, cash out or both.", 400, { code: "CASHFLOW_CATEGORY_DIRECTION_INVALID", field: "direction" });
+  }
+  return v;
+}
+
+function assertNameFree(tenantId: number, name: string, exceptId: number | null) {
+  const clash = db.prepare("SELECT id FROM cash_flow_categories WHERE tenant_id = ? AND deleted_at IS NULL AND LOWER(name) = LOWER(?) AND id != ?")
+    .get(tenantId, name, exceptId ?? -1);
+  if (clash) throw new ValidationError("A category with this name already exists.", 400, { code: "CASHFLOW_CATEGORY_NAME_TAKEN", field: "name" });
+}
+
 export function setupCashFlowRoutes(app: any, authenticate: any, broadcast: Function) {
   const fail = (res: any, e: any) => {
     if (e instanceof ValidationError) return res.status(e.status).json(validationErrorBody(e));
@@ -248,7 +296,7 @@ export function setupCashFlowRoutes(app: any, authenticate: any, broadcast: Func
       const { type, currency, exchange_rate } = req.body;
       if (type !== "in" && type !== "out") throw new ValidationError("Type must be 'in' or 'out'.", 400, { code: "CASHFLOW_TYPE_INVALID", field: "type" });
       const { amount, rate } = validateMoney(req.body.amount, exchange_rate ?? 1);
-      const category = validateCategory(req.body.category, type);
+      const category = validateCategory(req.body.category, type, tenantId);
       const counterparty = cleanText(req.body.counterparty);
       const reason = req.body.reason ?? "";
 
@@ -258,6 +306,62 @@ export function setupCashFlowRoutes(app: any, authenticate: any, broadcast: Func
       logAction(tenantId, userId, `Cash ${type === "in" ? "In" : "Out"}`,
         `Amount: ${amount} ${currency || "USD"}, Category: ${category}${counterparty ? `, ${counterparty}` : ""}, Reason: ${reason}`);
       broadcast({ type: "CASH_FLOW_UPDATED" }, tenantId);
+      res.json({ success: true });
+    } catch (e) { fail(res, e); }
+  });
+
+  // ---- custom categories (Settings -> Cash flow categories) ----
+  // Reading is open to anyone who can use the register; POST / PUT are settings.manage (permissions.ts).
+  app.get("/api/cash-flow/categories", authenticate, (req: any, res: any) => {
+    try { res.json(listCategories(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+
+  app.post("/api/cash-flow/categories", authenticate, (req: any, res: any) => {
+    try {
+      const tenantId = req.session.tenantId;
+      const name = cleanCategoryName(req.body?.name);
+      assertNameFree(tenantId, name, null);
+      const direction = cleanDirection(req.body?.direction);
+      const next = (db.prepare("SELECT IFNULL(MAX(sort_order), 0) + 1 AS n FROM cash_flow_categories WHERE tenant_id = ?").get(tenantId) as any).n;
+      const key = "c_" + randomBytes(6).toString("hex");
+      const info = db.prepare("INSERT INTO cash_flow_categories (tenant_id, key, name, direction, active, sort_order) VALUES (?, ?, ?, ?, 1, ?)")
+        .run(tenantId, key, name, direction, next);
+      logAction(tenantId, req.session.userId ?? null, "Cash Flow Category Created", `${name} (${direction})`);
+      broadcast({ type: "CASH_FLOW_CATEGORIES_UPDATED" }, tenantId);
+      res.json({ success: true, id: Number(info.lastInsertRowid), key });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.put("/api/cash-flow/categories/:id", authenticate, (req: any, res: any) => {
+    try {
+      const tenantId = req.session.tenantId;
+      const id = parseInt(req.params.id, 10);
+      const cur = Number.isFinite(id)
+        ? db.prepare("SELECT id, key, name, direction, active, sort_order FROM cash_flow_categories WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(id, tenantId) as CustomCategoryRow | undefined
+        : undefined;
+      if (!cur) throw new ValidationError("Category not found.", 404, { code: "CASHFLOW_CATEGORY_NOT_FOUND" });
+      const b = req.body || {};
+      const name = b.name !== undefined ? cleanCategoryName(b.name) : cur.name;
+      if (name !== cur.name) assertNameFree(tenantId, name, cur.id);
+      const direction = b.direction !== undefined ? cleanDirection(b.direction) : cur.direction;
+      if (direction !== cur.direction && direction !== "both") {
+        // Narrowing the direction is refused while a movement of the opposite type carries this category.
+        const opposite = direction === "in" ? "out" : "in";
+        const used = (db.prepare(`SELECT (SELECT COUNT(*) FROM cash_flow WHERE tenant_id = @t AND category = @k AND type = @o)
+                                   + (SELECT COUNT(*) FROM archived_cash_flow WHERE tenant_id = @t AND category = @k AND type = @o) AS n`)
+          .get({ t: tenantId, k: cur.key, o: opposite }) as any).n;
+        if (used > 0) {
+          throw new ValidationError("Movements of the opposite type already use this category, so its direction cannot be narrowed.", 400,
+            { code: "CASHFLOW_CATEGORY_DIRECTION_IN_USE", field: "direction" });
+        }
+      }
+      const active = b.active !== undefined ? (b.active === true || b.active === 1 || b.active === "1" ? 1 : 0) : cur.active;
+      const sort = b.sort_order !== undefined && Number.isFinite(Number(b.sort_order)) ? Math.trunc(Number(b.sort_order)) : cur.sort_order;
+      db.prepare("UPDATE cash_flow_categories SET name = ?, direction = ?, active = ?, sort_order = ? WHERE id = ? AND tenant_id = ?")
+        .run(name, direction, active, sort, cur.id, tenantId);
+      logAction(tenantId, req.session.userId ?? null, "Cash Flow Category Updated",
+        `${cur.name} → ${name} (${direction}, ${active ? "active" : "hidden"})`);
+      broadcast({ type: "CASH_FLOW_CATEGORIES_UPDATED" }, tenantId);
       res.json({ success: true });
     } catch (e) { fail(res, e); }
   });

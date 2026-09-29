@@ -16,7 +16,8 @@ import {
 import { AnalyticsPanel } from './cashflow/AnalyticsPanel';
 import { CashFlowEditModal } from './cashflow/EditModal';
 import { cashFlowColumns } from './cashflow/columns';
-import { FitStat, STAT_GRID, cashFlowErrorMessage, categoryOptions, type CashFlowRow } from './cashflow/common';
+import { FitStat, STAT_GRID, cashFlowErrorMessage, type CashFlowRow } from './cashflow/common';
+import { useCashFlowCategories } from './cashflow/useCashFlowCategories';
 import { useI18n } from '../intl/index';
 import { formatMoney, partyDisplayName } from '../lib/format';
 import { api } from '../lib/api';
@@ -56,6 +57,7 @@ const DEFAULT_CURRENCIES: Currency[] = [{ code: 'USD', symbol: '$', rate: 1 }];
 export default function CashFlowRegister() {
   const { t, lang } = useI18n();
   const toast = useToast();
+  const cats = useCashFlowCategories();
 
   const [entries, setEntries] = useState<CashFlowEntry[]>([]);
   const { can } = usePermissions();
@@ -199,8 +201,8 @@ export default function CashFlowRegister() {
   };
 
   const columns = useMemo(
-    () => cashFlowColumns({ t, lang, currencies, onEdit: canEditEntries ? setEditing : undefined }),
-    [t, lang, currencies, canEditEntries],
+    () => cashFlowColumns({ t, lang, currencies, categoryLabel: cats.label, onEdit: canEditEntries ? setEditing : undefined }),
+    [t, lang, currencies, canEditEntries, cats.label],
   );
 
   return (
@@ -311,7 +313,7 @@ export default function CashFlowRegister() {
             <MoneyInput value={amount} onChange={setAmount} currencySymbol={currentCurrency.symbol} autoFocus />
           </Field>
           <Field label={t('cf_category', 'Category')}>
-            <Select value={category} onChange={(e) => setCategory(e.target.value)} options={categoryOptions(t, movementType)} />
+            <Select value={category} onChange={(e) => setCategory(e.target.value)} options={cats.options(movementType)} />
           </Field>
           <Field label={t('cf_counterparty', 'Counterparty (optional)')}>
             <Input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder={t('cf_counterparty_placeholder', 'Who lent the money / who was paid')} />

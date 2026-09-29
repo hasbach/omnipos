@@ -7,7 +7,8 @@ import { usePermissions } from '../../lib/usePermissions';
 import { formatMoney, resolveDateRangePreset, type DateRange } from '../../lib/format';
 import { CashFlowEditModal } from './EditModal';
 import { cashFlowColumns } from './columns';
-import { FitStat, STAT_GRID, cashFlowErrorMessage, categoryLabel, categoryOptions, type CashFlowRow } from './common';
+import { FitStat, STAT_GRID, cashFlowErrorMessage, type CashFlowRow } from './common';
+import { useCashFlowCategories } from './useCashFlowCategories';
 
 interface Currency { code: string; symbol: string; rate: number }
 
@@ -27,6 +28,7 @@ export function AnalyticsPanel({ currencies }: { currencies: Currency[] }) {
   const canEditEntries = can('cash_flow.edit');
   const { t, lang } = useI18n();
   const toast = useToast();
+  const cats = useCashFlowCategories();
   const [range, setRange] = useState<DateRange>(() => resolveDateRangePreset('this_month'));
   const [type, setType] = useState('all');
   const [category, setCategory] = useState('all');
@@ -77,8 +79,8 @@ export function AnalyticsPanel({ currencies }: { currencies: Currency[] }) {
   }, [data]);
 
   const columns = useMemo(
-    () => cashFlowColumns({ t, lang, currencies, onEdit: canEditEntries ? setEditing : undefined }),
-    [t, lang, currencies, canEditEntries],
+    () => cashFlowColumns({ t, lang, currencies, categoryLabel: cats.label, onEdit: canEditEntries ? setEditing : undefined }),
+    [t, lang, currencies, canEditEntries, cats.label],
   );
   const dash = '—';
   const v = (n: number | undefined, sign = '') => (data && n !== undefined ? `${sign}${usd(n)}` : dash);
@@ -104,7 +106,7 @@ export function AnalyticsPanel({ currencies }: { currencies: Currency[] }) {
           value={category}
           onChange={(e) => setCategory(e.target.value)}
           className="w-52"
-          options={[{ value: 'all', label: t('cf_all_categories', 'All categories') }, ...categoryOptions(t)]}
+          options={[{ value: 'all', label: t('cf_all_categories', 'All categories') }, ...cats.options(undefined, { all: true })]}
         />
         <SearchInput
           value={q}
@@ -154,7 +156,7 @@ export function AnalyticsPanel({ currencies }: { currencies: Currency[] }) {
                 {(data?.by_category || []).map((c) => (
                   <tr key={`${c.category}-${c.type}`} className="border-t border-border">
                     <td className="py-1.5">
-                      <span className="me-2">{categoryLabel(c.category, t)}</span>
+                      <span className="me-2">{cats.label(c.category)}</span>
                       <Badge variant={c.type === 'in' ? 'success' : 'danger'}>{c.type === 'in' ? t('fin_cfr_cash_in', 'Cash In') : t('fin_cfr_cash_out', 'Cash Out')}</Badge>
                     </td>
                     <td className="num py-1.5 text-end">{c.count}</td>

@@ -11,6 +11,8 @@ import { Badge } from './ui';
 import { formatMoney, formatBalance, formatNumber } from '../lib/format';
 import { uomUnitPrice } from '../lib/pricing';
 import { usePermissions } from '../lib/usePermissions';
+import { usePosLayout } from '../hooks/usePosLayout';
+import PosLayoutMenu from './PosLayoutMenu';
 
 export default function CartPanel() {
   const pos = usePosContext();
@@ -26,6 +28,8 @@ export default function CartPanel() {
     saleTabs = [], activeTabId, newSaleTab, switchSaleTab, closeSaleTab,
   } = pos as any;
 
+  const { layout } = usePosLayout();
+  const compact = layout.density === 'compact';
   const { can } = usePermissions();
   const canDiscount = can('pos.discount');
   const canOverridePrice = can('pos.price_override');
@@ -75,7 +79,7 @@ export default function CartPanel() {
   return (
     <>
       {/* Left Panel: Cart */}
-      <div className="w-2/3 flex flex-col border-e border-border">
+      <div className="flex-1 min-h-0 w-full flex flex-col">
         {/* Sale tabs: several open sales, one active at a time */}
         <div className="flex items-center gap-1 px-2 h-10 shrink-0 border-b border-border bg-surface-2">
           <div role="tablist" aria-label={t('pos_sale_tabs', 'Open sales')} className="flex items-center gap-1 min-w-0 overflow-x-auto">
@@ -118,16 +122,17 @@ export default function CartPanel() {
           >
             <Plus size={14} /> {t('pos_new_sale_tab', 'New sale')} <span className="opacity-70">(Alt+N)</span>
           </button>
+          <div className="ms-auto ps-1"><PosLayoutMenu /></div>
         </div>
         {/* Barcode Input Area */}
-        <div className="p-4 border-b border-border bg-surface relative">
+        <div className={`${compact ? 'px-3 py-2' : 'p-4'} border-b border-border bg-surface relative shrink-0`}>
           <form onSubmit={handleBarcodeSubmit} className="relative">
-            <Barcode className="absolute start-4 top-1/2 -translate-y-1/2 text-text-3" size={20} />
+            <Barcode className="absolute start-3.5 top-1/2 -translate-y-1/2 text-text-3" size={compact ? 18 : 20} />
             <input
               ref={barcodeRef}
               type="text"
               placeholder={t('search_placeholder', 'Scan or search...')}
-              className="w-full ps-12 pe-4 py-4 min-h-[56px] bg-bg border-2 border-transparent focus:border-primary transition-all outline-none font-mono text-lg rounded-[var(--radius-input)] text-text"
+              className={`w-full ps-11 pe-4 ${compact ? 'py-2 min-h-[44px] text-base' : 'py-4 min-h-[56px] text-lg'} bg-bg border-2 border-transparent focus:border-primary transition-all outline-none font-mono rounded-[var(--radius-input)] text-text`}
               value={barcodeInput}
               onChange={(e) => {
                 const val = e.target.value;
@@ -153,7 +158,7 @@ export default function CartPanel() {
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="absolute start-4 end-4 top-full mt-1 bg-surface border border-border shadow-[var(--shadow-modal)] z-50 rounded-lg overflow-hidden"
+                className="absolute start-3 end-3 top-full mt-1 bg-surface border border-border shadow-[var(--shadow-modal)] z-50 rounded-lg overflow-hidden"
               >
                 {suggestions.map((p: any) => {
                   // A typed unit barcode adds that unit (carton/pack) instead of a single piece.
@@ -162,7 +167,7 @@ export default function CartPanel() {
                   <button
                     key={p.id}
                     onClick={() => handleSuggestionClick(p, mu ? mu.id : null)}
-                    className="w-full flex items-center justify-between p-4 hover:bg-primary hover:text-on-primary transition-colors text-start border-b border-border last:border-none cursor-pointer"
+                    className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-primary hover:text-on-primary transition-colors text-start border-b border-border last:border-none cursor-pointer"
                   >
                     <div>
                       <div className="font-semibold">
@@ -184,7 +189,7 @@ export default function CartPanel() {
         </div>
 
         {/* Cart Items */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        <div className={`flex-1 min-h-0 overflow-y-auto ${compact ? 'p-2 space-y-1.5' : 'p-3 space-y-2'}`}>
           <AnimatePresence mode="popLayout">
             {cart.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-text-3 italic gap-3">
@@ -195,6 +200,11 @@ export default function CartPanel() {
               cart.map((item: any) => {
                 const belowMin = item.min_price && item.min_price > 0 && (item.unit_price ?? unitPriceUSD(item, item.quantity)) < item.min_price;
                 const belowCost = belowCostOf ? belowCostOf(item) : null;
+                const unit = item.uom_id != null ? (item.units || []).find((u: any) => u.id === item.uom_id) : null;
+                const unitPrice = item.unit_price != null ? item.unit_price : unitPriceUSD(item, item.quantity);
+                const baseLabel = item.unit || t('uom_piece', 'Piece');
+                const stepH = compact ? 'h-10' : 'h-11';
+                const stepBtn = compact ? 'h-10 w-10' : 'h-11 w-11';
                 return (
                 <motion.div
                   key={item.line_key}
@@ -202,12 +212,12 @@ export default function CartPanel() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="p-3 bg-surface border border-border rounded-[var(--radius-card)] group hover:border-border-strong transition-colors"
+                  className={`${compact ? 'px-2.5 py-1.5 min-h-[52px]' : 'p-3'} bg-surface border border-border rounded-[var(--radius-card)] group hover:border-border-strong transition-colors`}
                 >
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold text-text truncate">{item.name}</h3>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <h3 className={`font-semibold text-text truncate ${compact ? 'text-sm leading-5' : ''}`} title={item.name}>{item.name}</h3>
                         {item.unit_price != null && (
                           <Badge variant="warning" title={t('pos_override_price', 'Override unit price')}>
                             <Pencil size={10} />
@@ -217,32 +227,34 @@ export default function CartPanel() {
                           <Badge variant="info">{tierLabel}</Badge>
                         )}
                       </div>
-                      {(() => {
-                        const unit = item.uom_id != null ? (item.units || []).find((u: any) => u.id === item.uom_id) : null;
-                        const unitPrice = item.unit_price != null ? item.unit_price : unitPriceUSD(item, item.quantity);
-                        const baseLabel = item.unit || t('uom_piece', 'Piece');
-                        if (!unit) {
-                          return (
-                            <p className="text-xs text-text-3 font-mono truncate">
-                              {item.barcode} • {formatMoney(unitPrice, { code: 'USD', symbol: '$' })}/{t('uom_unit_short', 'unit')}
-                            </p>
-                          );
-                        }
-                        return (
-                          <>
-                            <p className="text-xs text-text-3 font-mono truncate">
-                              {formatNumber(item.quantity, { decimals: 0 })} × {unit.name} ({unit.factor} {baseLabel}) • {formatMoney(unitPrice, { code: 'USD', symbol: '$' })} / {unit.name}
-                            </p>
-                            <p className="text-[10px] text-text-3 font-mono">= {formatNumber(item.quantity * unit.factor, { decimals: 0 })} {baseLabel}{unit.barcode ? ` • ${unit.barcode}` : ''}</p>
-                          </>
-                        );
-                      })()}
+                      {!unit ? (
+                        <p className="text-[11px] leading-4 text-text-3 font-mono truncate">
+                          {item.barcode} • {formatMoney(unitPrice, { code: 'USD', symbol: '$' })}/{t('uom_unit_short', 'unit')}
+                        </p>
+                      ) : (
+                        <p className="text-[11px] leading-4 text-text-3 font-mono truncate">
+                          {formatNumber(item.quantity, { decimals: 0 })} × {unit.name} ({unit.factor} {baseLabel}) • {formatMoney(unitPrice, { code: 'USD', symbol: '$' })} / {unit.name} • = {formatNumber(item.quantity * unit.factor, { decimals: 0 })} {baseLabel}{unit.barcode ? ` • ${unit.barcode}` : ''}
+                        </p>
+                      )}
+                      {belowCost != null && (
+                        <p className="text-[10px] leading-4 text-danger font-semibold">
+                          {t('pos_below_cost', 'Below cost ({cost}) - raise the price to sell this product.', { cost: formatMoney(belowCost, { code: 'USD', symbol: '$' }) })}
+                        </p>
+                      )}
+                      {belowMin && (
+                        <p className="text-[10px] leading-4 text-danger font-semibold">
+                          {t('pos_below_min_price', 'Price is below the minimum price ({min}) for this product.', { min: formatMoney(item.min_price, { code: 'USD', symbol: '$' }) })}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
                       {Array.isArray(item.units) && item.units.length > 0 && (
                         <select
                           aria-label={t('uom_select_unit', 'Unit of measure')}
                           value={item.uom_id ?? ''}
                           onChange={(e) => setItemUnit(item.line_key, e.target.value === '' ? null : Number(e.target.value))}
-                          className="mt-1 h-8 max-w-full rounded-[var(--radius-input)] border border-border bg-surface px-2 text-xs font-semibold text-text outline-none focus:border-primary cursor-pointer"
+                          className="h-8 max-w-[110px] rounded-[var(--radius-input)] border border-border bg-surface px-1.5 text-xs font-semibold text-text outline-none focus:border-primary cursor-pointer"
                         >
                           <option value="">{item.unit || t('uom_piece', 'Piece')}</option>
                           {item.units.map((u: any) => (
@@ -250,75 +262,74 @@ export default function CartPanel() {
                           ))}
                         </select>
                       )}
-                      {belowCost != null && (
-                        <p className="text-[10px] text-danger font-semibold mt-0.5">
-                          {t('pos_below_cost', 'Below cost ({cost}) - raise the price to sell this product.', { cost: formatMoney(belowCost, { code: 'USD', symbol: '$' }) })}
-                        </p>
-                      )}
-                      {belowMin && (
-                        <p className="text-[10px] text-danger font-semibold mt-0.5">
-                          {t('pos_below_min_price', 'Price is below the minimum price ({min}) for this product.', { min: formatMoney(item.min_price, { code: 'USD', symbol: '$' }) })}
-                        </p>
-                      )}
-                    </div>
 
-                    <div className="flex items-center gap-3 shrink-0">
-                      <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-1">
                         {(canDiscount || item.discount?.value) && <button
                           disabled={!canDiscount}
                           onClick={() => openDiscountEditor(item)}
-                          className={`px-2 py-1.5 min-h-[30px] rounded text-[10px] font-bold border cursor-pointer ${item.discount?.value ? 'bg-accent text-white border-accent' : 'border-border text-text-3 hover:text-text hover:border-border-strong'}`}
+                          className={`px-2 h-8 min-w-[40px] rounded text-[10px] font-bold border cursor-pointer whitespace-nowrap ${item.discount?.value ? 'bg-accent text-white border-accent' : 'border-border text-text-3 hover:text-text hover:border-border-strong'}`}
                         >
                           <Tag size={10} className="inline me-1" />
                           {item.discount?.value ? (item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`) : t('discount_short', 'DISC')}
                         </button>}
                         {allowPriceOverride && canOverridePrice && (
                           item.unit_price != null ? (
-                            <button onClick={() => clearPriceOverride(item.line_key)} className="text-[10px] text-text-3 hover:text-danger cursor-pointer">
-                              {t('cancel', 'Cancel')} {t('pos_override_price', 'Override')}
+                            <button
+                              onClick={() => clearPriceOverride(item.line_key)}
+                              title={`${t('cancel', 'Cancel')} ${t('pos_override_price', 'Override')}`}
+                              aria-label={`${t('cancel', 'Cancel')} ${t('pos_override_price', 'Override')}`}
+                              className="h-8 w-8 flex items-center justify-center rounded border border-border text-text-3 hover:text-danger hover:border-danger cursor-pointer"
+                            >
+                              <X size={14} />
                             </button>
                           ) : (
-                            <button onClick={() => openPriceEditor(item)} className="text-[10px] text-text-3 hover:text-primary cursor-pointer flex items-center gap-1">
-                              <Pencil size={9} /> {t('pos_override_price', 'Override unit price')}
+                            <button
+                              onClick={() => openPriceEditor(item)}
+                              title={t('pos_override_price', 'Override unit price')}
+                              aria-label={t('pos_override_price', 'Override unit price')}
+                              className="h-8 w-8 flex items-center justify-center rounded border border-border text-text-3 hover:text-primary hover:border-primary cursor-pointer"
+                            >
+                              <Pencil size={13} />
                             </button>
                           )
                         )}
                       </div>
 
-                      <div className="flex items-center border border-border rounded-[var(--radius-input)] overflow-hidden h-11">
+                      <div className={`flex items-center border border-border rounded-[var(--radius-input)] overflow-hidden ${stepH}`}>
                         <button
                           onClick={() => updateQuantity(item.line_key, -1)}
-                          className="h-11 w-11 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text"
+                          className={`${stepBtn} flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text`}
                         >
                           <Minus size={16} />
                         </button>
                         <input
                           type="number"
-                          className="w-14 text-center font-mono font-bold bg-transparent outline-none num text-text"
+                          className="w-12 text-center font-mono font-bold bg-transparent outline-none num text-text"
                           value={item.quantity}
                           onChange={(e) => setItemQuantity(item.line_key, parseFloat(e.target.value) || 0)}
                           onFocus={(e) => e.target.select()}
                         />
                         <button
                           onClick={() => updateQuantity(item.line_key, 1)}
-                          className="h-11 w-11 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text"
+                          className={`${stepBtn} flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text`}
                         >
                           <Plus size={16} />
                         </button>
                       </div>
-                      <div className="w-24 text-end font-mono font-bold num text-text">
-                        <div>{formatMoney(calculateItemTotal(item), { code: 'USD', symbol: '$' })}</div>
+                      <div className="w-24 text-end font-mono font-bold num text-text leading-tight">
+                        <div className="text-sm">{formatMoney(calculateItemTotal(item), { code: 'USD', symbol: '$' })}</div>
                         <div className="text-[10px] text-success">{formatNumber(Math.round(calculateItemTotalLBP(item)), { decimals: 0 })} LL</div>
                       </div>
                       <button
                         onClick={() => updateQuantity(item.line_key, -item.quantity)}
-                        className="h-11 w-11 flex items-center justify-center text-danger opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                        className={`${compact ? 'h-10 w-9' : 'h-11 w-11'} flex items-center justify-center text-danger opacity-40 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity cursor-pointer`}
                         aria-label={t('pos_remove_line', 'Remove line')}
                       >
                         <Trash2 size={18} />
                       </button>
                     </div>
                   </div>
+
 
                   {/* Inline discount editor */}
                   {discountEditorId === item.line_key && (
@@ -366,51 +377,46 @@ export default function CartPanel() {
         </div>
 
         {/* Cart Summary */}
-        <div className="p-5 bg-surface border-t border-border space-y-4">
-          <div className="flex justify-between items-start gap-4">
-            <div className="space-y-3 min-w-0">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-text-3 mb-1">{t('total_amount', 'Total Amount')}</p>
-                <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className="text-3xl font-bold tracking-tight num text-text">{formatMoney(totalUSD, { code: 'USD', symbol: '$' })}</span>
-                  <span className="text-lg font-bold text-success num">{formatNumber(totalLBP, { decimals: 0 })} LL</span>
-                </div>
-                {subtotalUSD !== totalUSD && (
-                  <p className="text-xs text-text-3 line-through font-mono mt-1 num">{t('subtotal', 'Subtotal')}: {formatMoney(subtotalUSD, { code: 'USD', symbol: '$' })}</p>
-                )}
-                {creditLimit > 0 && (
-                  <p className={`text-xs font-semibold mt-1 ${availableCredit != null && availableCredit < totalUSD ? 'text-danger' : 'text-text-3'}`}>
-                    {t('pos_available_credit', 'Available Credit')}: {formatMoney(availableCredit || 0, { code: 'USD', symbol: '$' })}
-                  </p>
-                )}
+        <div className={`${compact ? 'px-3 py-2 space-y-2' : 'p-5 space-y-4'} bg-surface border-t border-border shrink-0`}>
+          <div className="flex justify-between items-center gap-3">
+            <div className="min-w-0 flex items-baseline gap-x-2 flex-wrap">
+              <span className="text-xs uppercase tracking-wide text-text-3">{t('total_amount', 'Total Amount')}</span>
+              <span className={`${compact ? 'text-2xl' : 'text-3xl'} font-bold tracking-tight num text-text`}>{formatMoney(totalUSD, { code: 'USD', symbol: '$' })}</span>
+              <span className={`${compact ? 'text-base' : 'text-lg'} font-bold text-success num`}>{formatNumber(totalLBP, { decimals: 0 })} LL</span>
+              {subtotalUSD !== totalUSD && (
+                <span className="text-xs text-text-3 line-through font-mono num">{t('subtotal', 'Subtotal')}: {formatMoney(subtotalUSD, { code: 'USD', symbol: '$' })}</span>
+              )}
+            </div>
 
-                {!isWalkIn && cart.length > 0 && (() => {
-                  const prev = formatBalance(prevBalanceUSD, USD, t);
-                  const next = formatBalance(newBalanceUSD, USD, t);
-                  const variantClass = (v: 'danger' | 'success' | 'neutral') =>
-                    v === 'danger' ? 'text-danger' : v === 'success' ? 'text-success' : 'text-text-3';
-                  return (
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
-                      <span className="text-text-3">
-                        {t('pos_previous_balance', 'Previous balance')}: <span className={`num font-semibold ${variantClass(prev.variant)}`}>{prev.amount} {prev.label}</span>
-                      </span>
-                      <span className="text-text-3">
-                        {t('pos_this_sale', 'This sale')}: <span className="num font-semibold text-text">{formatMoney(Math.abs(thisSaleEffectUSD), USD)}</span>
-                      </span>
-                      <span className="text-text-3">
-                        {t('pos_new_balance', 'New balance')}: <span className={`num font-semibold ${variantClass(next.variant)}`}>{next.amount} {next.label}</span>
-                      </span>
-                    </div>
-                  );
-                })()}
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-text-3 hidden xl:inline">{t('display_currency_label', 'Display Currency:')}</span>
+              <div className="flex gap-1">
+                {currencies.map((c: any) => (
+                  <button
+                    key={c.code}
+                    onClick={() => setSelectedCurrency(c)}
+                    aria-pressed={selectedCurrency.code === c.code}
+                    title={t('display_currency_label', 'Display Currency:')}
+                    className={`px-2.5 min-h-[32px] text-[10px] font-bold border rounded cursor-pointer ${selectedCurrency.code === c.code ? 'bg-primary text-on-primary border-primary' : 'border-border text-text-2 hover:border-border-strong'}`}
+                  >
+                    {c.code}
+                  </button>
+                ))}
               </div>
+              <div className="text-lg font-mono font-bold num text-text whitespace-nowrap">
+                {formatMoney(totalUSD * selectedCurrency.rate, selectedCurrency)}
+              </div>
+            </div>
+          </div>
 
+          {(canDiscount || creditLimit > 0 || (!isWalkIn && cart.length > 0)) && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
               {canDiscount && <div className="flex items-center gap-2">
                 <span className="text-[10px] font-bold uppercase text-text-3">{t('global_discount_label', 'Global Discount:')}</span>
-                <div className="flex items-center gap-1 bg-bg p-1 rounded border border-border">
+                <div className="flex items-center gap-1 bg-bg p-0.5 rounded border border-border">
                   <button
                     onClick={() => setGlobalDiscount((prev: any) => ({ ...prev, type: prev.type === 'percentage' ? 'fixed' : 'percentage' }))}
-                    className="p-1.5 hover:bg-surface-2 rounded cursor-pointer text-text"
+                    className="h-7 w-7 flex items-center justify-center hover:bg-surface-2 rounded cursor-pointer text-text"
                   >
                     {globalDiscount.type === 'percentage' ? <Percent size={12} /> : <DollarSign size={12} />}
                   </button>
@@ -422,34 +428,38 @@ export default function CartPanel() {
                   />
                 </div>
               </div>}
+              {creditLimit > 0 && (
+                <span className={`font-semibold ${availableCredit != null && availableCredit < totalUSD ? 'text-danger' : 'text-text-3'}`}>
+                  {t('pos_available_credit', 'Available Credit')}: {formatMoney(availableCredit || 0, { code: 'USD', symbol: '$' })}
+                </span>
+              )}
+              {!isWalkIn && cart.length > 0 && (() => {
+                const prev = formatBalance(prevBalanceUSD, USD, t);
+                const next = formatBalance(newBalanceUSD, USD, t);
+                const variantClass = (v: 'danger' | 'success' | 'neutral') =>
+                  v === 'danger' ? 'text-danger' : v === 'success' ? 'text-success' : 'text-text-3';
+                return (
+                  <>
+                    <span className="text-text-3">
+                      {t('pos_previous_balance', 'Previous balance')}: <span className={`num font-semibold ${variantClass(prev.variant)}`}>{prev.amount} {prev.label}</span>
+                    </span>
+                    <span className="text-text-3">
+                      {t('pos_this_sale', 'This sale')}: <span className="num font-semibold text-text">{formatMoney(Math.abs(thisSaleEffectUSD), USD)}</span>
+                    </span>
+                    <span className="text-text-3">
+                      {t('pos_new_balance', 'New balance')}: <span className={`num font-semibold ${variantClass(next.variant)}`}>{next.amount} {next.label}</span>
+                    </span>
+                  </>
+                );
+              })()}
             </div>
-
-            <div className="text-end shrink-0">
-              <div className="flex items-center gap-2 mb-2 justify-end">
-                <span className="text-xs text-text-3">{t('display_currency_label', 'Display Currency:')}</span>
-                <div className="flex gap-1">
-                  {currencies.map((c: any) => (
-                    <button
-                      key={c.code}
-                      onClick={() => setSelectedCurrency(c)}
-                      className={`px-2.5 py-1 min-h-[28px] text-[10px] font-bold border rounded cursor-pointer ${selectedCurrency.code === c.code ? 'bg-primary text-on-primary border-primary' : 'border-border text-text-2 hover:border-border-strong'}`}
-                    >
-                      {c.code}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="text-xl font-mono font-bold num text-text">
-                {formatMoney(totalUSD * selectedCurrency.rate, selectedCurrency)}
-              </div>
-            </div>
-          </div>
+          )}
 
           <div className="flex gap-2">
             <button
               disabled={cart.length === 0 || isProcessing}
               onClick={handleQuickCash}
-              className="flex-1 py-4 min-h-[52px] bg-success text-white font-bold uppercase tracking-wide flex items-center justify-center gap-2 hover:opacity-90 transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer rounded-[var(--radius-input)]"
+              className="flex-1 py-2 min-h-[52px] bg-success text-white font-bold uppercase tracking-wide flex items-center justify-center gap-2 hover:opacity-90 transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer rounded-[var(--radius-input)]"
             >
               {t('quick_cash', 'Quick Cash')} <Kbd1 /> <Banknote size={20} />
             </button>
@@ -460,7 +470,7 @@ export default function CartPanel() {
                 setPaymentCurrency(selectedCurrency);
                 setShowCheckout(true);
               }}
-              className="flex-1 py-4 min-h-[52px] bg-primary text-on-primary font-bold uppercase tracking-wide flex items-center justify-center gap-2 hover:bg-primary-hover transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer rounded-[var(--radius-input)]"
+              className="flex-1 py-2 min-h-[52px] bg-primary text-on-primary font-bold uppercase tracking-wide flex items-center justify-center gap-2 hover:bg-primary-hover transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer rounded-[var(--radius-input)]"
             >
               {t('checkout_key', 'Checkout')} <Kbd2 /> <ArrowRight size={20} className="rtl:rotate-180" />
             </button>

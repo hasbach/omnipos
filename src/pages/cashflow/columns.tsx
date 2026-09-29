@@ -2,7 +2,7 @@ import React from 'react';
 import { Pencil } from 'lucide-react';
 import { Badge, IconButton, type DataTableColumn } from '../../components/ui';
 import { formatDateTime, formatMoney } from '../../lib/format';
-import { categoryLabel, type CashFlowRow, type Translate } from './common';
+import type { CashFlowRow, Translate } from './common';
 
 interface CurrencyLike { code: string; symbol: string; rate: number }
 
@@ -11,9 +11,11 @@ export function cashFlowColumns(opts: {
   t: Translate;
   lang: string;
   currencies: CurrencyLike[];
+  /** Resolves a category key to its label (built-in translated, or the custom name). */
+  categoryLabel: (key: string | null | undefined) => string;
   onEdit?: (row: CashFlowRow) => void;
 }): DataTableColumn<CashFlowRow>[] {
-  const { t, lang, currencies, onEdit } = opts;
+  const { t, lang, currencies, onEdit, categoryLabel } = opts;
   const cols: DataTableColumn<CashFlowRow>[] = [
     {
       key: 'created_at',
@@ -33,9 +35,9 @@ export function cashFlowColumns(opts: {
     {
       key: 'category',
       header: t('cf_category', 'Category'),
-      sortValue: (row) => categoryLabel(row.category, t),
+      sortValue: (row) => categoryLabel(row.category),
       sortable: true,
-      render: (row) => <span className="text-text-2">{categoryLabel(row.category, t)}</span>,
+      render: (row) => <span className="text-text-2">{categoryLabel(row.category)}</span>,
     },
     {
       key: 'amount',

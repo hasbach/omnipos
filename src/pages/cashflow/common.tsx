@@ -23,13 +23,9 @@ const CATEGORY_FALLBACK: Record<Category, string> = {
   customer_collection: 'Customer collection', other: 'Other',
 };
 
-export function categoryLabel(c: string | null | undefined, t: Translate): string {
-  const key = (CATEGORIES as readonly string[]).includes(c || '') ? (c as Category) : 'other';
+/** Translated label of a BUILT-IN category. Use useCashFlowCategories().label() for anything that may be custom. */
+export function builtinCategoryLabel(key: Category, t: Translate): string {
   return t(`cf_cat_${key}`, CATEGORY_FALLBACK[key]);
-}
-
-export function categoryOptions(t: Translate, type?: 'in' | 'out') {
-  return CATEGORIES.filter((c) => !type || CATEGORY_TYPES[c].includes(type)).map((c) => ({ value: c, label: categoryLabel(c, t) }));
 }
 
 export interface CashFlowRow {
@@ -57,6 +53,11 @@ export function cashFlowErrorMessage(err: any, t: Translate): string {
     case 'CASHFLOW_CATEGORY_TYPE_MISMATCH': return t('cf_err_category_type', 'This category does not match cash in / cash out.');
     case 'CASHFLOW_AMOUNT_INVALID': return t('cf_err_amount', 'Enter an amount greater than zero.');
     case 'CASHFLOW_RATE_INVALID': return t('cf_err_rate', 'Enter an exchange rate greater than zero.');
+    case 'CASHFLOW_CATEGORY_NAME_TAKEN': return t('cf_err_cat_name_taken', 'A category with this name already exists.');
+    case 'CASHFLOW_CATEGORY_NAME_INVALID': return t('cf_err_cat_name_invalid', 'The name must be 1 to 40 characters.');
+    case 'CASHFLOW_CATEGORY_DIRECTION_INVALID': return t('cf_err_cat_direction_invalid', 'Choose cash in, cash out or both.');
+    case 'CASHFLOW_CATEGORY_DIRECTION_IN_USE': return t('cf_err_cat_direction_in_use', 'Movements of the opposite type already use this category, so its direction cannot be narrowed.');
+    case 'CASHFLOW_CATEGORY_NOT_FOUND': return t('cf_err_cat_not_found', 'This category no longer exists.');
     case 'CASHFLOW_NOT_FOUND': return t('cf_err_not_found', 'This entry no longer exists.');
   }
   return err?.message || String(err);

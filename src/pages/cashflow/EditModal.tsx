@@ -4,7 +4,8 @@ import { Badge, Button, Field, Input, Modal, MoneyInput, Select, Textarea, useTo
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatDateTime, formatMoney } from '../../lib/format';
-import { CATEGORY_TYPES, cashFlowErrorMessage, categoryLabel, categoryOptions, type CashFlowRow, type Category } from './common';
+import { cashFlowErrorMessage, type CashFlowRow } from './common';
+import { useCashFlowCategories } from './useCashFlowCategories';
 
 interface Currency { code: string; symbol: string; rate: number }
 
@@ -26,6 +27,7 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
 }) {
   const { t, lang } = useI18n();
   const toast = useToast();
+  const cats = useCashFlowCategories();
   const [type, setType] = useState<'in' | 'out'>('in');
   const [category, setCategory] = useState('other');
   const [counterparty, setCounterparty] = useState('');
@@ -57,7 +59,7 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
 
   const changeType = (next: 'in' | 'out') => {
     setType(next);
-    if (!CATEGORY_TYPES[category as Category]?.includes(next)) setCategory('other');
+    if (!cats.allows(category, next)) setCategory('other');
   };
   const changeCurrency = (code: string) => {
     setCurrency(code);
@@ -95,7 +97,7 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
   const describe = (rec: Record<string, any> | null) => {
     if (!rec) return '—';
     const cur = { code: rec.currency, symbol: rec.currency };
-    return `${rec.type === 'in' ? '+' : '-'}${formatMoney(rec.amount, cur)} · ${categoryLabel(rec.category, t)}${rec.counterparty ? ` · ${rec.counterparty}` : ''}${rec.reason ? ` · ${rec.reason}` : ''}`;
+    return `${rec.type === 'in' ? '+' : '-'}${formatMoney(rec.amount, cur)} · ${cats.label(rec.category)}${rec.counterparty ? ` · ${rec.counterparty}` : ''}${rec.reason ? ` · ${rec.reason}` : ''}`;
   };
 
   return (
@@ -127,7 +129,7 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
             ]} />
           </Field>
           <Field label={t('cf_category', 'Category')}>
-            <Select value={category} onChange={(e) => setCategory(e.target.value)} options={categoryOptions(t, type)} />
+            <Select value={category} onChange={(e) => setCategory(e.target.value)} options={cats.options(type, { include: row.category || 'other' })} />
           </Field>
           <Field label={t('fin_currency', 'Currency')}>
             <Select value={currency} onChange={(e) => changeCurrency(e.target.value)}

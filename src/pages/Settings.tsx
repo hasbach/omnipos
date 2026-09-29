@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle, Network, KeyRound } from 'lucide-react';
+import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle, Network, KeyRound, Tags } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
 import { useI18n } from '../intl/index';
@@ -14,9 +14,10 @@ import { UpdatesSection } from './settings/UpdatesSection';
 import { DataResetSection } from './settings/DataResetSection';
 import { ConnectionsSection } from './settings/ConnectionsSection';
 import { RolesSection } from './settings/RolesSection';
+import { CashFlowCategoriesSection } from './settings/CashFlowCategoriesSection';
 import { usePermissions } from '../lib/usePermissions';
 
-type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates' | 'connections' | 'roles' | 'reset';
+type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates' | 'connections' | 'cfcategories' | 'roles' | 'reset';
 
 export default function Settings({ onShowUpdate }: { onShowUpdate: () => void }) {
   const { t } = useI18n();
@@ -52,6 +53,7 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
       { key: 'pricing' as SectionKey, label: t('set_nav_pricing'), icon: Tag },
       { key: 'currencies' as SectionKey, label: t('set_nav_currencies'), icon: Coins },
       { key: 'printers' as SectionKey, label: t('set_nav_printers'), icon: Printer },
+      { key: 'cfcategories' as SectionKey, label: t('set_nav_cf_categories', 'Cash flow categories'), icon: Tags },
     ] : []),
     { key: 'appearance', label: t('set_nav_appearance'), icon: Globe },
     ...(canManage ? [{ key: 'updates' as SectionKey, label: t('set_nav_updates'), icon: Shield }] : []),
@@ -98,6 +100,7 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
           {section === 'appearance' && <AppearanceSection />}
           {section === 'updates' && <UpdatesSection tenant={tenant} onShowUpdate={onShowUpdate} />}
           {section === 'connections' && <ConnectionsSection />}
+          {section === 'cfcategories' && canManage && <CashFlowCategoriesSection />}
           {section === 'roles' && isAdmin && <RolesSection />}
           {section === 'reset' && <DataResetSection />}
         </div>

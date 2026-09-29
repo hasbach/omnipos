@@ -82,6 +82,9 @@ export function Combobox({
 
   const close = useCallback(() => { setOpen(false); setQuery(''); }, []);
 
+  const singleMatchRef = useRef<string | null>(null);
+  singleMatchRef.current = query && total === 1 && items.length === 1 && !items[0].disabled ? items[0].value : null;
+
   const commit = useCallback((v: string) => {
     onChange(v);
     close();
@@ -104,11 +107,15 @@ export function Combobox({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        // Clicking away after a search that left exactly one match selects it.
+        const only = singleMatchRef.current;
+        if (only) commit(only); else close();
+      }
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [open, close]);
+  }, [open, close, commit]);
 
   const move = (delta: number) => {
     if (!items.length) return;
@@ -136,7 +143,13 @@ export function Combobox({
       case 'Escape':
         if (open) { e.preventDefault(); e.stopPropagation(); close(); }
         break;
-      case 'Tab': if (open) close(); break;
+      case 'Tab':
+        // Typed a search then tabbed away: take the highlighted match instead of dropping the search.
+        if (open) {
+          const it = query ? items[active] : null;
+          if (it && !it.disabled && !(allOption && it.value === allOption.value)) commit(it.value); else close();
+        }
+        break;
     }
   };
 

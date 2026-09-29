@@ -194,6 +194,11 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'POST', pattern: '/api/reports/*', need: 'reports.view' },
 
   // --- cash flow (workstream B adds analytics / edit / edits) ---
+  // Custom categories: anyone who can use the register / cash in-out can READ them (pickers, labels);
+  // defining them is a settings job. Above the `:id` rules so 'categories' is never taken for an id.
+  { method: 'GET', pattern: '/api/cash-flow/categories', need: ['cash_flow.view', 'cash_flow.add', 'cash_flow.edit', 'settings.manage', ...SETTLEMENT_ANY] },
+  { method: 'POST', pattern: '/api/cash-flow/categories', need: 'settings.manage' },
+  { method: 'PUT', pattern: '/api/cash-flow/categories/:id', need: 'settings.manage' },
   { method: 'GET', pattern: '/api/cash-flow/analytics', need: 'cash_flow.view' },
   { method: 'GET', pattern: '/api/cash-flow/summary', need: ['cash_flow.view', ...SETTLEMENT_ANY] },
   { method: 'GET', pattern: '/api/cash-flow/:id/edits', need: 'cash_flow.view' },
