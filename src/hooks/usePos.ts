@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Fuse from 'fuse.js';
 import { Product, CartItem, Stakeholder, Transaction, Payment, Discount, Tenant, cartLineKey } from '../types';
 import { useTheme } from './useTheme';
@@ -22,6 +22,19 @@ export const CURRENCIES = [
   { code: 'EUR', symbol: '€', rate: 0.92 },
   { code: 'LBP', symbol: 'LL', rate: 89500 },
 ];
+
+// One open sale in the POS. The active sale's authoritative data is the live state in usePos.
+export interface SaleTab {
+  id: string;
+  number: number;
+  cart: CartItem[];
+  stakeholderId: number;
+  globalDiscount: Discount;
+  payments: any[];
+  priceLevel: PriceLevel;
+  priceLevelManual: boolean;
+  createdAt: number;
+}
 
 const EMPTY_CUSTOMER_FORM = { name: '', phone: '', email: '', address: '' };
 
@@ -116,6 +129,214 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
   const barcodeRef = useRef<HTMLInputElement>(null);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+
+  // --- Multiple open sales (sale tabs) ------------------------------------------------------------
+  // The ACTIVE sale always lives in the regular live state above (cart, selectedStakeholder, ...) so
+  // the rest of the POS is unaware of tabs. saleTabs holds the parked sales; its entry for the active
+  // tab may be stale — the live state is authoritative for it (see snapshotActive / saleTabsView).
+  const makeEmptyTab = (number: number, priceLevelDefault: PriceLevel): SaleTab => ({
+    id: `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    number,
+    cart: [],
+    stakeholderId: 1,
+    globalDiscount: { type: 'percentage', value: 0 },
+    payments: [],
+    priceLevel: priceLevelDefault,
+    priceLevelManual: false,
+    createdAt: Date.now(),
+  });
+  const initialTabRef = useRef<SaleTab | null>(null);
+  if (!initialTabRef.current) initialTabRef.current = makeEmptyTab(1, 'retail');
+  const [saleTabs, setSaleTabs] = useState<SaleTab[]>(() => [initialTabRef.current!]);
+  const [activeTabId, setActiveTabId] = useState<string>(initialTabRef.current.id);
+  const saleTabsRef = useRef<SaleTab[]>(saleTabs);
+  const activeTabIdRef = useRef<string>(activeTabId);
+  const [saleTabsHydrated, setSaleTabsHydrated] = useState(false);
+  // Set just before setSelectedStakeholder while loading a tab so the stakeholder->price-level
+  // defaulting effect applies the restored level instead of re-defaulting it.
+  const restoringTabRef = useRef<{ priceLevel: PriceLevel; manual: boolean } | null>(null);
+  // Tab whose checkout just succeeded; it is closed once the success screen is dismissed.
+  const finishedTabIdRef = useRef<string | null>(null);
+  // Latest live sale values, for snapshotting from callbacks that may hold stale closures.
+  const liveSaleRef = useRef<any>(null);
+  liveSaleRef.current = { cart, selectedStakeholder, globalDiscount, payments, priceLevel };
+
+  const commitTabs = (tabs: SaleTab[], activeId: string) => {
+    saleTabsRef.current = tabs;
+    activeTabIdRef.current = activeId;
+    setSaleTabs(tabs);
+    setActiveTabId(activeId);
+  };
+
+  const snapshotActive = (): SaleTab => {
+    const live = liveSaleRef.current;
+    const base = saleTabsRef.current.find(x => x.id === activeTabIdRef.current) || saleTabsRef.current[0];
+    return {
+      ...base,
+      cart: live.cart,
+      stakeholderId: live.selectedStakeholder,
+      globalDiscount: live.globalDiscount,
+      payments: live.payments,
+      priceLevel: live.priceLevel,
+      priceLevelManual: priceLevelManualRef.current,
+    };
+  };
+
+  // Level a fresh walk-in sale starts at (mirrors the stakeholder->price-level effect).
+  const defaultLevelForWalkIn = (): PriceLevel => {
+    if (!priceLevelsEnabled) return 'retail';
+    const walkIn = stakeholders.find((x: any) => x.id === 1) as any;
+    return normalizeLevel(walkIn?.price_level || settings.default_price_level);
+  };
+
+  // Load a sale into the live state (and clear transient per-sale UI).
+  const loadSale = (s: Pick<SaleTab, 'cart' | 'stakeholderId' | 'globalDiscount' | 'payments' | 'priceLevel' | 'priceLevelManual'>) => {
+    setCart(s.cart);
+    setGlobalDiscount(s.globalDiscount);
+    setPayments(s.payments);
+    if (s.stakeholderId !== liveSaleRef.current.selectedStakeholder) {
+      // The defaulting effect will run for this change; hand it the level to restore.
+      restoringTabRef.current = { priceLevel: s.priceLevel, manual: s.priceLevelManual };
+      setSelectedStakeholder(s.stakeholderId);
+    } else {
+      // Same customer id => the effect won't run, so apply the level directly.
+      restoringTabRef.current = null;
+      priceLevelManualRef.current = s.priceLevelManual;
+      setPriceLevelState(s.priceLevel);
+    }
+    setBarcodeInput('');
+    setSuggestions([]);
+    setLastTransaction(null);
+    setShowCheckout(false);
+    setTimeout(() => barcodeRef.current?.focus(), 0);
+  };
+
+  // Drop a finished (already empty) tab that isn't the one being switched to, if any.
+  const withoutFinished = (tabs: SaleTab[], keepId: string) => {
+    const fin = finishedTabIdRef.current;
+    if (fin && fin !== keepId && tabs.length > 1) {
+      finishedTabIdRef.current = null;
+      return tabs.filter(x => x.id !== fin);
+    }
+    return tabs;
+  };
+
+  const newSaleTab = () => {
+    const tabs = saleTabsRef.current.map(x => (x.id === activeTabIdRef.current ? snapshotActive() : x));
+    const fresh = makeEmptyTab(Math.max(...tabs.map(x => x.number)) + 1, defaultLevelForWalkIn());
+    commitTabs(withoutFinished([...tabs, fresh], fresh.id), fresh.id);
+    loadSale(fresh);
+  };
+
+  const switchSaleTab = (id: string) => {
+    if (id === activeTabIdRef.current) return;
+    const target = saleTabsRef.current.find(x => x.id === id);
+    if (!target) return;
+    const tabs = saleTabsRef.current.map(x => (x.id === activeTabIdRef.current ? snapshotActive() : x));
+    commitTabs(withoutFinished(tabs, id), id);
+    loadSale(target);
+  };
+
+  // Remove a tab (no confirmation) and land on its neighbour if it was the active one.
+  const removeTab = (id: string) => {
+    const tabs = saleTabsRef.current.map(x => (x.id === activeTabIdRef.current ? snapshotActive() : x));
+    if (tabs.length <= 1) {
+      // Never zero tabs: closing the last one just clears it.
+      const cleared: SaleTab = {
+        ...tabs[0], cart: [], stakeholderId: 1, globalDiscount: { type: 'percentage', value: 0 },
+        payments: [], priceLevel: defaultLevelForWalkIn(), priceLevelManual: false,
+      };
+      commitTabs([cleared], cleared.id);
+      loadSale(cleared);
+      return;
+    }
+    const idx = tabs.findIndex(x => x.id === id);
+    const rest = tabs.filter(x => x.id !== id);
+    if (id !== activeTabIdRef.current) {
+      commitTabs(rest, activeTabIdRef.current);
+      return;
+    }
+    const next = rest[Math.min(Math.max(idx - 1, 0), rest.length - 1)];
+    commitTabs(rest, next.id);
+    loadSale(next);
+  };
+
+  const closeSaleTab = async (id: string) => {
+    const tab = saleTabsRef.current.find(x => x.id === id);
+    if (!tab) return;
+    const count = id === activeTabIdRef.current ? liveSaleRef.current.cart.length : tab.cart.length;
+    if (count > 0) {
+      const ok = await confirm({
+        title: t('pos_tab_discard_title', 'Discard this sale?'),
+        description: t('pos_tab_discard_desc', 'Its {n} items will be removed.', { n: count }),
+        confirmLabel: t('pos_tab_discard', 'Discard'),
+        variant: 'danger',
+      });
+      if (!ok) return;
+    }
+    if (finishedTabIdRef.current === id) finishedTabIdRef.current = null;
+    removeTab(id);
+  };
+
+  // Called when the post-checkout screen is dismissed: closes the just-finished (empty) tab without
+  // confirmation and lands on its neighbour. Idempotent; a lone tab simply stays as the fresh sale.
+  const finishSaleTab = () => {
+    const id = finishedTabIdRef.current;
+    if (!id) return;
+    finishedTabIdRef.current = null;
+    if (saleTabsRef.current.length > 1 && saleTabsRef.current.some(x => x.id === id)) removeTab(id);
+  };
+
+  // Keyboard handlers / handleCheckout hold older closures; route them through the latest functions.
+  const tabActionsRef = useRef({ newSaleTab, switchSaleTab, finishSaleTab });
+  tabActionsRef.current = { newSaleTab, switchSaleTab, finishSaleTab };
+
+  // Tabs as shown in the UI: the active one reflects the live sale.
+  const saleTabsView = useMemo(() => saleTabs.map(x => {
+    const isActive = x.id === activeTabId;
+    const lines = isActive ? cart : x.cart;
+    const sid = isActive ? selectedStakeholder : x.stakeholderId;
+    const s = sid !== 1 ? (stakeholders.find((y: any) => y.id === sid) as any) : null;
+    return {
+      ...x,
+      cart: lines,
+      stakeholderId: sid,
+      lineCount: lines.length,
+      customerName: s ? partyDisplayName(s.name, t) : '',
+    };
+  }), [saleTabs, activeTabId, cart, selectedStakeholder, stakeholders, t]);
+
+  // Persist parked sales so a reload/crash doesn't lose them.
+  const tabsStorageKey = tenant?.tenantId != null ? `omnipos.saleTabs.${tenant.tenantId}.${terminalId}` : null;
+  useEffect(() => {
+    if (!tabsStorageKey || saleTabsHydrated) return;
+    try {
+      const raw = localStorage.getItem(tabsStorageKey);
+      const data = raw ? JSON.parse(raw) : null;
+      const valid = data && Array.isArray(data.tabs) && data.tabs.length > 0 && data.tabs.every((x: any) =>
+        x && typeof x.id === 'string' && typeof x.number === 'number' && Array.isArray(x.cart)
+        && typeof x.stakeholderId === 'number' && Array.isArray(x.payments) && x.globalDiscount
+        && typeof x.globalDiscount.value === 'number');
+      const active = valid ? data.tabs.find((x: any) => x.id === data.activeTabId) : null;
+      if (valid && active) {
+        const tabs: SaleTab[] = data.tabs.map((x: any) => ({ ...x, priceLevel: normalizeLevel(x.priceLevel), priceLevelManual: !!x.priceLevelManual }));
+        const act = tabs.find(x => x.id === active.id)!;
+        commitTabs(tabs, act.id);
+        loadSale(act);
+      }
+    } catch { /* ignore corrupt or unavailable storage */ }
+    setSaleTabsHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabsStorageKey]);
+  useEffect(() => {
+    if (!tabsStorageKey || !saleTabsHydrated) return;
+    try {
+      const tabs = saleTabs.map(x => (x.id === activeTabId
+        ? { ...x, cart, stakeholderId: selectedStakeholder, globalDiscount, payments, priceLevel, priceLevelManual: priceLevelManualRef.current }
+        : x));
+      localStorage.setItem(tabsStorageKey, JSON.stringify({ activeTabId, tabs }));
+    } catch { /* storage unavailable */ }
+  }, [tabsStorageKey, saleTabsHydrated, saleTabs, activeTabId, cart, selectedStakeholder, globalDiscount, payments, priceLevel]);
 
   useEffect(() => {
     if (!tenant) return;
@@ -489,6 +710,15 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   // can still override it per sale via setPriceLevel (header selector) — but switching customer
   // resets the "manual" flag so the NEXT customer change re-defaults again.
   useEffect(() => {
+    // A sale-tab load sets restoringTabRef right before changing the customer: apply the tab's own
+    // level once instead of re-defaulting it.
+    if (restoringTabRef.current) {
+      const r = restoringTabRef.current;
+      restoringTabRef.current = null;
+      priceLevelManualRef.current = priceLevelsEnabled ? r.manual : false;
+      setPriceLevelState(priceLevelsEnabled ? r.priceLevel : 'retail');
+      return;
+    }
     if (!priceLevelsEnabled) {
       priceLevelManualRef.current = false;
       setPriceLevelState('retail');
@@ -945,6 +1175,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       });
       if (res.ok) {
         const data = await res.json();
+        finishedTabIdRef.current = activeTabIdRef.current;
         setCart([]);
         setPayments([]); // Reset split payments
         setSelectedStakeholder(1); // Reset to Walk-in default customer
@@ -971,6 +1202,8 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
           // Skip the post-checkout confirmation screen; go straight back to a fresh sale.
           setLastTransaction(null);
           setShowCheckout(false);
+          // Next tick: let the cleared sale render first so the tab switch snapshots fresh state.
+          setTimeout(() => tabActionsRef.current.finishSaleTab(), 0);
         }
       } else {
         const err = await res.json().catch(() => ({}));
@@ -1013,6 +1246,18 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       }
       if (e.key === 'Escape') {
         setShowCheckout(false);
+        tabActionsRef.current.finishSaleTab();
+      }
+      // Sale tabs: Alt+N = new sale, Alt+1..9 = jump to the nth sale.
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.code === 'KeyN') {
+          e.preventDefault();
+          tabActionsRef.current.newSaleTab();
+        } else if (/^Digit[1-9]$/.test(e.code)) {
+          e.preventDefault();
+          const tab = saleTabsRef.current[Number(e.code.slice(5)) - 1];
+          if (tab) tabActionsRef.current.switchSaleTab(tab.id);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1204,6 +1449,12 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   };
 
   return {
+    saleTabs: saleTabsView,
+    activeTabId,
+    newSaleTab,
+    switchSaleTab,
+    closeSaleTab,
+    finishSaleTab,
     products,
     setProducts,
     cart,

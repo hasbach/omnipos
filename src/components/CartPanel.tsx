@@ -23,6 +23,7 @@ export default function CartPanel() {
     priceLevel, allowPriceOverride, enforceMinPrice, unitPriceUSD, setItemPriceOverride,
     creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled, belowCostOf, sellableProducts,
     selectedStakeholder, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
+    saleTabs = [], activeTabId, newSaleTab, switchSaleTab, closeSaleTab,
   } = pos as any;
 
   const { can } = usePermissions();
@@ -75,6 +76,49 @@ export default function CartPanel() {
     <>
       {/* Left Panel: Cart */}
       <div className="w-2/3 flex flex-col border-e border-border">
+        {/* Sale tabs: several open sales, one active at a time */}
+        <div className="flex items-center gap-1 px-2 h-10 shrink-0 border-b border-border bg-surface-2">
+          <div role="tablist" aria-label={t('pos_sale_tabs', 'Open sales')} className="flex items-center gap-1 min-w-0 overflow-x-auto">
+            {saleTabs.map((tab: any) => {
+              const active = tab.id === activeTabId;
+              const canClose = saleTabs.length > 1 || tab.lineCount > 0;
+              return (
+                <div
+                  key={tab.id}
+                  className={`flex items-center shrink-0 rounded-[var(--radius-input)] border ${active ? 'bg-primary text-on-primary border-primary' : 'bg-surface text-text-2 border-border hover:border-border-strong hover:text-text'}`}
+                >
+                  <button
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => switchSaleTab(tab.id)}
+                    className="flex items-center gap-1.5 ps-2.5 pe-1.5 h-8 text-xs font-bold cursor-pointer whitespace-nowrap"
+                  >
+                    <span>{t('pos_sale_n', 'Sale {n}', { n: tab.number })}</span>
+                    {tab.lineCount > 0 && (
+                      <span className={`px-1.5 rounded-full text-[10px] leading-4 ${active ? 'bg-on-primary/20' : 'bg-primary/15 text-primary'}`}>{tab.lineCount}</span>
+                    )}
+                    {tab.customerName && <span className="max-w-[90px] truncate font-medium opacity-80">{tab.customerName}</span>}
+                  </button>
+                  {canClose ? (
+                    <button
+                      onClick={() => closeSaleTab(tab.id)}
+                      aria-label={t('pos_close_sale_n', 'Close sale {n}', { n: tab.number })}
+                      className="me-1 p-1 rounded hover:bg-black/10 cursor-pointer"
+                    >
+                      <X size={12} />
+                    </button>
+                  ) : <span className="pe-1.5" />}
+                </div>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => newSaleTab()}
+            className="flex items-center gap-1.5 shrink-0 px-2.5 h-8 text-xs font-bold text-primary rounded-[var(--radius-input)] hover:bg-surface cursor-pointer whitespace-nowrap"
+          >
+            <Plus size={14} /> {t('pos_new_sale_tab', 'New sale')} <span className="opacity-70">(Alt+N)</span>
+          </button>
+        </div>
         {/* Barcode Input Area */}
         <div className="p-4 border-b border-border bg-surface relative">
           <form onSubmit={handleBarcodeSubmit} className="relative">

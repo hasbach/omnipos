@@ -21,7 +21,7 @@ export default function PaymentModal() {
     currencies = CURRENCIES, selectedCurrency, showCheckout, setShowCheckout, payments, setPayments,
     paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency,
     showAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, setIsPriceChecker,
-    lastTransaction, setLastTransaction, suggestions, setSuggestions,
+    lastTransaction, setLastTransaction, suggestions, setSuggestions, finishSaleTab,
     stakeholders, selectedStakeholder, selectedStakeholderObj, creditLimit, availableCredit,
     availableStoreCredit,
     historyDate, setHistoryDate, loadingHistory, selectedHistoryTransaction, setSelectedHistoryTransaction,
@@ -449,7 +449,7 @@ export default function PaymentModal() {
         open={showCheckout}
         // Closing the success screen (Esc / ×) finishes it like "New Sale", so the next checkout
         // doesn't reopen on the previous sale's receipt.
-        onClose={() => { setLastTransaction(null); setShowCheckout(false); }}
+        onClose={() => { setLastTransaction(null); setShowCheckout(false); finishSaleTab?.(); }}
         size="sm"
         title={lastTransaction ? t('pos_transaction_success', 'Transaction Success') : t('pos_finalize_payment', 'Finalize Payment')}
       >
@@ -481,7 +481,7 @@ export default function PaymentModal() {
               <Button variant="primary" onClick={() => printReceipt(lastTransaction)}>
                 <Printer size={18} /> {t('pos_print_receipt', 'Print Receipt')}
               </Button>
-              <Button variant="secondary" onClick={() => { setLastTransaction(null); setShowCheckout(false); }}>
+              <Button variant="secondary" onClick={() => { setLastTransaction(null); setShowCheckout(false); finishSaleTab?.(); }}>
                 {t('pos_new_sale', 'New Sale')}
               </Button>
             </div>
