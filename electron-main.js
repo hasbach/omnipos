@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, screen, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -95,6 +96,11 @@ function openSetupWindow() {
 
   // IPC: save config and proceed
   ipcMain.handle('setup:save-config', async (event, config) => {
+    // Keep any store connections already saved (setup only knows about this register's own mode).
+    const previous = readConfig();
+    if (previous && Array.isArray(previous.connections) && config && !config.connections) {
+      config = { ...config, connections: previous.connections };
+    }
     writeConfig(config);
     setupWindow?.close();
     setupWindow = null;
@@ -263,6 +269,12 @@ function launchMain(config) {
 
   mainWindow.on('closed', () => { mainWindow = null; });
 
+  // Origin of this register's own app server (trusted for the connections IPC + Ctrl+Shift+O).
+  try {
+    ownOrigin = new URL(config.mode === 'host' ? 'http://127.0.0.1:3000' : (config.hostAddress || 'http://127.0.0.1:3000')).origin;
+  } catch { ownOrigin = 'http://127.0.0.1:3000'; }
+  attachConnectionsShortcut(mainWindow);
+
   // Force all child windows (e.g. dashboard) to be frameless
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (openOutsideLinkExternally(mainWindow, url)) return { action: 'deny' };
@@ -283,6 +295,7 @@ function launchMain(config) {
   // Also remove menu from any child windows after they're created
   mainWindow.webContents.on('did-create-window', (childWindow) => {
     childWindow.setMenu(null);
+    attachConnectionsShortcut(childWindow);
     // The dashboard (Live Monitor page included) is a child window: same external-link rule there.
     childWindow.webContents.setWindowOpenHandler(({ url }) =>
       openOutsideLinkExternally(childWindow, url) ? { action: 'deny' } : { action: 'allow' });
@@ -302,6 +315,206 @@ function openOutsideLinkExternally(win, url) {
   } catch { /* not a URL we can reason about */ }
   return false;
 }
+
+// === STORE CONNECTIONS (second window for another store) ===
+// network-config.json gains `connections: [{ id, name, url }]`. Each opens in its OWN frameless
+// window with its own `persist:conn-<id>` session so logins/cookies never mix with this register's.
+let ownOrigin = 'http://127.0.0.1:3000';
+const connectionWindows = new Map(); // id -> BrowserWindow
+
+function getConnections() {
+  const cfg = readConfig();
+  return Array.isArray(cfg?.connections) ? cfg.connections.filter((c) => c && c.id && c.url) : [];
+}
+
+function saveConnections(list) {
+  const cfg = readConfig() || {};
+  writeConfig({ ...cfg, connections: list });
+}
+
+// Only pages served by this register's own server may drive the connections API (never a remote
+// store's page loaded in a connection window, which shares the same preload).
+function isTrustedSender(event) {
+  try {
+    return new URL(event.senderFrame?.url || event.sender.getURL()).origin === ownOrigin;
+  } catch { return false; }
+}
+
+function normalizeStoreUrl(raw) {
+  const u = new URL(String(raw || '').trim());
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('URL_PROTOCOL');
+  return u.origin;
+}
+
+async function checkReachable(url) {
+  try {
+    const res = await fetch(`${url}/api/auth/me`, { signal: AbortSignal.timeout(4000) });
+    return res.status === 200 || res.status === 401;
+  } catch { return false; }
+}
+
+function openConnectionWindow(conn) {
+  const existing = connectionWindows.get(conn.id);
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return;
+  }
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
+  const win = new BrowserWindow({
+    width: Math.min(1280, sw),
+    height: Math.min(800, sh),
+    title: conn.name,
+    autoHideMenuBar: true,
+    frame: false,
+    icon: path.join(__dirname, '..', 'assets', 'posicon.ico'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      partition: `persist:conn-${conn.id}`,
+      preload: path.join(__dirname, 'electron-preload.cjs'),
+    },
+  });
+  win.setMenu(null);
+  connectionWindows.set(conn.id, win);
+  win.on('closed', () => connectionWindows.delete(conn.id));
+  // The window title is the store name, whatever the remote page calls itself.
+  win.on('page-title-updated', (e) => { e.preventDefault(); win.setTitle(conn.name); });
+  // Same external-link rule as the main window; in-app popups (dashboard) stay frameless.
+  // Popups opened with window.open inherit this window's session partition.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (openOutsideLinkExternally(win, url)) return { action: 'deny' };
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        frame: false,
+        autoHideMenuBar: true,
+        webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, 'electron-preload.cjs') },
+      },
+    };
+  });
+  win.webContents.on('did-create-window', (child) => {
+    child.setMenu(null);
+    child.webContents.setWindowOpenHandler(({ url }) =>
+      openOutsideLinkExternally(child, url) ? { action: 'deny' } : { action: 'allow' });
+  });
+  const cfg = readConfig() || {};
+  const terminal = cfg.terminalId || (cfg.mode === 'host' ? 'MAIN' : 'POS');
+  win.loadURL(`${conn.url}/?terminalId=${encodeURIComponent(terminal)}`);
+}
+
+function registerConnectionsIpc() {
+  const handle = (channel, fn) => {
+    ipcMain.removeHandler(channel);
+    ipcMain.handle(channel, async (event, arg) => {
+      if (!isTrustedSender(event)) return { ok: false, error: 'FORBIDDEN' };
+      try { return await fn(event, arg); } catch (err) { return { ok: false, error: err?.message || 'ERROR' }; }
+    });
+  };
+
+  handle('connections:list', () => ({ ok: true, connections: getConnections() }));
+
+  handle('connections:add', async (_e, arg) => {
+    const name = String(arg?.name || '').trim();
+    if (name.length < 1 || name.length > 60) return { ok: false, error: 'NAME_INVALID' };
+    let url;
+    try { url = normalizeStoreUrl(arg?.url); } catch { return { ok: false, error: 'URL_INVALID' }; }
+    const list = getConnections();
+    if (list.length >= 20) return { ok: false, error: 'TOO_MANY' };
+    if (list.some((c) => c.url === url)) return { ok: false, error: 'DUPLICATE' };
+    if (!(await checkReachable(url))) return { ok: false, error: 'UNREACHABLE' };
+    const conn = { id: crypto.randomBytes(6).toString('hex'), name, url };
+    saveConnections([...list, conn]);
+    return { ok: true, connection: conn };
+  });
+
+  handle('connections:remove', (_e, id) => {
+    const list = getConnections();
+    const conn = list.find((c) => c.id === id);
+    if (!conn) return { ok: false, error: 'NOT_FOUND' };
+    const win = connectionWindows.get(conn.id);
+    if (win && !win.isDestroyed()) win.close();
+    saveConnections(list.filter((c) => c.id !== id));
+    return { ok: true };
+  });
+
+  handle('connections:open', (_e, id) => {
+    const conn = getConnections().find((c) => c.id === id);
+    if (!conn) return { ok: false, error: 'NOT_FOUND' };
+    openConnectionWindow(conn);
+    return { ok: true };
+  });
+
+  handle('connections:scan', async () => {
+    const found = await scanForServers(4000);
+    return { ok: true, servers: found.map((a) => `http://${a}`) };
+  });
+
+  // "Change this register's mode": confirm in the main process (a page can't fake it), then drop the
+  // saved host/client choice and relaunch into the setup window. Business data is untouched.
+  handle('connections:reset-mode', async (event, labels) => {
+    const clip = (v, d) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 400) : d);
+    const parent = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const { response } = await dialog.showMessageBox(parent, {
+      type: 'warning',
+      buttons: [clip(labels?.confirm, 'Change mode'), clip(labels?.cancel, 'Cancel')],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      title: clip(labels?.title, 'Change host/client mode'),
+      message: clip(labels?.message, 'This register will restart and ask you to choose host or client mode again. Your business data is not deleted.'),
+    });
+    if (response !== 0) return { ok: true, cancelled: true };
+    // Forget only this register's host/client choice; saved store connections survive the switch.
+    try {
+      const keep = readConfig();
+      if (keep && Array.isArray(keep.connections) && keep.connections.length) writeConfig({ connections: keep.connections });
+      else if (fs.existsSync(CONFIG_PATH)) fs.unlinkSync(CONFIG_PATH);
+    } catch (err) { return { ok: false, error: err?.message || 'ERROR' }; }
+    if (serverProcess) { try { serverProcess.kill(); } catch {} }
+    app.relaunch();
+    app.exit(0);
+    return { ok: true };
+  });
+}
+
+// Ctrl+Shift+O (only while an app window of this register is focused, not a system-wide hotkey):
+// bring up Settings -> Store connections in the dashboard window, opening one if needed.
+function attachConnectionsShortcut(win) {
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.control && input.shift && !input.alt && String(input.key).toLowerCase() === 'o') {
+      event.preventDefault();
+      openConnectionsSettings();
+    }
+  });
+}
+
+function openConnectionsSettings() {
+  const target = '/dashboard/settings?section=connections';
+  const dash = BrowserWindow.getAllWindows().find((w) => {
+    try { const u = new URL(w.webContents.getURL()); return u.origin === ownOrigin && u.pathname.startsWith('/dashboard'); } catch { return false; }
+  });
+  if (dash) {
+    if (dash.isMinimized()) dash.restore();
+    dash.focus();
+    // Client-side navigation (react-router listens for popstate) so the dashboard keeps its state.
+    dash.webContents.executeJavaScript(
+      `history.pushState({}, '', ${JSON.stringify(target)}); window.dispatchEvent(new PopStateEvent('popstate'));`, true
+    ).catch(() => {});
+    return;
+  }
+  const win = new BrowserWindow({
+    width: 1280, height: 800, title: 'OmniPOS', autoHideMenuBar: true, frame: false,
+    icon: path.join(__dirname, '..', 'assets', 'posicon.ico'),
+    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, 'electron-preload.cjs') },
+  });
+  win.setMenu(null);
+  attachConnectionsShortcut(win);
+  win.webContents.setWindowOpenHandler(({ url }) =>
+    openOutsideLinkExternally(win, url) ? { action: 'deny' } : { action: 'allow' });
+  win.loadURL(`${ownOrigin}${target}`);
+}
+// === END STORE CONNECTIONS ===
 
 function startLocalServer(config, onReady) {
   const serverPath = path.resolve(__dirname, '..', 'dist-server', 'server.js');
@@ -366,8 +579,9 @@ function startLocalServer(config, onReady) {
 
 // --- Startup ---
 app.on('ready', () => {
+  registerConnectionsIpc();
   const config = readConfig();
-  if (!config) {
+  if (!config || !config.mode) {
     openSetupWindow();
   } else {
     launchMain(config);
@@ -384,7 +598,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (!mainWindow && !setupWindow) {
     const config = readConfig();
-    if (!config) openSetupWindow();
+    if (!config || !config.mode) openSetupWindow();
     else launchMain(config);
   }
 });

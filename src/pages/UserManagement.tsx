@@ -171,16 +171,16 @@ export default function UserManagement() {
             <Field label={t('usr_field_name')} required>
               <Input autoFocus value={editing.name || ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
             </Field>
-            <Field label={t('usr_field_role')}>
+            <Field label={t('usr_field_role')} helper={t(`usr_role_${editing.role || 'staff'}_desc`)}>
               <Select
                 value={editing.role || 'staff'}
                 onChange={(e) => setEditing({ ...editing, role: e.target.value })}
                 options={[
-                  { value: 'admin', label: t('usr_role_admin') },
-                  { value: 'manager', label: t('usr_role_manager') },
-                  { value: 'staff', label: t('usr_role_staff') },
-                  { value: 'cashier', label: t('usr_role_cashier') },
-                  { value: 'accountant', label: t('usr_role_accountant') },
+                  { value: 'admin', label: `${t('usr_role_admin')} — ${t('usr_role_admin_desc')}` },
+                  { value: 'manager', label: `${t('usr_role_manager')} — ${t('usr_role_manager_desc')}` },
+                  { value: 'staff', label: `${t('usr_role_staff')} — ${t('usr_role_staff_desc')}` },
+                  { value: 'cashier', label: `${t('usr_role_cashier')} — ${t('usr_role_cashier_desc')}` },
+                  { value: 'accountant', label: `${t('usr_role_accountant')} — ${t('usr_role_accountant_desc')}` },
                 ]}
               />
             </Field>

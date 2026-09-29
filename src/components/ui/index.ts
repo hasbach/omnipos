@@ -16,6 +16,9 @@ export type { MoneyInputProps } from './MoneyInput';
 export { Select } from './Select';
 export type { SelectProps, SelectOption } from './Select';
 
+export { Combobox, normalizeSearch } from './Combobox';
+export type { ComboboxProps, ComboboxOption } from './Combobox';
+
 export { Textarea } from './Textarea';
 export type { TextareaProps } from './Textarea';
 

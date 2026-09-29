@@ -1,16 +1,70 @@
-import React from 'react';
-import { Search, Package } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Search, Package, ChevronLeft, ChevronRight, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
 import { usePosContext } from '../context/PosContext';
+import { useI18n } from '../intl/index';
 import { Badge } from './ui';
 import { formatMoney } from '../lib/format';
 
+const COLLAPSE_KEY = 'pos_categories_collapsed';
+
+function readCollapsed(): boolean {
+  try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
+}
+
 export default function ProductGrid() {
+  const { dir } = useI18n();
+  const isRtl = dir === 'rtl';
   const pos = usePosContext();
   const {
     searchTerm, setSearchTerm, selectedCategory, setSelectedCategory,
     addToCart, categories, filteredProducts, totalPages, paginatedProducts,
     currentPage, setCurrentPage, unitPriceUSD, priceLevel, t,
   } = pos as any;
+
+  const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [canPrev, setCanPrev] = useState(false);
+  const [canNext, setCanNext] = useState(false);
+
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try { localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0'); } catch { /* storage unavailable */ }
+      return next;
+    });
+  };
+
+  // scrollLeft is zero/negative in RTL browsers, so compare absolute offsets.
+  const updateArrows = useCallback(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    const pos = Math.abs(el.scrollLeft);
+    setCanPrev(pos > 2);
+    setCanNext(pos < max - 2);
+  }, []);
+
+  useEffect(() => {
+    updateArrows();
+    const el = rowRef.current;
+    if (!el) return;
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateArrows) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, [updateArrows, categories, collapsed]);
+
+  // Keep the active chip visible (also after collapse/expand or an external category change).
+  useEffect(() => {
+    const chip = rowRef.current?.querySelector<HTMLElement>('[data-active="true"]');
+    chip?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [selectedCategory, collapsed]);
+
+  const scrollByPage = (towardsEnd: boolean) => {
+    const el = rowRef.current;
+    if (!el) return;
+    const sign = (towardsEnd ? 1 : -1) * (isRtl ? -1 : 1);
+    el.scrollBy({ left: sign * Math.max(120, el.clientWidth * 0.7), behavior: 'smooth' });
+  };
 
   const stockBadge = (p: any) => {
     if (p.track_inventory === 0) return null;
@@ -21,15 +75,18 @@ export default function ProductGrid() {
     return <Badge variant="neutral">{stock} {p.unit}</Badge>;
   };
 
+  const arrowCls = 'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-border text-text-2 hover:border-border-strong disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer';
+  const toggleLabel = collapsed ? t('pos_categories_expand', 'Show all categories') : t('pos_categories_collapse', 'Show only the selected category');
+
   return (
     <div className="w-1/3 bg-bg flex flex-col overflow-hidden">
-      <div className="p-4 border-b border-border flex flex-col gap-3 flex-shrink-0">
+      <div className="p-3 border-b border-border flex flex-col gap-2 flex-shrink-0">
         <div className="flex items-center gap-2">
           <Package size={16} className="text-text-3" />
           <h2 className="text-xs font-bold uppercase tracking-wide text-text-2">{t('product_catalog', 'Product Catalog')}</h2>
         </div>
 
-        <div className="space-y-2.5">
+        <div className="space-y-2">
           <div className="relative">
             <Search className="absolute start-3 top-1/2 -translate-y-1/2 text-text-3" size={14} />
             <input
@@ -41,16 +98,59 @@ export default function ProductGrid() {
             />
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
-            {categories.map((cat: string) => (
+          <div className="flex items-center gap-1" role="group" aria-label={t('pos_categories', 'Categories')}>
+            {!collapsed && (
               <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-2 min-h-[36px] text-xs font-semibold border transition-all rounded-lg cursor-pointer ${selectedCategory === cat ? 'bg-primary text-on-primary border-primary' : 'border-border text-text-2 hover:border-border-strong'}`}
+                type="button"
+                onClick={() => scrollByPage(false)}
+                disabled={!canPrev}
+                aria-label={t('pos_categories_prev', 'Previous categories')}
+                className={arrowCls}
               >
-                {cat === 'All' ? t('category_all', 'All') : cat}
+                {isRtl ? <ChevronRight size={16} aria-hidden="true" /> : <ChevronLeft size={16} aria-hidden="true" />}
               </button>
-            ))}
+            )}
+            <div
+              ref={rowRef}
+              onScroll={updateArrows}
+              className="flex min-w-0 flex-1 flex-nowrap gap-1.5 overflow-x-auto scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {categories
+                .filter((cat: string) => !collapsed || cat === selectedCategory)
+                .map((cat: string) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    data-active={selectedCategory === cat}
+                    aria-pressed={selectedCategory === cat}
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`flex-shrink-0 whitespace-nowrap px-3 py-1.5 min-h-[32px] text-xs font-semibold border transition-all rounded-lg cursor-pointer ${selectedCategory === cat ? 'bg-primary text-on-primary border-primary' : 'border-border text-text-2 hover:border-border-strong'}`}
+                  >
+                    {cat === 'All' ? t('category_all', 'All') : cat}
+                  </button>
+                ))}
+            </div>
+            {!collapsed && (
+              <button
+                type="button"
+                onClick={() => scrollByPage(true)}
+                disabled={!canNext}
+                aria-label={t('pos_categories_next', 'Next categories')}
+                className={arrowCls}
+              >
+                {isRtl ? <ChevronLeft size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-expanded={!collapsed}
+              aria-label={toggleLabel}
+              title={toggleLabel}
+              className={arrowCls}
+            >
+              {collapsed ? <ChevronsUpDown size={16} aria-hidden="true" /> : <ChevronsDownUp size={16} aria-hidden="true" />}
+            </button>
           </div>
         </div>
       </div>

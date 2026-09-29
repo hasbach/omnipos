@@ -14,12 +14,14 @@ import os from "os";
 import path from "path";
 import bcrypt from "bcryptjs";
 
+
 export interface TestApp {
   baseUrl: string;
   db: any;
   close: () => Promise<void>;
-  /** GET/POST/etc. helper — pass tenantId to act as that tenant, or omit for an unauthenticated call. */
-  api: (method: string, url: string, opts?: { tenantId?: number; body?: any }) => Promise<{ status: number; body: any }>;
+  /** GET/POST/etc. helper — pass tenantId to act as that tenant, or omit for an unauthenticated call.
+   * Pass userId to act as a PIN-signed-in user of that tenant (role restrictions then apply). */
+  api: (method: string, url: string, opts?: { tenantId?: number; userId?: number; body?: any }) => Promise<{ status: number; body: any }>;
 }
 
 export async function createTestApp(): Promise<TestApp> {
@@ -30,10 +32,11 @@ export async function createTestApp(): Promise<TestApp> {
   // server/db.ts resolves its (relative) db path against process.cwd() at import time when
   // neither NODE_ENV=production nor ELECTRON_RUN_AS_NODE is set — that's the lever used here to
   // give each test file its own isolated pos.db, without touching the real one or db.ts itself.
-  let db: any, setupRoutes: any;
+  let db: any, setupRoutes: any, installPermissions: any;
   try {
     ({ db } = await import("../../server/db.js"));
     ({ setupRoutes } = await import("../../server/routes.js"));
+    ({ installPermissions } = await import("../../server/permissions.js"));
   } finally {
     process.chdir(prevCwd);
   }
@@ -47,12 +50,16 @@ export async function createTestApp(): Promise<TestApp> {
   app.use((req: any, _res, next) => {
     const tenantId = req.header("x-test-tenant-id");
     if (tenantId) req.session.tenantId = Number(tenantId);
+    // Test-only: act as a PIN-verified user (the real flow is POST /api/auth/verify-pin).
+    const userId = req.header("x-test-user-id");
+    if (userId) req.session.userId = Number(userId);
     next();
   });
   const authenticate = (req: any, res: any, next: any) =>
     req.session.tenantId ? next() : res.status(401).json({ error: "Unauthorized" });
   const wss = { clients: [] as any[] };
   const broadcast = () => {};
+  installPermissions(app, authenticate, broadcast);
   setupRoutes(app, wss, broadcast, authenticate);
 
   const server = http.createServer(app);
@@ -60,9 +67,10 @@ export async function createTestApp(): Promise<TestApp> {
   const port = (server.address() as any).port;
   const baseUrl = `http://127.0.0.1:${port}`;
 
-  const api = async (method: string, url: string, opts: { tenantId?: number; body?: any } = {}) => {
+  const api = async (method: string, url: string, opts: { tenantId?: number; userId?: number; body?: any } = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (opts.tenantId) headers["x-test-tenant-id"] = String(opts.tenantId);
+    if (opts.userId) headers["x-test-user-id"] = String(opts.userId);
     const res = await fetch(`${baseUrl}${url}`, {
       method,
       headers,

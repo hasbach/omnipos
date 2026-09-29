@@ -443,7 +443,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
           // (store_credit isn't money arriving either — same as credit — so it's excluded too.)
           if (archived) {
             db.prepare(
-              "INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, ?, ?, ?, ?, ?)"
+              "INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             ).run(
               tenantId,
               editUserId,
@@ -451,7 +451,8 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
               p.amount,
               p.currency,
               p.exchange_rate || 1,
-              `Payment on invoice #${id}`
+              `Payment on invoice #${id}`,
+              tx.type === 'purchase' ? 'supplier_payment' : 'customer_collection'
             );
           }
         }

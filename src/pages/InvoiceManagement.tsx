@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Download, Plus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
-  PageHeader, Toolbar, DateRangePicker, SearchInput, Select, Badge, DataTable, Button,
+  PageHeader, Toolbar, DateRangePicker, SearchInput, Select, Combobox, Badge, DataTable, Button,
   type DataTableColumn, useToast,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
@@ -205,10 +205,9 @@ export default function InvoiceManagement() {
           { value: 'purchase', label: t('inv_filter_type_purchase', 'Purchases') },
           { value: 'refund', label: t('inv_filter_type_refund', 'Refunds') },
         ]} />
-        <Select value={partyFilter} onChange={(e) => setPartyFilter(e.target.value)} className="w-48" options={[
-          { value: 'all', label: t('inv_filter_party_all', 'All parties') },
-          ...stakeholders.map((s) => ({ value: String(s.id), label: partyDisplayName(s.name, t) })),
-        ]} />
+        <Combobox value={partyFilter} onChange={setPartyFilter} className="w-52" clearable aria-label={t('inv_filter_party_all', 'All parties')}
+          allOption={{ value: 'all', label: t('inv_filter_party_all', 'All parties') }}
+          options={stakeholders.map((s) => ({ value: String(s.id), label: partyDisplayName(s.name, t), secondary: s.phone || undefined, keywords: s.email || undefined }))} />
         <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40" options={[
           { value: 'all', label: t('inv_filter_status_all', 'Any status') },
           { value: 'paid', label: t('inv_filter_status_paid', 'Paid') },

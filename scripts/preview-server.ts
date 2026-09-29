@@ -31,6 +31,7 @@ const tenantId = Number(db.prepare("INSERT INTO tenants (name, email, password) 
 db.prepare("UPDATE tenants SET local_license_type = 'lifetime', online_license_type = 'lifetime', local_license_expiry = '2099-12-31', online_license_expiry = '2099-12-31' WHERE id = ?").run(tenantId);
 db.prepare("INSERT INTO users (tenant_id, name, role, pin) VALUES (?, 'Admin', 'admin', '0000')").run(tenantId);
 db.prepare("INSERT INTO users (tenant_id, name, role, pin) VALUES (?, 'Rami', 'staff', '1111')").run(tenantId);
+db.prepare("INSERT INTO users (tenant_id, name, role, pin) VALUES (?, 'Lina', 'cashier', '2222')").run(tenantId);
 db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, 'USD', '$', 1, 1)").run(tenantId);
 db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, 'LBP', 'LL', 89500, 0)").run(tenantId);
 db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'store_name', 'Beirut Wholesale Market')").run(tenantId);
@@ -80,6 +81,8 @@ app.use((req: any, _res, next) => { req.session.tenantId = tenantId; req.session
 const authenticate = (req: any, res: any, next: any) => (req.session.tenantId ? next() : res.status(401).json({ error: "Unauthorized" }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+const { installPermissions } = await import("../server/permissions.js");
+installPermissions(app, authenticate, () => {});
 setupRoutes(app, wss, () => {}, authenticate);
 
 // Transactions through the REAL API so every total/stock/balance/cost rule applies, then backdated.

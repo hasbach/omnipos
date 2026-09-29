@@ -24,4 +24,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // configured (or direct printing to one failed) — see server/printing/transport.ts for the
   // normal, already-silent path via network/USB.
   printSilent: (html) => ipcRenderer.invoke('print:silent-html', { html }),
+
+  // Store connections (second window for another store). Main only honours these from this
+  // register's own pages; every call resolves to { ok, ... } and never rejects.
+  connections: {
+    list: () => ipcRenderer.invoke('connections:list'),
+    add: (conn) => ipcRenderer.invoke('connections:add', conn),
+    remove: (id) => ipcRenderer.invoke('connections:remove', id),
+    open: (id) => ipcRenderer.invoke('connections:open', id),
+    scan: () => ipcRenderer.invoke('connections:scan'),
+    resetConnectionMode: (labels) => ipcRenderer.invoke('connections:reset-mode', labels),
+  },
 });

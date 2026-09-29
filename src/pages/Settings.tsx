@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle } from 'lucide-react';
+import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle, Network, KeyRound } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
@@ -11,14 +12,23 @@ import { PrintersSection } from './settings/PrintersSection';
 import { AppearanceSection } from './settings/AppearanceSection';
 import { UpdatesSection } from './settings/UpdatesSection';
 import { DataResetSection } from './settings/DataResetSection';
+import { ConnectionsSection } from './settings/ConnectionsSection';
+import { RolesSection } from './settings/RolesSection';
+import { usePermissions } from '../lib/usePermissions';
 
-type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates' | 'reset';
+type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates' | 'connections' | 'roles' | 'reset';
 
 export default function Settings({ onShowUpdate }: { onShowUpdate: () => void }) {
   const { t } = useI18n();
   const [section, setSection] = useState<SectionKey>('general');
+  const { isAdmin } = usePermissions();
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  // Ctrl+Shift+O (Electron) deep-links here with ?section=connections.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('section') === 'connections' && window.electronAPI?.connections) setSection('connections');
+  }, [searchParams]);
 
   const fetchSettings = () => api.get<Record<string, string>>('/api/settings').then(setSettings).catch(() => {});
 
@@ -40,6 +50,8 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
     { key: 'printers', label: t('set_nav_printers'), icon: Printer },
     { key: 'appearance', label: t('set_nav_appearance'), icon: Globe },
     { key: 'updates', label: t('set_nav_updates'), icon: Shield },
+    ...(window.electronAPI?.connections ? [{ key: 'connections' as SectionKey, label: t('set_nav_connections'), icon: Network }] : []),
+    ...(isAdmin ? [{ key: 'roles' as SectionKey, label: t('set_nav_roles'), icon: KeyRound }] : []),
     { key: 'reset', label: t('set_nav_reset'), icon: AlertTriangle, danger: true },
   ];
 
@@ -78,6 +90,8 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
           {section === 'printers' && <PrintersSection settings={settings} onSaved={fetchSettings} />}
           {section === 'appearance' && <AppearanceSection />}
           {section === 'updates' && <UpdatesSection tenant={tenant} onShowUpdate={onShowUpdate} />}
+          {section === 'connections' && <ConnectionsSection />}
+          {section === 'roles' && isAdmin && <RolesSection />}
           {section === 'reset' && <DataResetSection />}
         </div>
       </div>

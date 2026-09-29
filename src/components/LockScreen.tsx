@@ -4,6 +4,7 @@ import { Lock, User, CheckCircle2, X, Delete } from 'lucide-react';
 import { Tenant } from '../types';
 import { useI18n } from '../intl/index';
 import { userRoleLabel } from '../lib/format';
+import { refreshPermissions } from '../lib/usePermissions';
 
 interface LockScreenProps {
   tenant: Tenant;
@@ -47,6 +48,8 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
 
       if (res.ok) {
         const data = await res.json();
+        // verify-pin put this user on the server session; pick up their permissions before the POS renders.
+        await refreshPermissions();
         onUnlock(data.user);
       } else {
         const err = await res.json();
@@ -60,6 +63,12 @@ export default function LockScreen({ tenant, users, isLoading = false, onUnlock,
       setLoading(false);
     }
   };
+
+  // Showing the lock screen means nobody is signed in at the till: drop any PIN user still on the
+  // server session (locked, app restarted, tab reloaded) so the next person starts clean.
+  React.useEffect(() => {
+    fetch('/api/auth/lock', { method: 'POST' }).catch(() => {}).finally(() => { refreshPermissions(); });
+  }, []);
 
   // Auto-submit when 4 digits are entered
   React.useEffect(() => {

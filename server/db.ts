@@ -501,6 +501,44 @@ for (const col of [
 }
 try { db.exec("ALTER TABLE archived_transactions ADD COLUMN settlement_id INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE archived_cash_flow ADD COLUMN settlement_id INTEGER;"); } catch {}
+
+// Cash-flow categories + counterparty (who lent / who was paid), on the live AND archived tables so a
+// settled day keeps them. `category` is one of server/cashFlow.ts CASH_FLOW_CATEGORIES; NULL reads as 'other'.
+for (const t of ["cash_flow", "archived_cash_flow"]) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN category TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN counterparty TEXT;`); } catch {}
+}
+// One-time backfill by reason prefix (the automatic rows). Only rows with NO category are touched, so
+// re-running at every start is a no-op once done. Manual rows stay NULL (= 'other').
+export function backfillCashFlowCategories() {
+  for (const t of ["cash_flow", "archived_cash_flow"]) {
+    db.exec(`
+      UPDATE ${t} SET category = 'customer_collection'
+       WHERE category IS NULL AND type = 'in'
+         AND (reason LIKE 'Balance collection from %' OR reason LIKE 'Payment on invoice #%');
+      UPDATE ${t} SET category = 'supplier_payment'
+       WHERE category IS NULL AND type = 'out'
+         AND (reason LIKE 'Payment to supplier %' OR reason LIKE 'Payment on invoice #%');
+    `);
+  }
+}
+backfillCashFlowCategories();
+// Local-only audit trail for admin edits of cash-flow rows (live or archived), like transaction_edits:
+// NOT in the sync lists and deliberately absent from the Supabase migration.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cash_flow_edits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    cash_flow_id INTEGER NOT NULL,
+    archived INTEGER DEFAULT 0,
+    user_id INTEGER,
+    edit_reason TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_cfe_row ON cash_flow_edits(tenant_id, cash_flow_id);
+`);
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_atx_settlement ON archived_transactions(settlement_id);
   CREATE INDEX IF NOT EXISTS idx_acf_settlement ON archived_cash_flow(settlement_id);

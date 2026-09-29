@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Download, Plus, Truck } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
-  PageHeader, Toolbar, DateRangePicker, SearchInput, Select, Badge, DataTable, Button, IconButton,
+  PageHeader, Toolbar, DateRangePicker, SearchInput, Select, Combobox, Badge, DataTable, Button, IconButton,
   type DataTableColumn, useToast,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
@@ -227,10 +227,9 @@ export default function PurchaseManagement() {
         }
       >
         <DateRangePicker value={dateRange} onChange={(r) => setDateRange(r)} />
-        <Select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} className="w-48" options={[
-          { value: 'all', label: t('pur_filter_supplier_all', 'All suppliers') },
-          ...suppliers.map((s) => ({ value: String(s.id), label: partyDisplayName(s.name, t) })),
-        ]} />
+        <Combobox value={supplierFilter} onChange={setSupplierFilter} className="w-52" clearable aria-label={t('pur_filter_supplier_all', 'All suppliers')}
+          allOption={{ value: 'all', label: t('pur_filter_supplier_all', 'All suppliers') }}
+          options={suppliers.map((s) => ({ value: String(s.id), label: partyDisplayName(s.name, t), secondary: s.phone || undefined, keywords: s.email || undefined }))} />
         <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40" options={[
           { value: 'all', label: t('inv_filter_status_all', 'Any status') },
           { value: 'paid', label: t('inv_filter_status_paid', 'Paid') },

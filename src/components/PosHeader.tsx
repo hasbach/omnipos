@@ -10,6 +10,7 @@ import { CURRENCIES } from '../hooks/usePos';
 import { Badge, IconButton, Kbd } from './ui';
 import { formatMoney, partyDisplayName } from '../lib/format';
 import type { PriceLevel } from '../lib/pricing';
+import { usePermissions, refreshPermissions } from '../lib/usePermissions';
 
 export default function PosHeader() {
   const pos = usePosContext();
@@ -21,6 +22,13 @@ export default function PosHeader() {
     openAddCustomer, openEditCustomer, priceLevel, setPriceLevel, t, dir, isDarkMode, setIsDarkMode,
     customerDropdownRef, priceLevelsEnabled,
   } = pos as any;
+
+  const { can } = usePermissions();
+  // Locking the till drops the PIN user from the server session too (roles apply per signed-in user).
+  const lockTerminal = () => {
+    fetch('/api/auth/lock', { method: 'POST' }).catch(() => {}).finally(() => { refreshPermissions(); });
+    setCurrentUser(null);
+  };
 
   const [showHeaderMenu, setShowHeaderMenu] = React.useState(false);
   const headerMenuRef = React.useRef<HTMLDivElement>(null);
@@ -238,7 +246,7 @@ export default function PosHeader() {
                     variant="danger"
                     aria-label={t('lock_terminal', 'Lock Terminal')}
                     title={t('lock_terminal', 'Lock Terminal')}
-                    onClick={() => setCurrentUser(null)}
+                    onClick={lockTerminal}
                   >
                     <Shield size={16} />
                   </IconButton>
@@ -257,14 +265,16 @@ export default function PosHeader() {
                 >
                   <Search size={14} /> {t('price_checker', 'Price Checker')}
                 </Link>
-                <Link
-                  to={`/dashboard?cashierId=${currentUser?.id || ''}`}
-                  target="_blank"
-                  onClick={() => setShowHeaderMenu(false)}
-                  className="flex items-center justify-center gap-2 px-3 py-2.5 min-h-[40px] bg-primary text-on-primary rounded-lg text-xs font-bold uppercase tracking-wide hover:bg-primary-hover transition-all"
-                >
-                  <LayoutDashboard size={14} /> {t('dashboard', 'Dashboard')}
-                </Link>
+                {can('pos.open_dashboard') && (
+                  <Link
+                    to={`/dashboard?cashierId=${currentUser?.id || ''}`}
+                    target="_blank"
+                    onClick={() => setShowHeaderMenu(false)}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 min-h-[40px] bg-primary text-on-primary rounded-lg text-xs font-bold uppercase tracking-wide hover:bg-primary-hover transition-all"
+                  >
+                    <LayoutDashboard size={14} /> {t('dashboard', 'Dashboard')}
+                  </Link>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

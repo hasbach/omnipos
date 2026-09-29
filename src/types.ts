@@ -163,6 +163,12 @@ export interface Tenant {
   scheduled_update_at?: string;
 }
 
+export interface StoreConnection {
+  id: string;
+  name: string;
+  url: string;
+}
+
 declare global {
   interface Window {
     electronAPI?: {
@@ -186,6 +192,15 @@ declare global {
       }) => void) => (() => void);
       // Silent printing (no OS print dialog) — see electron-main.js's 'print:silent-html' handler.
       printSilent: (html: string) => Promise<{ success: boolean; error: string | null }>;
+      // Second window for another store — see electron-main.js "STORE CONNECTIONS".
+      connections?: {
+        list: () => Promise<{ ok: boolean; connections?: StoreConnection[]; error?: string }>;
+        add: (conn: { name: string; url: string }) => Promise<{ ok: boolean; connection?: StoreConnection; error?: string }>;
+        remove: (id: string) => Promise<{ ok: boolean; error?: string }>;
+        open: (id: string) => Promise<{ ok: boolean; error?: string }>;
+        scan: () => Promise<{ ok: boolean; servers?: string[]; error?: string }>;
+        resetConnectionMode: (labels?: { title?: string; message?: string; confirm?: string; cancel?: string }) => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
+      };
     };
     electronSetup?: {
       scanNetwork: () => Promise<string[]>;

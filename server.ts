@@ -12,6 +12,12 @@ declare module 'express-session' {
     sbRefresh?: string;
     sbGlobalId?: string;
     sbEmail?: string;
+    // PIN-verified POS user (set by /api/auth/verify-pin, cleared by /api/auth/lock). While unset the
+    // session is the plain business owner and no role restrictions apply (server/permissions.ts).
+    userId?: number;
+    userName?: string;
+    userRole?: string;
+    locked?: boolean;
   }
 }
 
@@ -151,6 +157,7 @@ wss.on('connection', (ws: any, req: http.IncomingMessage) => {
 import { db, sessionsDir, logAction } from './server/db.js';
 import { setupRoutes } from './server/routes.js';
 import { getOrCreateSessionSecret } from './server/secrets.js';
+import { installPermissions } from './server/permissions.js';
 
 
 app.use(express.json());
@@ -170,6 +177,9 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
+
+// Role/permission enforcement: one middleware ahead of every route + whoami/lock/permissions endpoints.
+installPermissions(app, authenticate, broadcast);
 
 setupRoutes(app, wss, broadcast, authenticate);
 

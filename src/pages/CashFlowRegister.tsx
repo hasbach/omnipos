@@ -1,21 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Banknote, PiggyBank, Receipt, ShoppingBag, Users, Wallet } from 'lucide-react';
 import {
-  Badge,
   Button,
   DataTable,
-  type DataTableColumn,
   Field,
+  Input,
   Modal,
   MoneyInput,
   PageHeader,
   Select,
-  StatCard,
+  Tabs,
   Textarea,
   useToast,
 } from '../components/ui';
+import { AnalyticsPanel } from './cashflow/AnalyticsPanel';
+import { CashFlowEditModal } from './cashflow/EditModal';
+import { cashFlowColumns } from './cashflow/columns';
+import { FitStat, STAT_GRID, cashFlowErrorMessage, categoryOptions, type CashFlowRow } from './cashflow/common';
 import { useI18n } from '../intl/index';
-import { formatDateTime, formatMoney, partyDisplayName } from '../lib/format';
+import { formatMoney, partyDisplayName } from '../lib/format';
 import { api } from '../lib/api';
 
 interface Currency {
@@ -25,15 +28,7 @@ interface Currency {
   rate: number;
 }
 
-interface CashFlowEntry {
-  id: number;
-  type: 'in' | 'out';
-  amount: number;
-  currency: string;
-  exchange_rate: number;
-  reason: string;
-  created_at: string;
-}
+type CashFlowEntry = CashFlowRow;
 
 interface Summary {
   openingBalance: number;
@@ -54,6 +49,7 @@ interface Stakeholder {
 // Only USD (rate 1) is safe as a hardcoded fallback — anything else must come from the tenant's
 // own configured rate (GET /api/currencies), or an entry recorded before that fetch resolves would
 // silently use a stale guessed exchange rate instead of the real one.
+const USD = { code: 'USD', symbol: '$' };
 const DEFAULT_CURRENCIES: Currency[] = [{ code: 'USD', symbol: '$', rate: 1 }];
 
 export default function CashFlowRegister() {
@@ -65,12 +61,16 @@ export default function CashFlowRegister() {
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<'register' | 'analytics'>('register');
+  const [editing, setEditing] = useState<CashFlowRow | null>(null);
 
   // Cash movement modal
   const [movementOpen, setMovementOpen] = useState(false);
   const [movementType, setMovementType] = useState<'in' | 'out'>('in');
   const [amount, setAmount] = useState<number | ''>('');
   const [reason, setReason] = useState('');
+  const [category, setCategory] = useState('other');
+  const [counterparty, setCounterparty] = useState('');
   const [currencyCode, setCurrencyCode] = useState('USD');
   const [submittingMovement, setSubmittingMovement] = useState(false);
 
@@ -120,6 +120,8 @@ export default function CashFlowRegister() {
     setMovementType(type);
     setAmount('');
     setReason('');
+    setCategory(type === 'in' ? 'top_up' : 'expense');
+    setCounterparty('');
     setCurrencyCode('USD');
     setMovementOpen(true);
   };
@@ -142,12 +144,14 @@ export default function CashFlowRegister() {
         currency: currentCurrency.code,
         exchange_rate: currentCurrency.rate,
         reason,
+        category,
+        counterparty: counterparty.trim() || undefined,
       });
       setMovementOpen(false);
       toast.success(t('fin_cfr_movement_recorded', 'Movement recorded.'));
       fetchData();
     } catch (err: any) {
-      toast.error(err.message || String(err));
+      toast.error(cashFlowErrorMessage(err, t));
     } finally {
       setSubmittingMovement(false);
     }
@@ -189,50 +193,10 @@ export default function CashFlowRegister() {
     }
   };
 
-  const columns: DataTableColumn<CashFlowEntry>[] = [
-    {
-      key: 'created_at',
-      header: t('fin_time', 'Time'),
-      sortable: true,
-      render: (row) => <span className="num text-xs text-text-3">{formatDateTime(row.created_at, lang)}</span>,
-    },
-    {
-      key: 'type',
-      header: t('fin_cfr_movement_type', 'Movement Type'),
-      render: (row) => (
-        <Badge variant={row.type === 'in' ? 'success' : 'danger'}>
-          {row.type === 'in' ? t('fin_cfr_cash_in', 'Cash In') : t('fin_cfr_cash_out', 'Cash Out')}
-        </Badge>
-      ),
-    },
-    {
-      key: 'amount',
-      header: t('fin_amount', 'Amount'),
-      align: 'end',
-      sortable: true,
-      render: (row) => {
-        const cur = currencies.find((c) => c.code === row.currency) || { code: row.currency, symbol: row.currency, rate: row.exchange_rate };
-        return (
-          <div className="flex flex-col items-end">
-            <span className={['num font-semibold', row.type === 'in' ? 'text-success' : 'text-danger'].join(' ')}>
-              {row.type === 'in' ? '+' : '-'}
-              {formatMoney(row.amount, cur)}
-            </span>
-            {row.currency !== 'USD' && (
-              <span className="num text-xs text-text-3">
-                ≈ {formatMoney(row.amount / row.exchange_rate, { code: 'USD', symbol: '$' })}
-              </span>
-            )}
-          </div>
-        );
-      },
-    },
-    {
-      key: 'reason',
-      header: t('fin_reason', 'Reason'),
-      render: (row) => <span className="text-text-2">{row.reason || '—'}</span>,
-    },
-  ];
+  const columns = useMemo(
+    () => cashFlowColumns({ t, lang, currencies, onEdit: setEditing }),
+    [t, lang, currencies],
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -254,14 +218,28 @@ export default function CashFlowRegister() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
-        <StatCard label={t('fin_cfr_opening_balance', 'Opening Balance')} icon={Wallet} value={summary ? formatMoney(summary.openingBalance, { code: 'USD', symbol: '$' }) : '—'} />
-        <StatCard label={t('fin_cfr_cash_sales', 'Cash Sales')} icon={Banknote} value={summary ? `+${formatMoney(summary.totalSales, { code: 'USD', symbol: '$' })}` : '—'} />
-        <StatCard label={t('fin_cfr_refunds', 'Refunds')} icon={Receipt} value={summary ? `-${formatMoney(summary.totalRefunds, { code: 'USD', symbol: '$' })}` : '—'} />
-        <StatCard label={t('fin_cfr_purchases', 'Purchases')} icon={ShoppingBag} value={summary ? `-${formatMoney(summary.totalPurchases, { code: 'USD', symbol: '$' })}` : '—'} />
-        <StatCard label={t('fin_cfr_manual_in', 'Manual Cash In')} icon={ArrowDownLeft} value={summary ? `+${formatMoney(summary.totalIn, { code: 'USD', symbol: '$' })}` : '—'} />
-        <StatCard label={t('fin_cfr_manual_out', 'Manual Cash Out')} icon={ArrowUpRight} value={summary ? `-${formatMoney(summary.totalOut, { code: 'USD', symbol: '$' })}` : '—'} />
-        <StatCard label={t('fin_cfr_expected', 'Expected in Drawer')} icon={PiggyBank} value={summary ? formatMoney(summary.expectedBalance, { code: 'USD', symbol: '$' }) : '—'} className="border-primary/40" />
+      <Tabs
+        value={tab}
+        onChange={(v) => setTab(v as 'register' | 'analytics')}
+        items={[
+          { value: 'register', label: t('cf_tab_register', 'Open register') },
+          { value: 'analytics', label: t('cf_tab_analytics', 'Analytics & history') },
+        ]}
+      />
+
+      {tab === 'analytics' ? (
+        <AnalyticsPanel currencies={currencies} />
+      ) : (
+      <>
+      {/* Multi-row grid (2 / 3 / 4 columns) with self-fitting figures: 7 cards never sit in one long row. */}
+      <div className={STAT_GRID}>
+        <FitStat label={t('fin_cfr_opening_balance', 'Opening Balance')} icon={Wallet} value={summary ? formatMoney(summary.openingBalance, USD) : '—'} />
+        <FitStat label={t('fin_cfr_cash_sales', 'Cash Sales')} icon={Banknote} tone="success" value={summary ? `+${formatMoney(summary.totalSales, USD)}` : '—'} />
+        <FitStat label={t('fin_cfr_refunds', 'Refunds')} icon={Receipt} tone="danger" value={summary ? `-${formatMoney(summary.totalRefunds, USD)}` : '—'} />
+        <FitStat label={t('fin_cfr_purchases', 'Purchases')} icon={ShoppingBag} tone="danger" value={summary ? `-${formatMoney(summary.totalPurchases, USD)}` : '—'} />
+        <FitStat label={t('fin_cfr_manual_in', 'Manual Cash In')} icon={ArrowDownLeft} tone="success" value={summary ? `+${formatMoney(summary.totalIn, USD)}` : '—'} />
+        <FitStat label={t('fin_cfr_manual_out', 'Manual Cash Out')} icon={ArrowUpRight} tone="danger" value={summary ? `-${formatMoney(summary.totalOut, USD)}` : '—'} />
+        <FitStat label={t('fin_cfr_expected', 'Expected in Drawer')} icon={PiggyBank} value={summary ? formatMoney(summary.expectedBalance, USD) : '—'} className="border-primary/40" />
       </div>
 
       <p className="rounded-[var(--radius-card)] border border-border-strong border-dashed bg-surface-2 px-4 py-2 text-center text-xs font-medium text-text-3">
@@ -280,6 +258,10 @@ export default function CashFlowRegister() {
           emptyDescription={t('fin_cfr_movements_empty_desc', 'Nothing has been recorded since the register was last closed.')}
         />
       </div>
+      </>
+      )}
+
+      <CashFlowEditModal row={editing} currencies={currencies} onClose={() => setEditing(null)} onSaved={fetchData} />
 
       {/* Cash In / Cash Out modal */}
       <Modal
@@ -316,6 +298,12 @@ export default function CashFlowRegister() {
             }
           >
             <MoneyInput value={amount} onChange={setAmount} currencySymbol={currentCurrency.symbol} autoFocus />
+          </Field>
+          <Field label={t('cf_category', 'Category')}>
+            <Select value={category} onChange={(e) => setCategory(e.target.value)} options={categoryOptions(t, movementType)} />
+          </Field>
+          <Field label={t('cf_counterparty', 'Counterparty (optional)')}>
+            <Input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder={t('cf_counterparty_placeholder', 'Who lent the money / who was paid')} />
           </Field>
           <Field label={t('fin_reason', 'Reason')}>
             <div className="mb-1.5 flex flex-wrap gap-1.5">

@@ -34,6 +34,13 @@ import UserLogs from './pages/UserLogs';
 import Settings from './pages/Settings';
 import UiKit from './pages/UiKit';
 import ImportWizard from './pages/ImportWizard';
+import { RequirePermission, DashboardHome } from './lib/usePermissions';
+import { pagePermissions } from './lib/permissions';
+
+// Wraps a dashboard page in the role guard (see src/lib/permissions.ts PAGE_PERMISSIONS).
+const guard = (page: string, element: React.ReactElement) => (
+  <RequirePermission any={pagePermissions('/dashboard/' + page)}>{element}</RequirePermission>
+);
 
 function DashboardShell({
   tenant,
@@ -99,22 +106,22 @@ function DashboardShell({
 
         <main className="flex-1 overflow-y-auto p-6">
           <Routes>
-            <Route path="/" element={<Overview />} />
-            <Route path="/live" element={<LiveMonitor />} />
-            <Route path="/daily-sales" element={<DailySales />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/products" element={<ProductManagement />} />
-            <Route path="/stock" element={<StockManagement />} />
-            <Route path="/purchases" element={<PurchaseManagement />} />
-            <Route path="/stakeholders" element={<StakeholderManagement />} />
-            <Route path="/users" element={<UserManagement />} />
-            <Route path="/invoices" element={<InvoiceManagement />} />
-            <Route path="/cash-flow" element={<CashFlowRegister />} />
-            <Route path="/settlement" element={<Settlement />} />
-            <Route path="/logs" element={<UserLogs />} />
-            <Route path="/settings" element={<Settings onShowUpdate={() => setShowUpdateModal(true)} />} />
-            <Route path="/ui-kit" element={<UiKit />} />
-            <Route path="/import" element={<ImportWizard />} />
+            <Route path="/" element={<DashboardHome><Overview /></DashboardHome>} />
+            <Route path="/live" element={guard('live', <LiveMonitor />)} />
+            <Route path="/daily-sales" element={guard('daily-sales', <DailySales />)} />
+            <Route path="/reports" element={guard('reports', <Reports />)} />
+            <Route path="/products" element={guard('products', <ProductManagement />)} />
+            <Route path="/stock" element={guard('stock', <StockManagement />)} />
+            <Route path="/purchases" element={guard('purchases', <PurchaseManagement />)} />
+            <Route path="/stakeholders" element={guard('stakeholders', <StakeholderManagement />)} />
+            <Route path="/users" element={guard('users', <UserManagement />)} />
+            <Route path="/invoices" element={guard('invoices', <InvoiceManagement />)} />
+            <Route path="/cash-flow" element={guard('cash-flow', <CashFlowRegister />)} />
+            <Route path="/settlement" element={guard('settlement', <Settlement />)} />
+            <Route path="/logs" element={guard('logs', <UserLogs />)} />
+            <Route path="/settings" element={guard('settings', <Settings onShowUpdate={() => setShowUpdateModal(true)} />)} />
+            <Route path="/ui-kit" element={guard('ui-kit', <UiKit />)} />
+            <Route path="/import" element={guard('import', <ImportWizard />)} />
           </Routes>
         </main>
       </div>

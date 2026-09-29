@@ -156,6 +156,7 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
     db.prepare("DELETE FROM yearly_reports WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM cashier_shifts WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM transaction_edits WHERE tenant_id = ?").run(t);
+    db.prepare("DELETE FROM cash_flow_edits WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stock_adjustments WHERE tenant_id = ?").run(t);
     // Balances derive from baseline + transactions; with no transactions left, zero both.
     db.prepare("UPDATE stakeholders SET balance = 0, balance_baseline = 0 WHERE tenant_id = ? AND (IFNULL(balance, 0) <> 0 OR IFNULL(balance_baseline, 0) <> 0)").run(t);

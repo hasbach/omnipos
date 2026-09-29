@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Plus, Search, Trash2 } from 'lucide-react';
 import {
-  Modal, Badge, Button, Field, Input, Select, NumberInput, MoneyInput, Textarea, useToast, useConfirm,
+  Modal, Badge, Button, Field, Input, Select, Combobox, NumberInput, MoneyInput, Textarea, useToast, useConfirm,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
@@ -84,8 +84,6 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const [archived, setArchived] = useState(false);
 
   const [partyId, setPartyId] = useState<number | ''>('');
-  const [partySearch, setPartySearch] = useState('');
-  const [partyOpen, setPartyOpen] = useState(false);
   const [priceLevel, setPriceLevel] = useState<PriceLevel>('retail');
   const [dateTime, setDateTime] = useState(nowLocalDateTime());
   // What the loaded invoice's date looked like — only send created_at when the user changed it,
@@ -155,7 +153,6 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       setArchived(false);
       setBaseBalance(null);
       setPartyId('');
-      setPartySearch('');
       setPriceLevel('retail');
       setDateTime(nowLocalDateTime());
       setReference('');
@@ -417,31 +414,18 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
 
             <div className="grid grid-cols-2 gap-3">
               <Field label={isPurchase ? t('inv_editor_party_purchase', 'Supplier') : t('inv_editor_party_sale', 'Customer')} required error={fieldErrors.stakeholder_id}>
-                <div className="relative">
-                  <Input
-                    value={party ? partyDisplayName(party.name, t) : partySearch}
-                    placeholder={t('inv_editor_party_placeholder')}
-                    invalid={!!fieldErrors.stakeholder_id}
-                    onFocus={() => setPartyOpen(true)}
-                    onChange={(e) => { setPartySearch(e.target.value); setPartyId(''); setPartyOpen(true); clearFieldError('stakeholder_id'); }}
-                    startAdornment={<Search size={14} />}
-                  />
-                  {partyOpen && (
-                    <div className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface shadow-[var(--shadow-modal)]">
-                      {parties.filter((p) => p.name.toLowerCase().includes(partySearch.toLowerCase())).slice(0, 30).map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-surface-2 cursor-pointer"
-                          onClick={() => { setPartyId(p.id); setPartySearch(''); setPartyOpen(false); setDirty(true); clearFieldError('stakeholder_id'); }}
-                        >
-                          <span className="font-medium text-text">{partyDisplayName(p.name, t)}</span>
-                          <span className="num text-xs text-text-3">{formatMoney(p.balance || 0, USD)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <Combobox
+                  value={partyId === '' ? '' : String(partyId)}
+                  options={parties.map((p) => ({
+                    value: String(p.id),
+                    label: partyDisplayName(p.name, t),
+                    secondary: formatMoney(p.balance || 0, USD),
+                    keywords: [p.phone, p.email].filter(Boolean).join(' '),
+                  }))}
+                  placeholder={t('inv_editor_party_placeholder')}
+                  invalid={!!fieldErrors.stakeholder_id}
+                  onChange={(v) => { setPartyId(v ? Number(v) : ''); setDirty(true); clearFieldError('stakeholder_id'); }}
+                />
                 {party && (
                   <p className="text-xs text-text-3">
                     {t('inv_editor_party_balance', 'Balance: {balance}').replace('{balance}', formatMoney(party.balance || 0, USD))}

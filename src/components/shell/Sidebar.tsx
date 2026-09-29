@@ -19,6 +19,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useI18n } from '../../intl/index';
+import { usePermissions } from '../../lib/usePermissions';
+import { pagePermissions } from '../../lib/permissions';
 
 export interface NavItem {
   key: string;
@@ -93,6 +95,11 @@ function isActive(pathname: string, item: NavItem): boolean {
 export function Sidebar() {
   const { t } = useI18n();
   const location = useLocation();
+  const { canAny } = usePermissions();
+  // Hide what the signed-in role can't open, and any group left empty by that.
+  const visibleGroups = NAV_GROUPS
+    .map((group) => ({ ...group, items: group.items.filter((item) => canAny(pagePermissions(item.path))) }))
+    .filter((group) => group.items.length > 0);
   const [collapsed, setCollapsed] = useState<boolean>(() => readCollapsed());
 
   useEffect(() => {
@@ -118,7 +125,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-4 overflow-y-auto p-3 min-h-0">
-        {NAV_GROUPS.map((group) => (
+        {visibleGroups.map((group) => (
           <div key={group.key}>
             {!collapsed && (
               <p className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-text-3">

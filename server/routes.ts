@@ -17,6 +17,7 @@ import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
 import { setupImportRoutes } from "./importer.js";
 import { setupTenantResetRoutes } from "./tenantReset.js";
+import { setupCashFlowRoutes } from "./cashFlow.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
 import {
   loadUnitsByProduct, loadUnitsForProduct, loadUnit, normalizeUnitsPayload, assertBarcodesFree, saveProductUnits,
@@ -26,6 +27,7 @@ import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
 import { resolveArchiveIdCollisions } from "./settlementIds.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
+import { setSessionUser } from "./permissions.js";
 import {
   lastRegisterClose, computeRegisterSummary, parseSettlementBody, beginSettlement, finishSettlement,
   listDailyReports, setupSettlementRoutes,
@@ -299,6 +301,7 @@ async function establishLogin(
     // Register the authenticated session so sync + admin endpoints can act as this tenant.
     await setActiveSession(localId, cloudTenant.global_id, cloudTenant.email, cloudSession);
     req.session.tenantId = localId;
+    delete req.session.locked; // a fresh business sign-in starts unlocked (the POS lock screen follows)
     req.session.tenantName = cloudTenant.name;
     req.session.sbRefresh = cloudSession.refresh_token;
     req.session.sbGlobalId = cloudTenant.global_id;
@@ -315,6 +318,7 @@ async function establishLogin(
   const localTenant = db.prepare("SELECT * FROM tenants WHERE email = ?").get(email) as any;
   if (localTenant && await bcrypt.compare(password, localTenant.password)) {
     req.session.tenantId = localTenant.id;
+    delete req.session.locked;
     req.session.tenantName = localTenant.name;
     return { ok: true, status: 200, error: null, tenant: localTenant };
   }
@@ -327,6 +331,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   setupImportRoutes(app, authenticate, broadcast);
   setupTenantResetRoutes(app, authenticate, broadcast, { purgeCloudTransactionalData });
   setupSettlementRoutes(app, authenticate, broadcast);
+  setupCashFlowRoutes(app, authenticate, broadcast);
   // API Routes
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
@@ -486,6 +491,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       return res.status(401).json({ error: "Invalid PIN" });
     }
 
+    // Remember who is at the till: server/permissions.ts restricts the session by this user's role.
+    setSessionUser(req, { id: user.id, name: user.name, role: user.role });
     res.json({ success: true, user: { id: user.id, name: user.name, role: user.role } });
   });
 
@@ -628,8 +635,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // used to just delete these with no trace anywhere, which meant every itemized cash-in/out
       // and its reason was permanently unrecoverable after every settlement.
       db.prepare(`
-        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at)
-        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at
+        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty)
+        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty
         FROM cash_flow WHERE tenant_id = ?
       `).run(tenantId);
 
@@ -2335,18 +2342,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     res.json(computeRegisterSummary(req.session.tenantId));
   });
 
-  app.post("/api/cash-flow", authenticate, (req: any, res) => {
-    const tenantId = req.session.tenantId;
-    const userId = tenantUserId(tenantId, req.body.user_id);
-    const { type, amount, currency, exchange_rate, reason } = req.body;
-
-    db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(tenantId, userId, type, amount, currency || 'USD', exchange_rate || 1, reason);
-
-    logAction(tenantId, userId, `Cash ${type === 'in' ? 'In' : 'Out'}`, `Amount: ${amount} ${currency}, Reason: ${reason}`);
-    broadcast({ type: 'CASH_FLOW_UPDATED' }, tenantId);
-    res.json({ success: true });
-  });
+  // POST /api/cash-flow, GET /api/cash-flow, the admin edit and the analytics live in server/cashFlow.ts.
 
   // Balance payment: collect from customer or pay supplier
   app.post("/api/balance-payment", authenticate, (req: any, res) => {
@@ -2371,13 +2367,13 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // toward zero via the stakeholder's BASELINE (negative = owes, so a payment adds toward 0).
       if (direction === 'collect') {
         adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD);
-        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, 'in', ?, ?, ?, ?)")
-          .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`);
+        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty) VALUES (?, ?, 'in', ?, ?, ?, ?, 'customer_collection', ?)")
+          .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`, stakeholder.name);
       } else {
         // Paying a supplier → reduce their outstanding (move toward zero), cash goes out
         adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD);
-        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason) VALUES (?, ?, 'out', ?, ?, ?, ?)")
-          .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`);
+        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty) VALUES (?, ?, 'out', ?, ?, ?, ?, 'supplier_payment', ?)")
+          .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`, stakeholder.name);
       }
     });
 
@@ -2391,15 +2387,6 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
-  });
-
-  app.get("/api/cash-flow", authenticate, (req: any, res) => {
-    const tenantId = req.session.tenantId;
-    // Same open-register window as /api/cash-flow/summary — everything since the last close, not
-    // just today's entries.
-    const { since } = lastRegisterClose(tenantId);
-    const entries = db.prepare("SELECT * FROM cash_flow WHERE tenant_id = ? AND created_at > ? ORDER BY created_at DESC").all(tenantId, since);
-    res.json(entries);
   });
 
   app.post("/api/reports/daily", authenticate, (req: any, res) => {
