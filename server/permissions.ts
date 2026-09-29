@@ -175,6 +175,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/reports/daily-sales', need: null }, // POS history + live monitor feed
   { method: 'GET', pattern: '/api/reports/daily-sales-by-payment', need: ['daily_sales.view', 'reports.view'] },
   { method: 'GET', pattern: '/api/reports/daily-sales-by-customer', need: ['daily_sales.view', 'reports.view'] },
+  { method: 'GET', pattern: '/api/reports/daily-sales-by-category', need: ['daily_sales.view', 'reports.view'] },
   { method: 'GET', pattern: '/api/reports/sales', need: 'reports.view' },
   { method: 'GET', pattern: '/api/reports/summary', need: OVERVIEW_OR_REPORTS },
   { method: 'GET', pattern: '/api/reports/sales-trend', need: OVERVIEW_OR_REPORTS },

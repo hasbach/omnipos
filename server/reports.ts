@@ -533,6 +533,62 @@ export function setupReportRoutes(app: any, authenticate: any) {
     }
   });
 
+  // Daily Sales page: one day's net sales per product category, overall and per cashier (refunds
+  // subtract; revenue is net of line + allocated invoice discount, same basis as by-category).
+  app.get("/api/reports/daily-sales-by-category", authenticate, (req: any, res: any) => {
+    try {
+      const tenantId = req.session.tenantId;
+      const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : localToday();
+      const lines = computeAllocatedLines(tenantId, date, date);
+
+      type Agg = { qty: number; revenue: number; invoices: Set<number> };
+      const add = (m: Map<string, Agg>, key: string, l: AllocatedLine) => {
+        if (!m.has(key)) m.set(key, { qty: 0, revenue: 0, invoices: new Set() });
+        const a = m.get(key)!;
+        const s = sign(l);
+        a.qty += s * l.quantity;
+        a.revenue += s * l.revenue;
+        if (l.type === "sale") a.invoices.add(l.transaction_id);
+      };
+      const overall = new Map<string, Agg>();
+      const perUser = new Map<number, { cats: Map<string, Agg>; invoices: Set<number>; revenue: number }>();
+      for (const l of lines) {
+        add(overall, l.category, l);
+        const uid = l.user_id ?? 0;
+        if (!perUser.has(uid)) perUser.set(uid, { cats: new Map(), invoices: new Set(), revenue: 0 });
+        const u = perUser.get(uid)!;
+        add(u.cats, l.category, l);
+        u.revenue += sign(l) * l.revenue;
+        if (l.type === "sale") u.invoices.add(l.transaction_id);
+      }
+      const rows = (m: Map<string, Agg>) => {
+        const total = Array.from(m.values()).reduce((sum, a) => sum + a.revenue, 0);
+        return Array.from(m.entries()).map(([category, a]) => ({
+          category, qty: round2(a.qty), revenue: round2(a.revenue), invoices: a.invoices.size,
+          share_pct: round2(total !== 0 ? (a.revenue / total) * 100 : 0),
+        })).sort((x, y) => y.revenue - x.revenue);
+      };
+
+      const ids = Array.from(perUser.keys()).filter((id) => id > 0);
+      const names = new Map<number, string>();
+      if (ids.length) {
+        const rs = db.prepare(`SELECT id, name FROM users WHERE tenant_id = ? AND id IN (${ids.map(() => "?").join(",")})`).all(tenantId, ...ids) as any[];
+        for (const r of rs) names.set(r.id, r.name);
+      }
+      const cashiers = Array.from(perUser.entries()).map(([user_id, u]) => ({
+        user_id: user_id || null,
+        name: user_id ? (names.get(user_id) || `#${user_id}`) : null,
+        invoices: u.invoices.size,
+        revenue: round2(u.revenue),
+        categories: rows(u.cats),
+      })).sort((a, b) => b.revenue - a.revenue);
+
+      res.json({ date, categories: rows(overall), cashiers });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/reports/by-customer", authenticate, (req: any, res: any) => {
     try {
       const tenantId = req.session.tenantId;

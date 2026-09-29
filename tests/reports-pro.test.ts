@@ -250,6 +250,23 @@ test("by-category shares sum to 100% and reconciles with by-product", async () =
   approx(totalShare, 100, "share_pct sums to 100", 0.1);
 });
 
+test("daily-sales-by-category matches by-category and splits it per cashier", async () => {
+  const res = await app.api("GET", `/api/reports/daily-sales-by-category?date=${today}`, { tenantId });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const { categories, cashiers } = res.body as any;
+  const drinks = categories.find((r: any) => r.category === "Drinks");
+  const snacks = categories.find((r: any) => r.category === "Snacks");
+  approx(drinks.revenue, 55.65, "Drinks revenue (same basis as by-category)");
+  approx(snacks.revenue, 40, "Snacks revenue");
+  assert.ok(cashiers.length >= 1);
+  // Every cashier's categories add up to the overall figure, per category and in total.
+  for (const cat of categories) {
+    const sum = cashiers.reduce((s: number, c: any) => s + (c.categories.find((r: any) => r.category === cat.category)?.revenue || 0), 0);
+    approx(sum, cat.revenue, `per-cashier sum for ${cat.category}`);
+  }
+  approx(cashiers.reduce((s: number, c: any) => s + c.revenue, 0), categories.reduce((s: number, r: any) => s + r.revenue, 0), "cashier totals");
+});
+
 test("by-customer: invoices, revenue/profit net of refunds, paid (excludes credit), balance", async () => {
   const res = await app.api("GET", `/api/reports/by-customer?from=${today}&to=${today}`, { tenantId });
   assert.equal(res.status, 200, JSON.stringify(res.body));
