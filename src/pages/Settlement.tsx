@@ -29,6 +29,7 @@ import { useI18n } from '../intl/index';
 import { formatMoney, formatDate, userRoleLabel } from '../lib/format';
 import { translateServerError } from '../lib/serverErrors';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 import { DenominationCounter } from './finance/DenominationCounter';
 import { SettlementDetailDrawer } from './settlement/SettlementDetailDrawer';
 import { printXReport as printXReportDoc } from './settlement/printXReport';
@@ -120,6 +121,13 @@ export default function Settlement() {
   const { t, lang } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
+  const { can, ready, user: sessionUser } = usePermissions();
+  // Each block of this page is gated by its own permission (the server enforces the same on every call).
+  const canCashOut = can('settlement.cash_out');
+  const canClose = can('settlement.close');
+  const canView = can('settlement.view');
+  const showEndOfDay = canCashOut || canClose; // the review / count stepper serves both
+  const showShifts = canView || canCashOut;
 
   const [dailyReports, setDailyReports] = useState<DailyReport[]>([]);
   const [yearlyReports, setYearlyReports] = useState<YearlyReport[]>([]);
@@ -148,12 +156,13 @@ export default function Settlement() {
 
   const fetchData = useCallback(async () => {
     try {
+      // Only ask for what this role may read — the rest would just be 403s.
       const [dailyRes, yearlyRes, summaryRes, usersRes, shiftsRes, currenciesRes] = await Promise.all([
-        api.get<DailyReport[]>('/api/reports/daily'),
-        api.get<YearlyReport[]>('/api/reports/yearly'),
-        api.get<Summary>('/api/cash-flow/summary'),
+        canView ? api.get<DailyReport[]>('/api/reports/daily') : Promise.resolve([] as DailyReport[]),
+        canView ? api.get<YearlyReport[]>('/api/reports/yearly') : Promise.resolve([] as YearlyReport[]),
+        showEndOfDay ? api.get<Summary>('/api/cash-flow/summary') : Promise.resolve(null),
         api.get<AppUser[]>('/api/users'),
-        api.get<CashierShift[]>('/api/tenant/cashier-shifts'),
+        showShifts ? api.get<CashierShift[]>('/api/tenant/cashier-shifts') : Promise.resolve([] as CashierShift[]),
         api.get<Currency[]>('/api/currencies'),
       ]);
       setDailyReports(dailyRes || []);
@@ -181,11 +190,11 @@ export default function Settlement() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canView, showEndOfDay, showShifts]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (ready) fetchData();
+  }, [fetchData, ready]);
 
   useEffect(() => {
     // For the printed X-report footer — the business's own name, not the app's.
@@ -201,6 +210,11 @@ export default function Settlement() {
     return sum + parseFloat(val) / (currency?.rate || 1);
   }, 0);
 
+  // The server knows who signed in with their PIN — that is who the cash-out / settlement is recorded for
+  // (the ?cashierId hint is only a fallback for the owner session, which has no PIN user).
+  useEffect(() => {
+    if (sessionUser?.id) setSelectedUserId(sessionUser.id);
+  }, [sessionUser?.id]);
   const selectedUser = users.find((u) => u.id === selectedUserId);
   const isAdmin = selectedUser?.role === 'admin';
 
@@ -267,7 +281,7 @@ export default function Settlement() {
 
   // Complete Settlement (Admin only): full archival + order number reset
   const handleDailySettlement = async () => {
-    if (!isAdmin || !summary) {
+    if (!canClose || !isAdmin || !summary) {
       toast.error(t('fin_stl_admin_required', 'Only admin users can perform a complete settlement.'));
       return;
     }
@@ -328,6 +342,7 @@ export default function Settlement() {
   };
 
   const handleYearlySettlement = async () => {
+    if (!canClose) return;
     const year = new Date().getFullYear();
     try {
       await api.post('/api/reports/yearly', { year, notes: yearlyNotes });
@@ -453,19 +468,22 @@ export default function Settlement() {
         title={t('fin_stl_title', 'Settlement & Reports')}
         subtitle={t('fin_stl_subtitle', 'Close the day or year and audit your finances.')}
         actions={
-          <Tabs
-            items={[
-              { value: 'daily', label: t('fin_stl_daily', 'Daily') },
-              { value: 'yearly', label: t('fin_stl_yearly', 'Yearly') },
-            ]}
-            value={activeTab}
-            onChange={(v) => setActiveTab(v as 'daily' | 'yearly')}
-          />
+          canView ? (
+            <Tabs
+              items={[
+                { value: 'daily', label: t('fin_stl_daily', 'Daily') },
+                { value: 'yearly', label: t('fin_stl_yearly', 'Yearly') },
+              ]}
+              value={activeTab}
+              onChange={(v) => setActiveTab(v as 'daily' | 'yearly')}
+            />
+          ) : undefined
         }
       />
 
-      {activeTab === 'daily' ? (
+      {activeTab === 'daily' || !canView ? (
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          {showEndOfDay && (
           <div className="lg:col-span-1">
             <div className="rounded-[var(--radius-card)] border border-border bg-surface p-5 shadow-[var(--shadow-card)]">
               <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-text">
@@ -602,12 +620,16 @@ export default function Settlement() {
                   </div>
 
                   <div className="flex flex-col gap-2 border-t border-border pt-4">
-                    <Button variant="secondary" loading={submittingCashOut} onClick={handleCashOut} className="w-full">
-                      <LogOut size={16} /> {t('fin_stl_cash_out', 'Cash Out')}
-                    </Button>
-                    <p className="text-center text-[11px] text-text-3">{t('fin_stl_cash_out_desc', 'Resets today’s sales summary but keeps order numbers. Use this for a shift change.')}</p>
+                    {canCashOut && (
+                      <>
+                        <Button variant="secondary" loading={submittingCashOut} onClick={handleCashOut} className="w-full">
+                          <LogOut size={16} /> {t('fin_stl_cash_out', 'Cash Out')}
+                        </Button>
+                        <p className="text-center text-[11px] text-text-3">{t('fin_stl_cash_out_desc', 'Resets today’s sales summary but keeps order numbers. Use this for a shift change.')}</p>
+                      </>
+                    )}
 
-                    {isAdmin ? (
+                    {!canClose ? null : isAdmin ? (
                       <>
                         <Button variant="success" loading={submittingSettlement} onClick={async () => {
                           const ok = await confirm({
@@ -633,16 +655,21 @@ export default function Settlement() {
               )}
             </div>
           </div>
+          )}
 
-          <div className="flex flex-col gap-5 lg:col-span-2">
-            <div>
-              <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_shifts_title', "Today's Cashier Shifts")}</h3>
-              <DataTable columns={shiftColumns} data={cashierShifts} rowKey={(r) => r.id} loading={loading} emptyTitle={t('fin_stl_shifts_empty', 'No shifts recorded today')} />
-            </div>
-            <div>
-              <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_history_title', 'Settlement History')}</h3>
-              <DataTable columns={historyColumns} data={dailyReports} rowKey={(r) => r.id} loading={loading} searchable onRowClick={(r) => setDetailId(r.id)} emptyTitle={t('fin_stl_history_empty', 'No reports found')} />
-            </div>
+          <div className={['flex flex-col gap-5', showEndOfDay ? 'lg:col-span-2' : 'lg:col-span-3'].join(' ')}>
+            {showShifts && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_shifts_title', "Today's Cashier Shifts")}</h3>
+                <DataTable columns={shiftColumns} data={cashierShifts} rowKey={(r) => r.id} loading={loading} emptyTitle={t('fin_stl_shifts_empty', 'No shifts recorded today')} />
+              </div>
+            )}
+            {canView && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold text-text">{t('fin_stl_history_title', 'Settlement History')}</h3>
+                <DataTable columns={historyColumns} data={dailyReports} rowKey={(r) => r.id} loading={loading} searchable onRowClick={(r) => setDetailId(r.id)} emptyTitle={t('fin_stl_history_empty', 'No reports found')} />
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -655,9 +682,11 @@ export default function Settlement() {
               <h2 className="text-xl font-bold text-text">{t('fin_stl_yearly_title', 'Yearly Closing')}</h2>
               <p className="mt-1 text-sm text-text-3">{t('fin_stl_yearly_desc', 'Generate a comprehensive financial report for the current year. This calculates total sales, purchases, and net profit.')}</p>
             </div>
-            <Button variant="primary" size="lg" onClick={() => setYearlyModalOpen(true)}>
-              {t('fin_stl_generate_report', 'Generate {year} Report').replace('{year}', String(new Date().getFullYear()))}
-            </Button>
+            {canClose && (
+              <Button variant="primary" size="lg" onClick={() => setYearlyModalOpen(true)}>
+                {t('fin_stl_generate_report', 'Generate {year} Report').replace('{year}', String(new Date().getFullYear()))}
+              </Button>
+            )}
           </div>
 
           <div>
@@ -667,7 +696,9 @@ export default function Settlement() {
         </div>
       )}
 
-      <SettlementDetailDrawer reportId={detailId} onClose={() => setDetailId(null)} onChanged={fetchData} businessName={businessName} />
+      {canView && (
+        <SettlementDetailDrawer reportId={detailId} onClose={() => setDetailId(null)} onChanged={fetchData} businessName={businessName} />
+      )}
 
       <Modal
         open={yearlyModalOpen}

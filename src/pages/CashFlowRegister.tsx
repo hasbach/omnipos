@@ -20,6 +20,7 @@ import { FitStat, STAT_GRID, cashFlowErrorMessage, categoryOptions, type CashFlo
 import { useI18n } from '../intl/index';
 import { formatMoney, partyDisplayName } from '../lib/format';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 
 interface Currency {
   id?: number;
@@ -57,6 +58,10 @@ export default function CashFlowRegister() {
   const toast = useToast();
 
   const [entries, setEntries] = useState<CashFlowEntry[]>([]);
+  const { can } = usePermissions();
+  const canAdd = can('cash_flow.add');
+  const canEditEntries = can('cash_flow.edit');
+  const canBalancePayment = canAdd || can('parties.edit'); // POST /api/balance-payment
   const [summary, setSummary] = useState<Summary | null>(null);
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
@@ -194,8 +199,8 @@ export default function CashFlowRegister() {
   };
 
   const columns = useMemo(
-    () => cashFlowColumns({ t, lang, currencies, onEdit: setEditing }),
-    [t, lang, currencies],
+    () => cashFlowColumns({ t, lang, currencies, onEdit: canEditEntries ? setEditing : undefined }),
+    [t, lang, currencies, canEditEntries],
   );
 
   return (
@@ -205,15 +210,21 @@ export default function CashFlowRegister() {
         subtitle={t('fin_cfr_subtitle', 'Track cash movements, collect balances, and pay suppliers.')}
         actions={
           <>
-            <Button variant="secondary" onClick={() => openBalanceModal('collect')}>
-              <Users size={15} /> {t('fin_cfr_balance_payment', 'Balance Payment')}
-            </Button>
-            <Button variant="success" onClick={() => openMovementModal('in')}>
-              <ArrowDownLeft size={15} /> {t('fin_cfr_cash_in', 'Cash In')}
-            </Button>
-            <Button variant="danger" onClick={() => openMovementModal('out')}>
-              <ArrowUpRight size={15} /> {t('fin_cfr_cash_out', 'Cash Out')}
-            </Button>
+            {canBalancePayment && (
+              <Button variant="secondary" onClick={() => openBalanceModal('collect')}>
+                <Users size={15} /> {t('fin_cfr_balance_payment', 'Balance Payment')}
+              </Button>
+            )}
+            {canAdd && (
+              <>
+                <Button variant="success" onClick={() => openMovementModal('in')}>
+                  <ArrowDownLeft size={15} /> {t('fin_cfr_cash_in', 'Cash In')}
+                </Button>
+                <Button variant="danger" onClick={() => openMovementModal('out')}>
+                  <ArrowUpRight size={15} /> {t('fin_cfr_cash_out', 'Cash Out')}
+                </Button>
+              </>
+            )}
           </>
         }
       />

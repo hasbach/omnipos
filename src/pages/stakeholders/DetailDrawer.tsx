@@ -15,6 +15,9 @@ export interface DetailDrawerProps {
   currencies: Currency[];
   onEdit: (s: Stakeholder) => void;
   onPay: (s: Stakeholder) => void;
+  /** Hide the Edit / Collect-Pay actions the signed-in role may not use (default: shown). */
+  canEdit?: boolean;
+  canPay?: boolean;
 }
 
 interface StatementRow {
@@ -57,7 +60,7 @@ function invoiceStatus(inv: InvoiceRow): 'paid' | 'partial' | 'unpaid' {
   return 'unpaid';
 }
 
-export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, onPay }: DetailDrawerProps) {
+export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, onPay, canEdit = true, canPay = true }: DetailDrawerProps) {
   const { t, lang } = useI18n();
   const { priceLevelsEnabled } = useSettings();
   const [tab, setTab] = useState('summary');
@@ -165,12 +168,16 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
       size="lg"
       footer={
         <>
-          <Button variant="secondary" onClick={() => onEdit(stakeholder)}>
-            <Edit2 size={15} /> {t('stk_edit')}
-          </Button>
-          <Button variant="primary" onClick={() => onPay(stakeholder)}>
-            <HandCoins size={15} /> {stakeholder.type === 'supplier' ? t('stk_action_pay') : t('stk_action_collect')}
-          </Button>
+          {canEdit && (
+            <Button variant="secondary" onClick={() => onEdit(stakeholder)}>
+              <Edit2 size={15} /> {t('stk_edit')}
+            </Button>
+          )}
+          {canPay && (
+            <Button variant="primary" onClick={() => onPay(stakeholder)}>
+              <HandCoins size={15} /> {stakeholder.type === 'supplier' ? t('stk_action_pay') : t('stk_action_collect')}
+            </Button>
+          )}
         </>
       }
     >

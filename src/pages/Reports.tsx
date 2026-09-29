@@ -3,6 +3,7 @@ import { Printer } from 'lucide-react';
 import { PageHeader, Toolbar, DateRangePicker, Tabs, Button } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 import { resolveDateRangePreset, type DateRange, type CurrencyLike } from '../lib/format';
 
 import { OverviewTab } from './reports/OverviewTab';
@@ -51,6 +52,9 @@ export default function Reports() {
       .catch(() => {});
   }, []);
 
+  const { can } = usePermissions();
+  const canSeeSettlements = can('settlement.view'); // closed-day history is its own permission
+
   const tabItems = useMemo(
     () => [
       { value: 'overview', label: t('rep_tab_overview', 'Overview / P&L') },
@@ -64,9 +68,9 @@ export default function Reports() {
       { value: 'aging', label: t('rep_tab_aging', 'Aging') },
       { value: 'custom-builder', label: t('rep_tab_custom_builder', 'Custom report builder') },
       { value: 'statement', label: t('rep_tab_customer_statement', 'Customer statement') },
-      { value: 'daily-yearly', label: t('rep_tab_daily_yearly', 'Daily & yearly') },
+      ...(canSeeSettlements ? [{ value: 'daily-yearly', label: t('rep_tab_daily_yearly', 'Daily & yearly') }] : []),
     ],
-    [t],
+    [t, canSeeSettlements],
   );
 
   const openStatement = (stakeholderId: number) => {
@@ -112,7 +116,7 @@ export default function Reports() {
             onSelectedIdChange={setStatementStakeholderId}
           />
         )}
-        {tab === 'daily-yearly' && <DailyYearlyTab businessName={businessName} />}
+        {tab === 'daily-yearly' && canSeeSettlements && <DailyYearlyTab businessName={businessName} />}
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePosContext } from '../context/PosContext';
+import { usePermissions } from '../lib/usePermissions';
 import { CURRENCIES } from '../hooks/usePos';
 import { Modal, Button, Field, Input, Textarea, Badge, IconButton } from './ui';
 import { formatMoney, formatBalance, paymentMethodLabel, formatTime, formatDate, formatNumber, partyDisplayName } from '../lib/format';
@@ -14,6 +15,7 @@ const QUICK_CASH_STEPS = [5, 10, 20, 50, 100];
 
 export default function PaymentModal() {
   const pos = usePosContext();
+  const { can } = usePermissions();
   const {
     products, sellableProducts, cart, barcodeInput, setBarcodeInput, isProcessing,
     currencies = CURRENCIES, selectedCurrency, showCheckout, setShowCheckout, payments, setPayments,
@@ -286,7 +288,7 @@ export default function PaymentModal() {
                   >
                     <Printer size={14} /> {t('pos_print_receipt', 'Print Receipt')}
                   </Button>
-                  {selectedHistoryTransaction.type === 'sale' && (
+                  {selectedHistoryTransaction.type === 'sale' && can('pos.refund') && (
                     <Button
                       size="sm"
                       variant="danger"

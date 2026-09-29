@@ -5,6 +5,7 @@ import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatDate, formatDateTime, formatMoney } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
+import { usePermissions } from '../../lib/usePermissions';
 import { CorrectionModal, type CurrencyInfo } from './CorrectionModal';
 import { printXReport } from './printXReport';
 import {
@@ -48,6 +49,8 @@ function Section({ title, action, children }: { title: React.ReactNode; action?:
 }
 
 export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessName }: Props) {
+  const { can } = usePermissions();
+  const canCorrect = can('settlement.correct');
   const { t, lang } = useI18n();
   const [detail, setDetail] = useState<SettlementDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -478,9 +481,11 @@ export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessN
         <Section
           title={t('sd_corrections_title', 'Corrections')}
           action={
-            <Button variant="secondary" size="sm" onClick={() => setCorrOpen(true)}>
-              <Plus size={14} /> {t('sd_add_correction', 'Add correction')}
-            </Button>
+            canCorrect ? (
+              <Button variant="secondary" size="sm" onClick={() => setCorrOpen(true)}>
+                <Plus size={14} /> {t('sd_add_correction', 'Add correction')}
+              </Button>
+            ) : undefined
           }
         >
           {corrections.length === 0 ? (
@@ -513,10 +518,10 @@ export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessN
             </ul>
           )}
           <p className="mt-2 text-xs text-text-3">{t('sd_corrections_note', 'Original figures are never overwritten; corrections are listed here and reflected in the “After corrections” column.')}</p>
-          <p className="mt-1 text-xs text-text-3">{t('sd_latest_close_note', 'If this is the latest closing, the open register’s opening balance follows the corrected counted cash.')}</p>
+          {canCorrect && <p className="mt-1 text-xs text-text-3">{t('sd_latest_close_note', 'If this is the latest closing, the open register’s opening balance follows the corrected counted cash.')}</p>}
         </Section>
 
-        <CorrectionModal
+        {canCorrect && <CorrectionModal
           open={corrOpen}
           onClose={() => setCorrOpen(false)}
           reportId={report.id}
@@ -526,7 +531,7 @@ export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessN
             load();
             onChanged?.();
           }}
-        />
+        />}
       </div>
     );
   };

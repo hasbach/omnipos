@@ -3,6 +3,7 @@ import { ArrowDownLeft, ArrowUpRight, Coins, HandCoins, Landmark, PiggyBank, Rec
 import { Badge, Button, Card, DataTable, DateRangePicker, Select, SearchInput, useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
+import { usePermissions } from '../../lib/usePermissions';
 import { formatMoney, resolveDateRangePreset, type DateRange } from '../../lib/format';
 import { CashFlowEditModal } from './EditModal';
 import { cashFlowColumns } from './columns';
@@ -22,6 +23,8 @@ const usd = (n: number) => formatMoney(n, USD);
 
 /** Filters + analytics cards/tables + the full (open + settled) movement list. */
 export function AnalyticsPanel({ currencies }: { currencies: Currency[] }) {
+  const { can } = usePermissions();
+  const canEditEntries = can('cash_flow.edit');
   const { t, lang } = useI18n();
   const toast = useToast();
   const [range, setRange] = useState<DateRange>(() => resolveDateRangePreset('this_month'));
@@ -74,8 +77,8 @@ export function AnalyticsPanel({ currencies }: { currencies: Currency[] }) {
   }, [data]);
 
   const columns = useMemo(
-    () => cashFlowColumns({ t, lang, currencies, onEdit: setEditing }),
-    [t, lang, currencies],
+    () => cashFlowColumns({ t, lang, currencies, onEdit: canEditEntries ? setEditing : undefined }),
+    [t, lang, currencies, canEditEntries],
   );
   const dash = '—';
   const v = (n: number | undefined, sign = '') => (data && n !== undefined ? `${sign}${usd(n)}` : dash);

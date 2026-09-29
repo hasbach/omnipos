@@ -22,6 +22,7 @@ import {
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 import { formatMoney } from '../lib/format';
 import { useSettings } from '../lib/useSettings';
 import { marginPct } from '../lib/pricing';
@@ -45,6 +46,9 @@ export default function ProductManagement() {
   const { priceLevelsEnabled } = useSettings();
 
   const [products, setProducts] = useState<Product[]>([]);
+  const { can } = usePermissions();
+  const canEdit = can('products.edit');
+  const canImport = can('import.run');
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -345,34 +349,38 @@ export default function ProductManagement() {
             >
               <Tag size={14} />
             </IconButton>
-            <IconButton
-              aria-label={t('prod_edit', 'Edit')}
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                openEdit(p);
-              }}
-            >
-              <Edit2 size={14} />
-            </IconButton>
-            <IconButton
-              aria-label={t('prod_delete', 'Delete')}
-              size="sm"
-              variant="danger"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDelete(p);
-              }}
-            >
-              <Trash2 size={14} />
-            </IconButton>
+            {canEdit && (
+              <>
+                <IconButton
+                  aria-label={t('prod_edit', 'Edit')}
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openEdit(p);
+                  }}
+                >
+                  <Edit2 size={14} />
+                </IconButton>
+                <IconButton
+                  aria-label={t('prod_delete', 'Delete')}
+                  size="sm"
+                  variant="danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(p);
+                  }}
+                >
+                  <Trash2 size={14} />
+                </IconButton>
+              </>
+            )}
           </div>
         ),
       },
     );
 
     return cols;
-  }, [t, tiersVisible, usdCurrency, localCurrency]);
+  }, [t, tiersVisible, usdCurrency, localCurrency, canEdit]);
 
   return (
     <div className="flex h-full flex-col">
@@ -384,18 +392,22 @@ export default function ProductManagement() {
             <Button variant="secondary" onClick={() => { setLabelPreSelected([]); setShowLabelPrinter(true); }}>
               <Printer size={16} /> {t('prod_print_labels', 'Print labels')}
             </Button>
-            <Button variant="secondary" onClick={() => navigate('/dashboard/import?entity=products')}>
-              <Upload size={16} /> {t('prod_import_wizard', 'Import')}
-            </Button>
+            {canImport && (
+              <Button variant="secondary" onClick={() => navigate('/dashboard/import?entity=products')}>
+                <Upload size={16} /> {t('prod_import_wizard', 'Import')}
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => handleExport('xlsx')}>
               <Download size={16} /> {t('prod_export', 'Export Excel')}
             </Button>
-            <Button variant="secondary" onClick={() => setBulkPriceOpen(true)}>
-              <Tag size={16} /> {t('prod_bulk_price', 'Bulk price update')}
-            </Button>
-            <Button variant="primary" onClick={openCreate}>
+            {canEdit && (
+              <Button variant="secondary" onClick={() => setBulkPriceOpen(true)}>
+                <Tag size={16} /> {t('prod_bulk_price', 'Bulk price update')}
+              </Button>
+            )}
+            {canEdit && <Button variant="primary" onClick={openCreate}>
               <Plus size={16} /> {t('prod_add', 'Add product')}
-            </Button>
+            </Button>}
           </>
         }
       />
@@ -448,10 +460,10 @@ export default function ProductManagement() {
           data={filtered}
           rowKey={(p) => p.id}
           loading={loading}
-          selectable
+          selectable={canEdit}
           selectedKeys={selectedKeys}
           onSelectedKeysChange={setSelectedKeys}
-          onRowClick={openEdit}
+          onRowClick={canEdit ? openEdit : undefined}
           emptyTitle={t('prod_empty_title', 'No products found')}
           emptyDescription={t('prod_empty_desc')}
           bulkActions={(selected, clear) => (

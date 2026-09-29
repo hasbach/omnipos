@@ -20,8 +20,10 @@ type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearanc
 
 export default function Settings({ onShowUpdate }: { onShowUpdate: () => void }) {
   const { t } = useI18n();
-  const [section, setSection] = useState<SectionKey>('general');
-  const { isAdmin } = usePermissions();
+  const [requested, setSection] = useState<SectionKey>('general');
+  const { isAdmin, can } = usePermissions();
+  const canManage = can('settings.manage');
+  const canReset = can('data.reset');
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [tenant, setTenant] = useState<Tenant | null>(null);
   // Ctrl+Shift+O (Electron) deep-links here with ?section=connections.
@@ -43,17 +45,22 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
     return () => window.removeEventListener('pos-sync', handleSync);
   }, []);
 
+  // The page is open to everyone (appearance / language); every other section needs its permission.
   const NAV: { key: SectionKey; label: string; icon: typeof Store; danger?: boolean }[] = [
-    { key: 'general', label: t('set_nav_general'), icon: Store },
-    { key: 'pricing', label: t('set_nav_pricing'), icon: Tag },
-    { key: 'currencies', label: t('set_nav_currencies'), icon: Coins },
-    { key: 'printers', label: t('set_nav_printers'), icon: Printer },
+    ...(canManage ? [
+      { key: 'general' as SectionKey, label: t('set_nav_general'), icon: Store },
+      { key: 'pricing' as SectionKey, label: t('set_nav_pricing'), icon: Tag },
+      { key: 'currencies' as SectionKey, label: t('set_nav_currencies'), icon: Coins },
+      { key: 'printers' as SectionKey, label: t('set_nav_printers'), icon: Printer },
+    ] : []),
     { key: 'appearance', label: t('set_nav_appearance'), icon: Globe },
-    { key: 'updates', label: t('set_nav_updates'), icon: Shield },
-    ...(window.electronAPI?.connections ? [{ key: 'connections' as SectionKey, label: t('set_nav_connections'), icon: Network }] : []),
+    ...(canManage ? [{ key: 'updates' as SectionKey, label: t('set_nav_updates'), icon: Shield }] : []),
+    ...(canManage && window.electronAPI?.connections ? [{ key: 'connections' as SectionKey, label: t('set_nav_connections'), icon: Network }] : []),
     ...(isAdmin ? [{ key: 'roles' as SectionKey, label: t('set_nav_roles'), icon: KeyRound }] : []),
-    { key: 'reset', label: t('set_nav_reset'), icon: AlertTriangle, danger: true },
+    ...(canReset ? [{ key: 'reset' as SectionKey, label: t('set_nav_reset'), icon: AlertTriangle, danger: true }] : []),
   ];
+  // A section the role can't open (e.g. after a permission change) falls back to the first allowed one.
+  const section: SectionKey = NAV.some((n) => n.key === requested) ? requested : (NAV[0]?.key ?? 'appearance');
 
   return (
     <div className="flex flex-col gap-4">

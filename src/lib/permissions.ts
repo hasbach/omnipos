@@ -7,7 +7,7 @@ export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
   { area: 'sales', keys: ['invoices.view', 'invoices.edit', 'invoices.delete', 'invoices.refund', 'daily_sales.view', 'live_monitor.view'] },
   { area: 'inventory', keys: ['products.view', 'products.edit', 'stock.view', 'stock.adjust'] },
   { area: 'purchasing', keys: ['purchases.view', 'purchases.edit', 'parties.view', 'parties.edit'] },
-  { area: 'finance', keys: ['cash_flow.view', 'cash_flow.add', 'cash_flow.edit', 'settlement.cash_out', 'settlement.close', 'settlement.correct', 'reports.view'] },
+  { area: 'finance', keys: ['cash_flow.view', 'cash_flow.add', 'cash_flow.edit', 'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct', 'reports.view'] },
   { area: 'admin', keys: ['users.manage', 'logs.view', 'import.run', 'settings.manage', 'data.reset'] },
   { area: 'pos', keys: ['pos.discount', 'pos.price_override', 'pos.refund', 'pos.open_dashboard'] },
 ];
@@ -26,7 +26,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   accountant: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'live_monitor.view', 'purchases.view', 'parties.view',
     'cash_flow.view', 'cash_flow.add', 'cash_flow.edit',
-    'settlement.cash_out', 'settlement.close', 'settlement.correct',
+    'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct',
     'reports.view', 'logs.view', 'pos.open_dashboard',
   ],
   staff: [
@@ -55,9 +55,10 @@ export const PAGE_PERMISSIONS: Record<string, string[] | null> = {
   'users': ['users.manage'],
   'invoices': ['invoices.view'],
   'cash-flow': ['cash_flow.view'],
-  'settlement': ['settlement.close', 'settlement.cash_out', 'settlement.correct'],
+  'settlement': ['settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct'],
   'logs': ['logs.view'],
-  'settings': ['settings.manage'],
+  // Open to everyone: appearance / language are personal; Settings.tsx hides the other sections by permission.
+  'settings': null,
   'ui-kit': ['settings.manage'],
   'import': ['import.run'],
 };

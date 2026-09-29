@@ -7,6 +7,7 @@ import {
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 import { formatMoney, formatDateTime, resolveDateRangePreset, partyDisplayName, type DateRange } from '../lib/format';
 import type { Product, Stakeholder } from '../types';
 import InvoiceDetailDrawer from './invoices/InvoiceDetailDrawer';
@@ -33,6 +34,9 @@ export default function PurchaseManagement() {
   const [settledOnly, setSettledOnly] = useState(false);
   const [editedOnly, setEditedOnly] = useState(false);
   const [search, setSearch] = useState('');
+
+  const { can } = usePermissions();
+  const canEditPurchases = can('purchases.edit');
 
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -129,7 +133,7 @@ export default function PurchaseManagement() {
           return { product: before, newCost: after.cost ?? before.cost ?? 0 } as PriceSuggestionRow;
         })
         .filter(Boolean) as PriceSuggestionRow[];
-      if (rows.length > 0) {
+      if (rows.length > 0 && can('products.edit')) {
         setPriceRows(rows);
         setPriceModalOpen(true);
       }
@@ -166,7 +170,7 @@ export default function PurchaseManagement() {
     {
       key: 'actions', header: t('inv_col_actions', 'Actions'), align: 'end',
       render: (r) => (
-        !r.archived && r.status !== 'received' ? (
+        canEditPurchases && !r.archived && r.status !== 'received' ? (
           <IconButton aria-label={t('pur_mark_received', 'Mark received')} title={t('pur_mark_received', 'Mark received')} onClick={(e) => { e.stopPropagation(); handleMarkReceived(r.id); }}>
             <Truck size={15} />
           </IconButton>
@@ -189,7 +193,7 @@ export default function PurchaseManagement() {
         actions={
           <>
             <Button variant="secondary" onClick={handleExport}><Download size={15} /> {t('inv_export', 'Export')}</Button>
-            <Button variant="primary" onClick={() => openEditor(null)}><Plus size={15} /> {t('pur_new_purchase', 'New purchase invoice')}</Button>
+            {canEditPurchases && <Button variant="primary" onClick={() => openEditor(null)}><Plus size={15} /> {t('pur_new_purchase', 'New purchase invoice')}</Button>}
           </>
         }
       />

@@ -18,6 +18,7 @@ import {
 import type { DataTableColumn } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 import { formatMoney, partyDisplayName } from '../lib/format';
 import { useSettings } from '../lib/useSettings';
 import type { Currency, PriceLevel, Stakeholder } from '../types';
@@ -34,6 +35,10 @@ export default function StakeholderManagement() {
   const navigate = useNavigate();
   const { priceLevelsEnabled } = useSettings();
 
+  const { can } = usePermissions();
+  const canEditParties = can('parties.edit');
+  const canPay = can('cash_flow.add') || canEditParties; // POST /api/balance-payment
+  const canImport = can('import.run');
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [loading, setLoading] = useState(true);
@@ -185,12 +190,16 @@ export default function StakeholderManagement() {
       width: 88,
       render: (s) => (
         <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-          <IconButton aria-label={t('stk_edit')} size="sm" onClick={() => openEdit(s)}>
-            <Edit2 size={15} />
-          </IconButton>
-          <IconButton aria-label={t('stk_delete')} size="sm" onClick={() => handleDelete(s)}>
-            <Trash2 size={15} />
-          </IconButton>
+          {canEditParties && (
+            <>
+              <IconButton aria-label={t('stk_edit')} size="sm" onClick={() => openEdit(s)}>
+                <Edit2 size={15} />
+              </IconButton>
+              <IconButton aria-label={t('stk_delete')} size="sm" onClick={() => handleDelete(s)}>
+                <Trash2 size={15} />
+              </IconButton>
+            </>
+          )}
         </div>
       ),
     },
@@ -203,12 +212,16 @@ export default function StakeholderManagement() {
         subtitle={t('stk_subtitle')}
         actions={
           <>
-            <Button variant="secondary" onClick={() => navigate(`/dashboard/import?entity=${tab === 'customer' ? 'customers' : 'suppliers'}`)}>
-              <Upload size={16} /> {t('stk_import_wizard', 'Import')}
-            </Button>
-            <Button variant="primary" onClick={openNew}>
-              <Plus size={16} /> {tab === 'customer' ? t('stk_add_customer') : t('stk_add_supplier')}
-            </Button>
+            {canImport && (
+              <Button variant="secondary" onClick={() => navigate(`/dashboard/import?entity=${tab === 'customer' ? 'customers' : 'suppliers'}`)}>
+                <Upload size={16} /> {t('stk_import_wizard', 'Import')}
+              </Button>
+            )}
+            {canEditParties && (
+              <Button variant="primary" onClick={openNew}>
+                <Plus size={16} /> {tab === 'customer' ? t('stk_add_customer') : t('stk_add_supplier')}
+              </Button>
+            )}
           </>
         }
       />
@@ -297,6 +310,8 @@ export default function StakeholderManagement() {
           openEdit(s);
         }}
         onPay={(s) => setPaymentStakeholder(s)}
+        canEdit={canEditParties}
+        canPay={canPay}
       />
 
       <PaymentModal

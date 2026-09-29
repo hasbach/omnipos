@@ -34,7 +34,7 @@ import UserLogs from './pages/UserLogs';
 import Settings from './pages/Settings';
 import UiKit from './pages/UiKit';
 import ImportWizard from './pages/ImportWizard';
-import { RequirePermission, DashboardHome } from './lib/usePermissions';
+import { RequirePermission, DashboardHome, refreshPermissions } from './lib/usePermissions';
 import { pagePermissions } from './lib/permissions';
 
 // Wraps a dashboard page in the role guard (see src/lib/permissions.ts PAGE_PERMISSIONS).
@@ -284,6 +284,9 @@ export default function Dashboard() {
         const data = JSON.parse(event.data);
         if (data.type === 'SETTINGS_UPDATED') {
           safeFetchSettings();
+        }
+        if (data.type === 'PERMISSIONS_UPDATED') {
+          refreshPermissions();
         }
         if (data.type === 'UPDATE_AVAILABLE') {
           setUpdateVersion(data.version);

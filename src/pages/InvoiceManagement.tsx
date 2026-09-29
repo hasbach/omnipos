@@ -7,6 +7,7 @@ import {
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 import { formatMoney, formatDateTime, resolveDateRangePreset, partyDisplayName, type DateRange } from '../lib/format';
 import type { Product, Stakeholder } from '../types';
 import InvoiceDetailDrawer from './invoices/InvoiceDetailDrawer';
@@ -38,6 +39,7 @@ export default function InvoiceManagement() {
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [currencies, setCurrencies] = useState<CurrencyRow[]>([USD]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const { can } = usePermissions();
 
   const [dateRange, setDateRange] = useState<DateRange>(() => resolveDateRangePreset('this_month'));
   const [typeFilter, setTypeFilter] = useState('all');
@@ -175,8 +177,8 @@ export default function InvoiceManagement() {
         actions={
           <>
             <Button variant="secondary" onClick={handleExport}><Download size={15} /> {t('inv_export', 'Export')}</Button>
-            <Button variant="secondary" onClick={() => openEditor('purchase', null)}><Plus size={15} /> {t('inv_new_purchase', 'New purchase invoice')}</Button>
-            <Button variant="primary" onClick={() => openEditor('sale', null)}><Plus size={15} /> {t('inv_new_sale', 'New sale invoice')}</Button>
+            {can('purchases.edit') && <Button variant="secondary" onClick={() => openEditor('purchase', null)}><Plus size={15} /> {t('inv_new_purchase', 'New purchase invoice')}</Button>}
+            {can('invoices.edit') && <Button variant="primary" onClick={() => openEditor('sale', null)}><Plus size={15} /> {t('inv_new_sale', 'New sale invoice')}</Button>}
           </>
         }
       />

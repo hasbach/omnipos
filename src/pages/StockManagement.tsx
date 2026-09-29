@@ -16,6 +16,7 @@ import {
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
+import { usePermissions } from '../lib/usePermissions';
 import { formatDateTime, formatMoney } from '../lib/format';
 import { Product, Currency } from '../types';
 import { AdjustStockModal, AdjustStockTarget } from './stock/AdjustStockModal';
@@ -115,6 +116,9 @@ export default function StockManagement() {
     if (tab === 'adjustments') fetchAdjustments();
   }, [tab, fetchAdjustments]);
 
+  const { can } = usePermissions();
+  const canAdjust = can('stock.adjust');
+
   const usdCurrency = useMemo(() => currencies.find((c) => c.code === 'USD') || { code: 'USD', symbol: '$', rate: 1 }, [currencies]);
 
   const trackedProducts = useMemo(() => products.filter((p) => p.track_inventory !== 0), [products]);
@@ -191,14 +195,16 @@ export default function StockManagement() {
             <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); openMovements(p); }}>
               {t('stock_movements', 'Movements')}
             </Button>
-            <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); openAdjust(p); }}>
-              {t('stock_adjust', 'Adjust')}
-            </Button>
+            {canAdjust && (
+              <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); openAdjust(p); }}>
+                {t('stock_adjust', 'Adjust')}
+              </Button>
+            )}
           </div>
         ),
       },
     ],
-    [t],
+    [t, canAdjust],
   );
 
   const adjustmentColumns = useMemo<DataTableColumn<StockAdjustmentRow>[]>(

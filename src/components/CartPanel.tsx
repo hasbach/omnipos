@@ -10,6 +10,7 @@ import { CURRENCIES } from '../hooks/usePos';
 import { Badge } from './ui';
 import { formatMoney, formatBalance, formatNumber } from '../lib/format';
 import { uomUnitPrice } from '../lib/pricing';
+import { usePermissions } from '../lib/usePermissions';
 
 export default function CartPanel() {
   const pos = usePosContext();
@@ -23,6 +24,10 @@ export default function CartPanel() {
     creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled, belowCostOf, sellableProducts,
     selectedStakeholder, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
   } = pos as any;
+
+  const { can } = usePermissions();
+  const canDiscount = can('pos.discount');
+  const canOverridePrice = can('pos.price_override');
 
   const [discountEditorId, setDiscountEditorId] = useState<string | null>(null);
   const [discountDraft, setDiscountDraft] = useState<{ type: 'percentage' | 'fixed'; value: string }>({ type: 'percentage', value: '0' });
@@ -215,14 +220,15 @@ export default function CartPanel() {
 
                     <div className="flex items-center gap-3 shrink-0">
                       <div className="flex flex-col items-end gap-1">
-                        <button
+                        {(canDiscount || item.discount?.value) && <button
+                          disabled={!canDiscount}
                           onClick={() => openDiscountEditor(item)}
                           className={`px-2 py-1.5 min-h-[30px] rounded text-[10px] font-bold border cursor-pointer ${item.discount?.value ? 'bg-accent text-white border-accent' : 'border-border text-text-3 hover:text-text hover:border-border-strong'}`}
                         >
                           <Tag size={10} className="inline me-1" />
                           {item.discount?.value ? (item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`) : t('discount_short', 'DISC')}
-                        </button>
-                        {allowPriceOverride && (
+                        </button>}
+                        {allowPriceOverride && canOverridePrice && (
                           item.unit_price != null ? (
                             <button onClick={() => clearPriceOverride(item.line_key)} className="text-[10px] text-text-3 hover:text-danger cursor-pointer">
                               {t('cancel', 'Cancel')} {t('pos_override_price', 'Override')}
@@ -355,7 +361,7 @@ export default function CartPanel() {
                 })()}
               </div>
 
-              <div className="flex items-center gap-2">
+              {canDiscount && <div className="flex items-center gap-2">
                 <span className="text-[10px] font-bold uppercase text-text-3">{t('global_discount_label', 'Global Discount:')}</span>
                 <div className="flex items-center gap-1 bg-bg p-1 rounded border border-border">
                   <button
@@ -371,7 +377,7 @@ export default function CartPanel() {
                     onChange={(e) => setGlobalDiscount((prev: any) => ({ ...prev, value: parseFloat(e.target.value) || 0 }))}
                   />
                 </div>
-              </div>
+              </div>}
             </div>
 
             <div className="text-end shrink-0">

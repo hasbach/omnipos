@@ -4,6 +4,7 @@ import { Drawer, Button, Badge, Tabs, Checkbox, SkeletonTable } from '../../comp
 import { useToast, useConfirm } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
+import { usePermissions } from '../../lib/usePermissions';
 import { formatMoney, formatDateTime, formatBalance, paymentMethodLabel, partyDisplayName } from '../../lib/format';
 import RefundModal, { type RefundableResponse } from './RefundModal';
 import type { CurrencyRow, TxType } from './types';
@@ -34,6 +35,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
   const { t, lang } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
+  const { can } = usePermissions();
   const [loading, setLoading] = useState(false);
   const [invoice, setInvoice] = useState<any>(null);
   const [edits, setEdits] = useState<any[]>([]);
@@ -160,13 +162,13 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
       footer={invoice ? (
         <>
           <Button variant="secondary" onClick={handlePrint}><Printer size={15} /> {t('inv_action_print', 'Print')}</Button>
-          {!invoice.archived && invoice.type !== 'refund' && (
+          {(can('invoices.delete') || (invoice.type === 'purchase' && can('purchases.edit'))) && !invoice.archived && invoice.type !== 'refund' && (
             <Button variant="danger" onClick={handleDelete}><Trash2 size={15} /> {t('inv_action_delete', 'Delete')}</Button>
           )}
-          {invoice.type === 'sale' && hasRemainingRefund && (
+          {can('invoices.refund') && invoice.type === 'sale' && hasRemainingRefund && (
             <Button variant="secondary" onClick={() => setRefundModalOpen(true)}><RotateCcw size={15} /> {t('inv_action_refund', 'Refund')}</Button>
           )}
-          {invoice.type !== 'refund' && (
+          {(can('invoices.edit') || (invoice.type === 'purchase' && can('purchases.edit'))) && invoice.type !== 'refund' && (
             <Button variant="primary" onClick={() => onEdit(invoice.id, invoice.type)}><Edit2 size={15} /> {t('inv_action_edit', 'Edit')}</Button>
           )}
         </>

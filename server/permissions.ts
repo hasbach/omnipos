@@ -21,7 +21,7 @@ export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
   { area: 'sales', keys: ['invoices.view', 'invoices.edit', 'invoices.delete', 'invoices.refund', 'daily_sales.view', 'live_monitor.view'] },
   { area: 'inventory', keys: ['products.view', 'products.edit', 'stock.view', 'stock.adjust'] },
   { area: 'purchasing', keys: ['purchases.view', 'purchases.edit', 'parties.view', 'parties.edit'] },
-  { area: 'finance', keys: ['cash_flow.view', 'cash_flow.add', 'cash_flow.edit', 'settlement.cash_out', 'settlement.close', 'settlement.correct', 'reports.view'] },
+  { area: 'finance', keys: ['cash_flow.view', 'cash_flow.add', 'cash_flow.edit', 'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct', 'reports.view'] },
   { area: 'admin', keys: ['users.manage', 'logs.view', 'import.run', 'settings.manage', 'data.reset'] },
   { area: 'pos', keys: ['pos.discount', 'pos.price_override', 'pos.refund', 'pos.open_dashboard'] },
 ];
@@ -40,7 +40,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   accountant: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'live_monitor.view', 'purchases.view', 'parties.view',
     'cash_flow.view', 'cash_flow.add', 'cash_flow.edit',
-    'settlement.cash_out', 'settlement.close', 'settlement.correct',
+    'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct',
     'reports.view', 'logs.view', 'pos.open_dashboard',
   ],
   staff: [
@@ -52,16 +52,43 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
 
 // ---- storage -------------------------------------------------------------------------------------
 
+const ROLE_PERMISSIONS_VERSION = 2;
+
+/**
+ * v2 introduced settlement.view (history & closed-day detail). Roles that could already close or
+ * correct a day keep seeing history: grant it to them once, then stamp the version. Idempotent and
+ * lazy — runs the first time a tenant's stored map is read. Tenants without a stored map use the
+ * defaults (which already include the new key) and are stamped without a rewrite.
+ */
+function migrateStoredMap(tenantId: number | string, map: Record<string, string[]> | null): Record<string, string[]> | null {
+  const ver = db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'role_permissions_version'").get(tenantId) as any;
+  if (Number(ver?.value) >= ROLE_PERMISSIONS_VERSION) return map;
+  let out = map;
+  if (map) {
+    out = { ...map };
+    for (const [role, list] of Object.entries(map)) {
+      if (Array.isArray(list) && (list.includes('settlement.close') || list.includes('settlement.correct')) && !list.includes('settlement.view')) {
+        out[role] = [...list, 'settlement.view'];
+      }
+    }
+    db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(out));
+  }
+  db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions_version', ?)").run(tenantId, String(ROLE_PERMISSIONS_VERSION));
+  return out;
+}
+
 function readStoredMap(tenantId: number | string): Record<string, string[]> | null {
   const row = db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'role_permissions'").get(tenantId) as any;
-  if (!row?.value) return null;
-  try {
-    const parsed = JSON.parse(row.value);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    return parsed;
-  } catch {
-    return null;
+  let parsed: Record<string, string[]> | null = null;
+  if (row?.value) {
+    try {
+      const p = JSON.parse(row.value);
+      if (p && typeof p === 'object' && !Array.isArray(p)) parsed = p;
+    } catch {
+      parsed = null;
+    }
   }
+  return migrateStoredMap(tenantId, parsed);
 }
 
 function cleanList(list: unknown): string[] {
@@ -86,8 +113,8 @@ export function effectiveRoleMap(tenantId: number | string): Record<string, stri
 
 // ---- route table ---------------------------------------------------------------------------------
 
-/** A rule resolves to: null (open), one permission, or a list where ANY one is enough. */
-type Need = string | string[] | null;
+/** A rule resolves to: null (open), one permission, a list where ANY one is enough, or { allOf } — every entry must pass. */
+type Need = string | string[] | { allOf: Need[] } | null;
 interface RouteRule {
   method: string;
   pattern: string; // `:param` matches one segment, trailing `*` matches the rest
@@ -95,7 +122,17 @@ interface RouteRule {
 }
 
 const OVERVIEW_OR_REPORTS = ['reports.view', 'dashboard.overview'];
+// The end-of-day screen (register summary) is needed by both the cash-out and the close steps.
 const SETTLEMENT_ANY = ['settlement.close', 'settlement.cash_out', 'settlement.correct'];
+
+/** Type of the transaction a `/api/transactions/:id` request targets (archived ones fall back to the invoice rights). */
+function txType(req: any): string | null {
+  const tenantId = req.session?.tenantId;
+  const id = Number(String(req.path).split('/')[3]);
+  if (!tenantId || !Number.isFinite(id)) return null;
+  const row = db.prepare('SELECT type FROM transactions WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
+  return row?.type ?? null;
+}
 
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
@@ -105,8 +142,9 @@ export const ROUTE_RULES: RouteRule[] = [
 
   // --- invoices / transactions (recent, :id and :id/refundable stay open: the POS history uses them) ---
   { method: 'GET', pattern: '/api/transactions/:id/edits', need: 'invoices.view' },
-  { method: 'PUT', pattern: '/api/transactions/:id', need: 'invoices.edit' },
-  { method: 'DELETE', pattern: '/api/transactions/:id', need: 'invoices.delete' },
+  // A purchase invoice can also be edited / deleted with purchases.edit (the Purchases page has no separate rights).
+  { method: 'PUT', pattern: '/api/transactions/:id', need: (req) => (txType(req) === 'purchase' ? ['invoices.edit', 'purchases.edit'] : 'invoices.edit') },
+  { method: 'DELETE', pattern: '/api/transactions/:id', need: (req) => (txType(req) === 'purchase' ? ['invoices.delete', 'purchases.edit'] : 'invoices.delete') },
   {
     method: 'POST',
     pattern: '/api/transactions',
@@ -117,7 +155,18 @@ export const ROUTE_RULES: RouteRule[] = [
       if (type === 'purchase') return 'purchases.edit';
       const hasDiscount = Number(body.discount?.value) > 0 ||
         (Array.isArray(body.items) && body.items.some((it: any) => Number(it?.discount?.value) > 0));
-      if (type === 'sale' && hasDiscount) return ['pos.discount', 'invoices.edit'];
+      if (type === 'sale') {
+        // The back-office invoice editor (source 'backoffice') is invoice editing, whatever the lines hold.
+        if (body.source === 'backoffice') return 'invoices.edit';
+        // The POS only puts a finite `unit_price` on a cart line when the cashier overrode it.
+        const overridesPrice = Array.isArray(body.items) &&
+          body.items.some((it: any) => it && it.unit_price != null && Number.isFinite(Number(it.unit_price)));
+        const needs: Need[] = [];
+        if (overridesPrice) needs.push('pos.price_override');
+        if (hasDiscount) needs.push(['pos.discount', 'invoices.edit']);
+        if (needs.length === 1) return needs[0];
+        if (needs.length > 1) return { allOf: needs }; // both an override and a discount: needs both
+      }
       return null; // a plain sale is what the POS does all day
     },
   },
@@ -136,9 +185,10 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/reports/unpaid-sales', need: ['reports.view', 'parties.view'] },
   { method: 'GET', pattern: '/api/reports/unpaid-purchases', need: ['reports.view', 'purchases.view'] },
   { method: 'GET', pattern: '/api/reports/customer-statement/:id', need: ['reports.view', 'parties.view'] },
-  { method: 'GET', pattern: '/api/reports/daily', need: ['reports.view', ...SETTLEMENT_ANY] },
-  { method: 'GET', pattern: '/api/reports/yearly', need: ['reports.view', ...SETTLEMENT_ANY] },
-  { method: 'POST', pattern: '/api/reports/daily', need: 'settlement.close' },
+  // Closed-day history is its own permission: neither reports.view nor cash-out / close grants it.
+  { method: 'GET', pattern: '/api/reports/daily', need: 'settlement.view' },
+  { method: 'GET', pattern: '/api/reports/yearly', need: 'settlement.view' },
+  { method: 'POST', pattern: '/api/reports/daily', need: 'settlement.close' }, // legacy one-shot close; Cash Out uses /api/tenant/cashout
   { method: 'POST', pattern: '/api/reports/yearly', need: 'settlement.close' },
   { method: 'GET', pattern: '/api/reports/*', need: 'reports.view' },
   { method: 'POST', pattern: '/api/reports/*', need: 'reports.view' },
@@ -156,8 +206,10 @@ export const ROUTE_RULES: RouteRule[] = [
   // --- settlement / end of day ---
   { method: 'POST', pattern: '/api/tenant/settlement', need: 'settlement.close' },
   { method: 'POST', pattern: '/api/tenant/cashout', need: 'settlement.cash_out' },
-  { method: 'GET', pattern: '/api/tenant/cashier-shifts', need: ['reports.view', ...SETTLEMENT_ANY] },
-  { method: 'GET', pattern: '/api/settlements/:reportId', need: ['reports.view', ...SETTLEMENT_ANY] },
+  { method: 'GET', pattern: '/api/tenant/cashier-shifts', need: ['settlement.view', 'settlement.cash_out'] }, // the cash-out step lists today's shifts
+  { method: 'POST', pattern: '/api/tenant/schedule-update', need: 'settings.manage' },
+  { method: 'POST', pattern: '/api/tenant/install-update', need: 'settings.manage' },
+  { method: 'GET', pattern: '/api/settlements/:reportId', need: 'settlement.view' },
   { method: 'POST', pattern: '/api/settlements/:reportId/corrections', need: 'settlement.correct' },
 
   // --- data reset / import ---
@@ -254,21 +306,64 @@ export function clearSessionUser(req: any) {
   req.session.locked = true;
 }
 
+function flatten(need: Need): string[] {
+  if (need === null) return [];
+  if (typeof need === 'string') return [need];
+  if (Array.isArray(need)) return need;
+  return need.allOf.flatMap(flatten);
+}
+
+function satisfied(need: Need, granted: Set<string>): boolean {
+  if (need === null) return true;
+  if (typeof need === 'string') return granted.has(need);
+  if (Array.isArray(need)) return need.some((k) => granted.has(k));
+  return need.allOf.every((n) => satisfied(n, granted));
+}
+
+/** Would `role` be allowed to make this request? (Pure rule evaluation — used by the tests.) */
+export function roleAllows(tenantId: number | string, role: string, method: string, path: string, req: any = {}): boolean {
+  const rule = findRule(method, path);
+  if (!rule) return true;
+  const need = typeof rule.need === 'function' ? rule.need({ path, method, body: {}, ...req, session: { tenantId, ...(req.session || {}) } }) : rule.need;
+  return satisfied(need, new Set(permissionsForRole(tenantId, role)));
+}
+
 // ---- middleware ----------------------------------------------------------------------------------
 
 export function permissionMiddleware(req: any, res: any, next: any) {
   const user = sessionUser(req);
   const locked = !user && req.session?.locked === true;
   if (!user && !locked) return next(); // owner / legacy / tests: never locked, no PIN user => unrestricted
+  // `user_id` in a request body means "who is doing this" (cash out, settlement, sales, cash in/out, edits).
+  // With a PIN user signed in, that is always them — a cashier can't record actions under the admin's name.
+  if (user && req.method !== 'GET' && req.body && typeof req.body === 'object' && !Array.isArray(req.body) && 'user_id' in req.body) {
+    req.body.user_id = user.id;
+  }
   const rule = findRule(req.method, req.path);
   if (!rule) return next();
   const need = typeof rule.need === 'function' ? rule.need(req) : rule.need;
   if (!need) return next();
-  const anyOf = Array.isArray(need) ? need : [need];
+  const anyOf = flatten(need);
   if (locked) return res.status(403).json({ error: 'The register is locked. Sign in with your PIN.', code: 'PERMISSION_DENIED', permission: anyOf[0], permissions: anyOf, locked: true });
   const granted = new Set(permissionsForRole(req.session.tenantId, user.role));
-  if (anyOf.some((k) => granted.has(k))) return next();
+  if (satisfied(need, granted)) return next();
   return res.status(403).json({ error: 'You do not have permission to do this.', code: 'PERMISSION_DENIED', permission: anyOf[0], permissions: anyOf });
+}
+
+/**
+ * GET /api/users returns whole user rows, PINs included (User Management edits them). Anyone signed in
+ * needs the list (settlement cashier picker, POS), but only users.manage may see the PINs — otherwise a
+ * cashier could read the admin PIN and use it for corrections and data reset.
+ */
+export function redactUserPins(req: any, res: any, next: any) {
+  if (req.method !== 'GET' || req.path !== '/api/users') return next();
+  const user = sessionUser(req);
+  const locked = !user && req.session?.locked === true;
+  if (!user && !locked) return next();
+  if (user && permissionsForRole(req.session.tenantId, user.role).includes('users.manage')) return next();
+  const json = res.json.bind(res);
+  res.json = (body: any) => json(Array.isArray(body) ? body.map((u: any) => { const { pin: _pin, ...rest } = u || {}; return rest; }) : body);
+  next();
 }
 
 // ---- routes + registration -----------------------------------------------------------------------
@@ -279,6 +374,7 @@ export function permissionMiddleware(req: any, res: any, next: any) {
  */
 export function installPermissions(app: any, authenticate: any, broadcast: Function) {
   app.use(permissionMiddleware);
+  app.use(redactUserPins);
 
   // Who is signed in on this session, and what may they do?
   app.get('/api/auth/whoami', authenticate, (req: any, res: any) => {
@@ -329,6 +425,7 @@ export function installPermissions(app: any, authenticate: any, broadcast: Funct
         next[role] = cleanList(list);
       }
       db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(next));
+      db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions_version', ?)").run(tenantId, String(ROLE_PERMISSIONS_VERSION));
       logAction(tenantId, user?.id ?? 1, 'Permissions Updated', JSON.stringify(next));
       broadcast({ type: 'SETTINGS_UPDATED' }, tenantId);
       broadcast({ type: 'PERMISSIONS_UPDATED' }, tenantId);
