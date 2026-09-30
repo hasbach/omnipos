@@ -220,7 +220,10 @@ export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessN
     }
     if (!detail || !report || !eff) return null;
 
-    const period = recorded?.period_start || report.period_start;
+    // An old settlement that only recorded the window since the last Cash Out: the rebuilt figures
+    // (whole day, since the previous settlement) are the ones that describe the day.
+    const widened = !!changes?.window_widened;
+    const period = (widened ? rebuilt?.period_start : null) || recorded?.period_start || report.period_start;
     const periodEnd = recorded?.period_end || report.settled_at;
 
     return (
@@ -254,6 +257,13 @@ export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessN
           <div className="flex items-start gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 px-3 py-2 text-sm text-text-2">
             <Info size={16} className="mt-0.5 shrink-0 text-text-3" />
             <span>{t('sd_legacy_note', 'Closed before detailed snapshots were recorded — showing what was saved at closing.')}</span>
+          </div>
+        )}
+
+        {widened && (
+          <div className="flex items-start gap-2 rounded-[var(--radius-input)] border border-accent/40 bg-accent-soft px-3 py-2 text-sm text-text-2">
+            <Info size={16} className="mt-0.5 shrink-0 text-accent" />
+            <span>{t('sd_window_widened_note', 'This day was closed when a settlement only counted the register since the last cashier cash out, so the recorded figures leave out earlier cash movements. The “Rebuilt now” column shows the whole day since the previous settlement.')}</span>
           </div>
         )}
 

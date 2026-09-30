@@ -397,6 +397,7 @@ test("/api/cash-flow/summary numbers are unchanged by the refactor", async () =>
   const day = await seedDay("Summary Parity Co");
   const s = (await app.api("GET", "/api/cash-flow/summary", { tenantId: day.tenantId })).body;
   assert.deepEqual(s, {
+    scope: "shift", since: "0000-01-01 00:00:00",
     openingBalance: 0, totalSales: 40, totalRefunds: 0, totalPurchases: 0, totalIn: 5, totalOut: 2, expectedBalance: 43,
   });
   // ...and it equals what settlement will snapshot as the register.

@@ -18,6 +18,8 @@ export default {
     sd_unpaid: 'Unpaid',
     sd_period_unknown: 'Not recorded',
     sd_legacy_note: 'Closed before detailed snapshots were recorded — showing what was saved at closing.',
+    sd_window_widened_note: 'This day was closed when a settlement only counted the register since the last cashier cash out, so the recorded figures leave out earlier cash movements. The “Rebuilt now” column shows the whole day since the previous settlement.',
+    sd_badge_partial_day: 'Partial day recorded',
     sd_notes: 'Notes',
 
     sd_changed_title: 'Totals changed after closing',
@@ -139,6 +141,8 @@ export default {
     sd_unpaid: 'غير مدفوع',
     sd_period_unknown: 'غير مسجّلة',
     sd_legacy_note: 'أُقفلت قبل تسجيل اللقطات التفصيلية — يُعرض ما حُفظ عند الإقفال.',
+    sd_window_widened_note: 'أُقفل هذا اليوم عندما كانت التسوية تحسب السجل منذ آخر إقفال صندوق للصرّاف فقط، لذا لا تشمل الأرقام المسجّلة حركات النقد السابقة. يعرض عمود «المعاد بناؤه الآن» اليوم كاملاً منذ التسوية السابقة.',
+    sd_badge_partial_day: 'سُجّل جزء من اليوم',
     sd_notes: 'ملاحظات',
 
     sd_changed_title: 'تغيّرت الإجماليات بعد الإقفال',
@@ -260,6 +264,8 @@ export default {
     sd_unpaid: 'Impayé',
     sd_period_unknown: 'Non enregistrée',
     sd_legacy_note: 'Clôturée avant l’enregistrement des instantanés détaillés — affichage de ce qui a été sauvegardé à la clôture.',
+    sd_window_widened_note: 'Cette journée a été clôturée quand le règlement ne comptait le registre que depuis la dernière clôture de caisse d’un caissier : les chiffres enregistrés omettent les mouvements antérieurs. La colonne « Reconstitué maintenant » montre la journée entière depuis le règlement précédent.',
+    sd_badge_partial_day: 'Journée partielle enregistrée',
     sd_notes: 'Notes',
 
     sd_changed_title: 'Totaux modifiés après la clôture',

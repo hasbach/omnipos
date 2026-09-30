@@ -33,6 +33,8 @@ interface Currency {
 type CashFlowEntry = CashFlowRow;
 
 interface Summary {
+  scope?: 'shift' | 'day';
+  since?: string;
   openingBalance: number;
   totalSales: number;
   totalRefunds: number;
@@ -69,6 +71,13 @@ export default function CashFlowRegister() {
   const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'register' | 'analytics'>('register');
+  // Cashiers work the current shift (since the last Cash Out); whoever closes or audits the day
+  // (settlement.close / settlement.view) can switch to the whole day since the last settlement.
+  const canSeeDay = can('settlement.close') || can('settlement.view');
+  const [scope, setScope] = useState<'shift' | 'day'>('shift');
+  useEffect(() => {
+    if (canSeeDay) setScope('day');
+  }, [canSeeDay]);
   const [editing, setEditing] = useState<CashFlowRow | null>(null);
 
   // Cash movement modal
@@ -95,8 +104,8 @@ export default function CashFlowRegister() {
   const fetchData = useCallback(async () => {
     try {
       const [entriesRes, summaryRes, stakeholdersRes, currenciesRes] = await Promise.all([
-        api.get<CashFlowEntry[]>('/api/cash-flow'),
-        api.get<Summary>('/api/cash-flow/summary'),
+        api.get<CashFlowEntry[]>(`/api/cash-flow?scope=${scope}`),
+        api.get<Summary>(`/api/cash-flow/summary?scope=${scope}`),
         api.get<Stakeholder[]>('/api/stakeholders'),
         api.get<Currency[]>('/api/currencies'),
       ]);
@@ -110,7 +119,7 @@ export default function CashFlowRegister() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     fetchData();
@@ -244,6 +253,29 @@ export default function CashFlowRegister() {
         <AnalyticsPanel currencies={currencies} />
       ) : (
       <>
+      {canSeeDay && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex gap-1 rounded-[var(--radius-input)] border border-border bg-surface-2 p-1 text-xs font-semibold" role="group" aria-label={t('fin_cfr_scope_label', 'Register period')}>
+            {([['shift', t('fin_cfr_scope_shift', 'Current shift')], ['day', t('fin_cfr_scope_day', 'Whole day')]] as const).map(([v, label]) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={scope === v}
+                onClick={() => setScope(v)}
+                className={['cursor-pointer rounded-md px-3 py-1.5 uppercase tracking-[0.04em]', scope === v ? 'bg-primary text-on-primary' : 'text-text-3 hover:text-text'].join(' ')}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-text-3">
+            {scope === 'day'
+              ? t('fin_cfr_scope_day_hint', 'Since the last settlement — every cashier shift included.')
+              : t('fin_cfr_scope_shift_hint', 'Since the last cash out or settlement.')}
+          </span>
+        </div>
+      )}
+
       {/* Multi-row grid (2 / 3 / 4 columns) with self-fitting figures: 7 cards never sit in one long row. */}
       <div className={STAT_GRID}>
         <FitStat label={t('fin_cfr_opening_balance', 'Opening Balance')} icon={Wallet} value={summary ? formatMoney(summary.openingBalance, USD) : '—'} />

@@ -5,7 +5,7 @@
 // Money model: rows keep the entered currency + exchange_rate (LBP per USD); every total below is
 // USD = amount / exchange_rate, the same convention as the register summary in server/settlement.ts.
 import { db, logAction } from "./db.js";
-import { lastRegisterClose } from "./settlement.js";
+import { parseRegisterScope, registerWindow } from "./settlement.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
 import { randomBytes } from "node:crypto";
 
@@ -281,7 +281,7 @@ export function setupCashFlowRoutes(app: any, authenticate: any, broadcast: Func
   // The live, open register (everything since the last close) — the Cash Flow page's "today" view.
   app.get("/api/cash-flow", authenticate, (req: any, res: any) => {
     const tenantId = req.session.tenantId;
-    const { since } = lastRegisterClose(tenantId);
+    const { since } = registerWindow(tenantId, parseRegisterScope(req.query.scope)); // ?scope=day = since the last settlement
     const entries = db.prepare(`
       SELECT c.*, COALESCE(c.category, 'other') AS category, ${EDIT_COUNT_SQL} AS edit_count
       FROM cash_flow c WHERE c.tenant_id = ? AND c.created_at > ? ORDER BY c.created_at DESC, c.id DESC

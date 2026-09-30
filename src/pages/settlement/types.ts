@@ -112,6 +112,8 @@ export interface SettlementReport {
   effective_difference?: number;
   corrections_count?: number;
   changed_after_close?: boolean;
+  /** Closed before v1.7.1: the recorded register only covered the time since the last cashier Cash Out. */
+  window_widened?: boolean;
 }
 
 export interface SettlementDetail {
@@ -122,6 +124,7 @@ export interface SettlementDetail {
   corrected_counted: CountedLine[] | null;
   changes: {
     changed: boolean;
+    window_widened?: boolean;
     diffs: SettlementDiff[];
     edited_invoices: EditedInvoice[];
     late_payments: LatePayment[];

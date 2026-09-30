@@ -45,6 +45,26 @@ export function lastRegisterClose(tenantId: number): { actualBalance: number; si
   };
 }
 
+// The business DAY: everything since the last End-of-Day Settlement, ignoring the cashier Cash Outs
+// in between (they are shift checkpoints, not day boundaries). Its opening is the cash counted at
+// that settlement. The settlement report covers this window — covering only "since the last Cash
+// Out" left every manual cash in/out and all sales before the last shift change out of the day.
+export function lastSettlementClose(tenantId: number): { actualBalance: number; since: string } {
+  const last = db.prepare(`
+    SELECT COALESCE(corrected_actual_balance, actual_balance) as actual_balance, created_at
+    FROM daily_reports WHERE tenant_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+  `).get(tenantId) as any;
+  return {
+    actualBalance: last ? last.actual_balance : 0,
+    since: last ? last.created_at : EPOCH,
+  };
+}
+
+export type RegisterScope = "shift" | "day";
+export const parseRegisterScope = (v: any): RegisterScope => (v === "day" ? "day" : "shift");
+export const registerWindow = (tenantId: number, scope: RegisterScope) =>
+  scope === "day" ? lastSettlementClose(tenantId) : lastRegisterClose(tenantId);
+
 // Where the rows of a breakdown come from: the tenant's LIVE tables (at settlement time) or the
 // ARCHIVED rows of one settlement (the rebuild).
 interface Source {
@@ -90,12 +110,16 @@ function registerMovements(src: Source, since: string, until: string) {
   };
 }
 
-// GET /api/cash-flow/summary — the live open register. Same numbers as before the refactor.
-export function computeRegisterSummary(tenantId: number) {
-  const { actualBalance: openingBalance, since } = lastRegisterClose(tenantId);
+// GET /api/cash-flow/summary — the live open register, for the whole drawer (every user).
+// scope 'shift' (default): since the last close of any kind — what a cashier's Cash Out reconciles.
+// scope 'day': since the last settlement — what the End-of-Day Settlement reconciles.
+export function computeRegisterSummary(tenantId: number, scope: RegisterScope = "shift") {
+  const { actualBalance: openingBalance, since } = registerWindow(tenantId, scope);
   const m = registerMovements(liveSource(tenantId), since, FAR_FUTURE);
   const expectedBalance = openingBalance + m.cashSales - m.cashRefunds - m.cashPurchases + m.cashIn - m.cashOut;
   return {
+    scope,
+    since,
     openingBalance,
     totalSales: m.cashSales,
     totalRefunds: m.cashRefunds,
@@ -248,16 +272,14 @@ export interface SettlementContext {
 
 const nowStamp = () => (db.prepare("SELECT datetime('now') as n").get() as any).n as string;
 
-// Latest close BEFORE a given daily report (the start of the register window it closed).
-function closeBefore(tenantId: number, report: any): { since: string } {
+// The settlement BEFORE a given daily report: the start of the business day it closed, and the
+// cash counted there (that day's opening). Cashier Cash Outs in between do not start a new day.
+function settlementBefore(tenantId: number, report: any): { since: string; actualBalance: number } {
   const row = db.prepare(`
-    SELECT MAX(created_at) as at FROM (
-      SELECT created_at FROM daily_reports WHERE tenant_id = ? AND id < ?
-      UNION ALL
-      SELECT created_at FROM cashier_shifts WHERE tenant_id = ? AND created_at <= ?
-    )
-  `).get(tenantId, report.id, tenantId, report.created_at) as any;
-  return { since: row?.at || EPOCH };
+    SELECT created_at, COALESCE(corrected_actual_balance, actual_balance) as actual_balance
+    FROM daily_reports WHERE tenant_id = ? AND id < ? ORDER BY created_at DESC, id DESC LIMIT 1
+  `).get(tenantId, report.id) as any;
+  return { since: row?.created_at || EPOCH, actualBalance: row ? row.actual_balance || 0 : 0 };
 }
 
 // Call after the id-offset fix and BEFORE any row is moved/deleted. With `input` (new flow) it
@@ -270,7 +292,7 @@ export function beginSettlement(tenantId: number, userId: number | null, date: s
   const now = nowStamp();
 
   if (input) {
-    const { actualBalance: opening, since } = lastRegisterClose(tenantId);
+    const { actualBalance: opening, since } = lastSettlementClose(tenantId);
     const snap = buildBreakdown(liveSource(tenantId), {
       periodStart: since, periodEnd: now, until: FAR_FUTURE, opening, shifts: liveShifts(tenantId),
     });
@@ -297,7 +319,7 @@ export function beginSettlement(tenantId: number, userId: number | null, date: s
     ORDER BY created_at DESC, id DESC LIMIT 1
   `).get(tenantId) as any;
   if (!recent) return { reportId: null, txIds, cashIds };
-  const { since } = closeBefore(tenantId, recent);
+  const { since } = settlementBefore(tenantId, recent);
   const snap = buildBreakdown(liveSource(tenantId), {
     periodStart: since, periodEnd: now, until: FAR_FUTURE, opening: recent.opening_balance || 0, shifts: liveShifts(tenantId),
   });
@@ -413,16 +435,19 @@ function legacyRecorded(report: any): any {
 function computeChanges(tenantId: number, report: any) {
   const snapshot = parseJson<Breakdown>(report.snapshot_json);
   const linked = hasLinkedRows(tenantId, report.id);
-  const empty = { changed: false, diffs: [] as any[], edited_invoices: [] as any[], late_payments: [] as any[] };
+  const empty = { changed: false, window_widened: false, diffs: [] as any[], edited_invoices: [] as any[], late_payments: [] as any[] };
   if (!linked) return { rebuilt: null as Breakdown | null, recorded: snapshot, changes: empty };
 
   const settledAt: string = report.settled_at || FAR_FUTURE;
-  let periodStart: string = report.period_start || snapshot?.period_start || "";
-  if (!periodStart) {
-    const prev = db.prepare("SELECT MAX(created_at) as at FROM daily_reports WHERE tenant_id = ? AND id < ?").get(tenantId, report.id) as any;
-    periodStart = prev?.at || EPOCH;
-  }
-  const opening = snapshot ? snapshot.register.opening : report.opening_balance || 0;
+  // The rebuild always covers the whole business day (since the previous settlement). Settlements
+  // closed before v1.7.1 recorded only the window since the last cashier Cash Out, so their register
+  // section left out every earlier cash movement — `window_widened` marks those, and their recorded
+  // Expected is not compared (it differs by design, not because anything changed after closing).
+  const prev = settlementBefore(tenantId, report);
+  const recordedStart: string = report.period_start || snapshot?.period_start || prev.since;
+  const periodStart = prev.since;
+  const window_widened = recordedStart > periodStart;
+  const opening = snapshot && !window_widened ? snapshot.register.opening : window_widened ? prev.actualBalance : report.opening_balance || 0;
   const rebuilt = buildBreakdown(archivedSource(tenantId, report.id), {
     periodStart, periodEnd: report.settled_at || report.created_at, until: settledAt, opening, shifts: snapshot?.shifts || [],
   });
@@ -430,6 +455,7 @@ function computeChanges(tenantId: number, report: any) {
   const diffs: any[] = [];
   if (snapshot) {
     for (const path of DIFF_PATHS) {
+      if (window_widened && path === "register.expected") continue;
       const rec = getPath(snapshot, path);
       const now = getPath(rebuilt, path);
       if (Math.abs(rec - now) > DIFF_TOLERANCE) diffs.push({ path, recorded: rec, rebuilt: now });
@@ -468,7 +494,7 @@ function computeChanges(tenantId: number, report: any) {
   return {
     rebuilt,
     recorded: snapshot,
-    changes: { changed: edited_invoices.length > 0 || diffs.length > 0, diffs, edited_invoices, late_payments },
+    changes: { changed: edited_invoices.length > 0 || diffs.length > 0, window_widened, diffs, edited_invoices, late_payments },
   };
 }
 
@@ -509,12 +535,16 @@ export function listDailyReports(tenantId: number) {
     (db.prepare("SELECT report_id, COUNT(*) as c FROM settlement_corrections WHERE tenant_id = ? GROUP BY report_id").all(tenantId) as any[])
       .map((r) => [r.report_id, r.c]),
   );
-  return reports.map((r) => ({
-    ...r,
-    ...effectiveFigures(r),
-    corrections_count: counts.get(r.id) || 0,
-    changed_after_close: computeChanges(tenantId, r).changes.changed,
-  }));
+  return reports.map((r) => {
+    const { changes } = computeChanges(tenantId, r);
+    return {
+      ...r,
+      ...effectiveFigures(r),
+      corrections_count: counts.get(r.id) || 0,
+      changed_after_close: changes.changed,
+      window_widened: changes.window_widened,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

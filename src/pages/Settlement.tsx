@@ -99,6 +99,7 @@ interface DailyReport {
   effective_difference?: number;
   corrections_count?: number;
   changed_after_close?: boolean;
+  window_widened?: boolean;
 }
 
 interface YearlyReport {
@@ -131,7 +132,12 @@ export default function Settlement() {
 
   const [dailyReports, setDailyReports] = useState<DailyReport[]>([]);
   const [yearlyReports, setYearlyReports] = useState<YearlyReport[]>([]);
-  const [summary, setSummary] = useState<Summary | null>(null);
+  // Two views of the same shared drawer: the current SHIFT (since the last Cash Out or settlement —
+  // what a Cash Out reconciles) and the whole business DAY (since the last settlement — what the
+  // End-of-Day Settlement reconciles).
+  const [shiftSummary, setShiftSummary] = useState<Summary | null>(null);
+  const [daySummary, setDaySummary] = useState<Summary | null>(null);
+  const [mode, setMode] = useState<'cashout' | 'settle'>(canCashOut ? 'cashout' : 'settle');
   const [users, setUsers] = useState<AppUser[]>([]);
   const parsedCashierId = parseInt(sessionStorage.getItem('currentCashierId') || '');
   const [selectedUserId, setSelectedUserId] = useState<number>(isNaN(parsedCashierId) ? 0 : parsedCashierId);
@@ -157,17 +163,19 @@ export default function Settlement() {
   const fetchData = useCallback(async () => {
     try {
       // Only ask for what this role may read — the rest would just be 403s.
-      const [dailyRes, yearlyRes, summaryRes, usersRes, shiftsRes, currenciesRes] = await Promise.all([
+      const [dailyRes, yearlyRes, summaryRes, daySummaryRes, usersRes, shiftsRes, currenciesRes] = await Promise.all([
         canView ? api.get<DailyReport[]>('/api/reports/daily') : Promise.resolve([] as DailyReport[]),
         canView ? api.get<YearlyReport[]>('/api/reports/yearly') : Promise.resolve([] as YearlyReport[]),
         showEndOfDay ? api.get<Summary>('/api/cash-flow/summary') : Promise.resolve(null),
+        canClose ? api.get<Summary>('/api/cash-flow/summary?scope=day') : Promise.resolve(null),
         api.get<AppUser[]>('/api/users'),
         showShifts ? api.get<CashierShift[]>('/api/tenant/cashier-shifts') : Promise.resolve([] as CashierShift[]),
         api.get<Currency[]>('/api/currencies'),
       ]);
       setDailyReports(dailyRes || []);
       setYearlyReports(yearlyRes || []);
-      setSummary(summaryRes || null);
+      setShiftSummary(summaryRes || null);
+      setDaySummary(daySummaryRes || null);
       if (usersRes) {
         setUsers(usersRes);
         setSelectedUserId((prev) => (usersRes.length > 0 && !prev ? usersRes[0].id : prev));
@@ -190,7 +198,7 @@ export default function Settlement() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canView, showEndOfDay, showShifts]);
+  }, [canView, canClose, showEndOfDay, showShifts]);
 
   useEffect(() => {
     if (ready) fetchData();
@@ -217,6 +225,12 @@ export default function Settlement() {
   }, [sessionUser?.id]);
   const selectedUser = users.find((u) => u.id === selectedUserId);
   const isAdmin = selectedUser?.role === 'admin';
+  // Admins land on the whole-day settlement view; anyone who can only cash out keeps the shift view.
+  const canSettle = canClose && isAdmin;
+  useEffect(() => {
+    if (ready) setMode(canSettle ? 'settle' : canCashOut ? 'cashout' : 'settle');
+  }, [ready, canSettle, canCashOut]);
+  const summary = mode === 'settle' ? daySummary : shiftSummary;
 
   const manualNet = summary ? summary.totalIn - summary.totalOut : 0;
 
@@ -253,7 +267,7 @@ export default function Settlement() {
     try {
       const data = await api.post<any>('/api/tenant/cashout', {
         user_id: selectedUserId,
-        opening_balance: summary?.openingBalance || 0,
+        opening_balance: shiftSummary?.openingBalance || 0, // informational — the server uses its own
         actual_cash: totalActualUSD,
         notes: buildNotesWithBreakdown(),
       });
@@ -281,6 +295,7 @@ export default function Settlement() {
 
   // Complete Settlement (Admin only): full archival + order number reset
   const handleDailySettlement = async () => {
+    const summary = daySummary;
     if (!canClose || !isAdmin || !summary) {
       toast.error(t('fin_stl_admin_required', 'Only admin users can perform a complete settlement.'));
       return;
@@ -407,6 +422,7 @@ export default function Settlement() {
           <span>{r.date}</span>
           {(r.corrections_count ?? 0) > 0 && <Badge variant="primary">{t('sd_badge_corrected', 'Corrected')}</Badge>}
           {r.changed_after_close && <Badge variant="warning">{t('sd_badge_changed', 'Changed after closing')}</Badge>}
+          {r.window_widened && <Badge variant="neutral">{t('sd_badge_partial_day', 'Partial day recorded')}</Badge>}
         </span>
       ),
     },
@@ -490,6 +506,21 @@ export default function Settlement() {
                 <CalendarCheck size={18} className="text-success" /> {t('fin_stl_end_of_day', 'End of Day')}
               </h2>
 
+              {canCashOut && canSettle && (
+                <div className="mb-4 flex gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 p-1 text-xs font-semibold">
+                  {([['cashout', t('fin_stl_mode_cashout', 'Current shift')], ['settle', t('fin_stl_mode_settle', 'Whole day')]] as const).map(([m, label]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => { setMode(m); setStep(1); }}
+                      className={['flex-1 cursor-pointer rounded-md py-1.5 uppercase tracking-[0.04em]', mode === m ? 'bg-primary text-on-primary' : 'text-text-3'].join(' ')}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* Stepper indicator */}
               <div className="mb-5 flex items-center gap-1">
                 {stepItems.map((s, i) => (
@@ -518,7 +549,11 @@ export default function Settlement() {
                 <div className="py-12 text-center text-sm italic text-text-3">{t('fin_loading', 'Loading…')}</div>
               ) : step === 1 ? (
                 <div className="flex flex-col gap-4">
-                  <p className="text-xs text-text-3">{t('fin_stl_step1_desc', 'Review today’s register activity before counting the drawer.')}</p>
+                  <p className="text-xs text-text-3">
+                    {mode === 'settle'
+                      ? t('fin_stl_step1_desc_day', 'The whole day since the last settlement, including every cashier shift. Count the whole drawer.')
+                      : t('fin_stl_step1_desc_shift', 'The current shift since the last cash out or settlement, for everyone using this drawer.')}
+                  </p>
                   <div className="rounded-[var(--radius-card)] border border-border bg-surface-2 p-4">
                     <span className="mb-1 block text-xs font-medium uppercase tracking-[0.04em] text-text-3">{t('fin_stl_expected_balance', 'Expected Balance')}</span>
                     <span className="num text-3xl font-bold text-text">{formatMoney(summary.expectedBalance, { code: 'USD', symbol: '$' })}</span>
@@ -620,7 +655,7 @@ export default function Settlement() {
                   </div>
 
                   <div className="flex flex-col gap-2 border-t border-border pt-4">
-                    {canCashOut && (
+                    {canCashOut && mode === 'cashout' && (
                       <>
                         <Button variant="secondary" loading={submittingCashOut} onClick={handleCashOut} className="w-full">
                           <LogOut size={16} /> {t('fin_stl_cash_out', 'Cash Out')}
@@ -629,7 +664,7 @@ export default function Settlement() {
                       </>
                     )}
 
-                    {!canClose ? null : isAdmin ? (
+                    {!canClose || (canCashOut && mode === 'cashout' && canSettle) ? null : isAdmin ? (
                       <>
                         <Button variant="success" loading={submittingSettlement} onClick={async () => {
                           const ok = await confirm({

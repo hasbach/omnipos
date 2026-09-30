@@ -29,7 +29,7 @@ import { resolveArchiveIdCollisions } from "./settlementIds.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
 import { setSessionUser } from "./permissions.js";
 import {
-  lastRegisterClose, computeRegisterSummary, parseSettlementBody, beginSettlement, finishSettlement,
+  computeRegisterSummary, parseRegisterScope, parseSettlementBody, beginSettlement, finishSettlement,
   listDailyReports, setupSettlementRoutes,
 } from "./settlement.js";
 import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
@@ -699,50 +699,25 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.post("/api/tenant/cashout", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const userId = tenantUserId(tenantId, req.body.user_id);
-    const { opening_balance, actual_cash, notes } = req.body;
+    const { notes } = req.body;
+    const actual_cash = Number(req.body.actual_cash) || 0;
 
     try {
       const today = localToday(); // calendar-day label stamped on the shift row, not a query filter
 
-      // Reconcile everything since the last close (Cash Out or Settlement), not just "today" — a
-      // register left open over several days must count all of it here, or a Cash Out done a few
-      // days in would silently drop the earlier days from ever being reconciled at all.
-      const { since } = lastRegisterClose(tenantId);
-
-      // Calculate this user's cash sales since the last close
-      const cashSales = db.prepare(`
-        SELECT IFNULL(SUM(p.amount / p.exchange_rate), 0) as total
-        FROM payments p JOIN transactions t ON p.transaction_id = t.id
-        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'sale' AND p.method = 'cash' AND p.created_at > ?
-      `).get(tenantId, userId, since) as any;
-
-      const cashRefunds = db.prepare(`
-        SELECT IFNULL(SUM(p.amount / p.exchange_rate), 0) as total
-        FROM payments p JOIN transactions t ON p.transaction_id = t.id
-        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'refund' AND p.method = 'cash' AND p.created_at > ?
-      `).get(tenantId, userId, since) as any;
-
-      const cashPurchases = db.prepare(`
-        SELECT IFNULL(SUM(p.amount / p.exchange_rate), 0) as total
-        FROM payments p JOIN transactions t ON p.transaction_id = t.id
-        WHERE t.tenant_id = ? AND t.user_id = ? AND t.type = 'purchase' AND p.method = 'cash' AND p.created_at > ?
-      `).get(tenantId, userId, since) as any;
-
-      // Cash in/out by this user
-      const cashFlow = db.prepare(`
-        SELECT
-          IFNULL(SUM(CASE WHEN type = 'in' THEN amount / exchange_rate ELSE 0 END), 0) as total_in,
-          IFNULL(SUM(CASE WHEN type = 'out' THEN amount / exchange_rate ELSE 0 END), 0) as total_out
-        FROM cash_flow WHERE tenant_id = ? AND user_id = ? AND created_at > ?
-      `).get(tenantId, userId, since) as any;
-
-      const sales = cashSales.total;
-      const refunds = cashRefunds.total;
-      const purchases = cashPurchases.total;
-      const cashIn = cashFlow.total_in;
-      const cashOut = cashFlow.total_out;
-      const openBal = opening_balance || 0;
-      const expectedCash = openBal + sales - refunds - purchases + cashIn - cashOut;
+      // Reconcile the WHOLE drawer since the last close (Cash Out or Settlement) — the same figure
+      // the Cash Out screen shows. The drawer is shared, so counting it against only this cashier's
+      // own sales made one shift look over and the next look short by the other users' movements
+      // (and any sales made before someone else's Cash Out dropped out of the later shift entirely).
+      // The opening balance is the server's own (the last counted close), never the client's.
+      const reg = computeRegisterSummary(tenantId, 'shift');
+      const sales = reg.totalSales;
+      const refunds = reg.totalRefunds;
+      const purchases = reg.totalPurchases;
+      const cashIn = reg.totalIn;
+      const cashOut = reg.totalOut;
+      const openBal = reg.openingBalance;
+      const expectedCash = reg.expectedBalance;
       const difference = actual_cash - expectedCash;
 
       db.prepare(`
@@ -751,7 +726,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(tenantId, userId, today, openBal, sales, refunds, purchases, cashIn, cashOut, expectedCash, actual_cash, difference, notes || '');
 
-      logAction(tenantId, userId, 'Cashier Cash Out', `Expected: ${expectedCash.toFixed(2)}, Actual: ${actual_cash}, Diff: ${difference.toFixed(2)}`);
+      logAction(tenantId, userId, 'Cashier Cash Out', `Expected: ${expectedCash.toFixed(2)}, Actual: ${actual_cash.toFixed(2)}, Diff: ${difference.toFixed(2)}`);
       res.json({ 
         success: true, 
         shift: { 
@@ -766,17 +741,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
   });
 
-  // Get today's cashier shifts
+  // The cashier shifts of the open business day. Settlement clears cashier_shifts, so every live row
+  // belongs to the current day — filtering by calendar date hid a shift closed after midnight (or the
+  // one before it) from the day it belongs to. ?date= still filters to one calendar day.
   app.get("/api/tenant/cashier-shifts", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const date = req.query.date || localToday();
+    const date = req.query.date;
     const shifts = db.prepare(`
       SELECT cs.*, u.name as user_name 
       FROM cashier_shifts cs 
       LEFT JOIN users u ON cs.user_id = u.id 
-      WHERE cs.tenant_id = ? AND cs.date = ?
-      ORDER BY cs.created_at ASC
-    `).all(tenantId, date);
+      WHERE cs.tenant_id = ? ${date ? "AND cs.date = ?" : ""}
+      ORDER BY cs.created_at ASC, cs.id ASC
+    `).all(...(date ? [tenantId, date] : [tenantId]));
     res.json(shifts);
   });
 
@@ -2339,7 +2316,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     // The register spans from the last close (Cash Out or Settlement) through now — see
     // lastRegisterClose() — not a calendar "today". The computation lives in server/settlement.ts
     // so the settlement snapshot and this live view can never drift apart.
-    res.json(computeRegisterSummary(req.session.tenantId));
+    // ?scope=day → since the last settlement (the admin's whole-day view); default = current shift.
+    res.json(computeRegisterSummary(req.session.tenantId, parseRegisterScope(req.query.scope)));
   });
 
   // POST /api/cash-flow, GET /api/cash-flow, the admin edit and the analytics live in server/cashFlow.ts.
