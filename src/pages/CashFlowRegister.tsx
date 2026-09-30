@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Banknote, PiggyBank, Receipt, ShoppingBag, Users, Wallet } from 'lucide-react';
 import {
   Button,
+  Combobox,
   DataTable,
   Field,
   Input,
@@ -48,6 +49,7 @@ interface Stakeholder {
   id: number;
   name: string;
   balance: number;
+  phone?: string | null;
 }
 
 // Only USD (rate 1) is safe as a hardcoded fallback — anything else must come from the tenant's
@@ -176,6 +178,28 @@ export default function CashFlowRegister() {
   const selectedStakeholder = stakeholders.find((s) => s.id === parseInt(balStakeholderId));
   const customersWithBalance = stakeholders.filter((s) => s.balance > 0.01);
   const suppliersWithBalance = stakeholders.filter((s) => s.balance < -0.01);
+  // Searchable party list: whoever has a balance in this direction first (with what's owed), then
+  // everyone else — each party once. Search matches the name (Arabic-variant insensitive) and phone.
+  const balanceOptions = useMemo(() => {
+    const first = balDirection === 'collect' ? customersWithBalance : suppliersWithBalance;
+    const firstIds = new Set(first.map((s) => s.id));
+    const usd = (n: number) => formatMoney(n, { code: 'USD', symbol: '$' });
+    return [
+      ...first.map((s) => ({
+        value: String(s.id),
+        label: partyDisplayName(s.name, t),
+        secondary: `${usd(Math.abs(s.balance))} ${s.balance > 0 ? t('fin_cfr_owed', 'owed to you') : t('fin_cfr_outstanding', 'you owe')}`,
+        keywords: [s.name, s.phone].filter(Boolean).join(' '),
+      })),
+      ...stakeholders.filter((s) => !firstIds.has(s.id)).map((s) => ({
+        value: String(s.id),
+        label: partyDisplayName(s.name, t),
+        secondary: usd(s.balance),
+        keywords: [s.name, s.phone].filter(Boolean).join(' '),
+      })),
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stakeholders, balDirection, t]);
 
   const openBalanceModal = (direction: 'collect' | 'pay') => {
     setBalDirection(direction);
@@ -417,17 +441,12 @@ export default function CashFlowRegister() {
           </div>
 
           <Field label={balDirection === 'collect' ? t('fin_cfr_customer', 'Customer') : t('fin_cfr_supplier', 'Supplier')}>
-            <Select
+            <Combobox
               value={balStakeholderId}
-              onChange={(e) => setBalStakeholderId(e.target.value)}
+              onChange={setBalStakeholderId}
               placeholder={balDirection === 'collect' ? t('fin_cfr_select_customer', 'Select customer…') : t('fin_cfr_select_supplier', 'Select supplier…')}
-              options={[
-                ...(balDirection === 'collect' ? customersWithBalance : suppliersWithBalance).map((s) => ({
-                  value: String(s.id),
-                  label: `${partyDisplayName(s.name, t)} — ${formatMoney(Math.abs(s.balance), { code: 'USD', symbol: '$' })} ${s.balance > 0 ? t('fin_cfr_owed', 'owed to you') : t('fin_cfr_outstanding', 'you owe')}`,
-                })),
-                ...stakeholders.map((s) => ({ value: String(s.id), label: `${partyDisplayName(s.name, t)} (${formatMoney(s.balance, { code: 'USD', symbol: '$' })})` })),
-              ]}
+              aria-label={balDirection === 'collect' ? t('fin_cfr_customer', 'Customer') : t('fin_cfr_supplier', 'Supplier')}
+              options={balanceOptions}
             />
             {selectedStakeholder && (
               <p className="mt-1 text-xs text-text-3">
