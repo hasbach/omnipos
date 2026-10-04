@@ -10,12 +10,25 @@ Feature design docs live in [docs/plans/](docs/plans/); release notes for 1.2.0 
 
 ## To do
 
-Nothing in the plan docs is recorded as deferred or left unfinished — every planned workstream shipped.
-Add new items here as they come up.
+Commerce & supply-chain track, from
+[OmniPOS_Marketplace_Supply_Chain_Master_Blueprint.md](OmniPOS_Marketplace_Supply_Chain_Master_Blueprint.md) §34.
+Each feature gets its own Spec Kit folder under `specs/` (spec → plan → tasks → implement).
 
-| # | Item | Notes / plan doc | Status |
-|---|------|------------------|--------|
-| 1 | _(add next feature or fix here)_ | | |
+| # | Item | Spec | Status |
+|---|------|------|--------|
+| 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) | Spec done, clarified — next: plan |
+| 002 | Tenant online store (activation, slug, branding, product publishing) | | Not started |
+| 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | | Not started |
+| 004 | Business-to-business relationships (request, approve, terms) | | Not started |
+| 005 | B2B wholesale storefront (customer pricing, units, minimums, reorder) | | Not started |
+| 006 | B2B order confirmation & fulfillment (partial, backorder, cancel) | | Not started |
+| 007 | Goods receiving & inventory integration | | Not started |
+| 008 | Commerce accounting integration (invoices, payments, allocation, aging) | | Not started |
+| 009 | Supply-chain commerce (manufacturer → importer → distributor → wholesaler → retailer) | | Not started |
+| 010 | Delivery & fulfillment (drivers, zones, fees, proof of delivery) | | Not started |
+| 011 | OmniPOS marketplace (business/product discovery) | | Not started |
+
+Other items: _(add fixes and ideas here)_
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —
