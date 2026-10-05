@@ -753,13 +753,23 @@ if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'balance_log_seed_v1'").
   try {
     db.exec(`
       INSERT INTO stakeholder_balance_log (tenant_id, stakeholder_id, source, delta, balance_before, balance_after)
-      SELECT s.tenant_id, s.id, 'opening', IFNULL(s.balance, 0), 0, IFNULL(s.balance, 0)
+      SELECT s.tenant_id, s.id, 'history_start', IFNULL(s.balance, 0), 0, IFNULL(s.balance, 0)
       FROM stakeholders s
       WHERE NOT EXISTS (SELECT 1 FROM stakeholder_balance_log l WHERE l.stakeholder_id = s.id AND l.tenant_id = s.tenant_id)
     `);
     db.prepare("INSERT INTO _migrations (name) VALUES ('balance_log_seed_v1')").run();
   } catch (e) {
     console.error('balance_log_seed_v1 error:', e);
+  }
+}
+// The seed rows used to be written as source 'opening'; rename them so the customer statement can tell
+// the one-time "history starts here" marker from a real opening balance (creation / import).
+if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'balance_log_history_start_v1'").get()) {
+  try {
+    db.exec("UPDATE stakeholder_balance_log SET source = 'history_start' WHERE source = 'opening' AND note IS NULL AND user_id IS NULL AND balance_before = 0");
+    db.prepare("INSERT INTO _migrations (name) VALUES ('balance_log_history_start_v1')").run();
+  } catch (e) {
+    console.error('balance_log_history_start_v1 error:', e);
   }
 }
 

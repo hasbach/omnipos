@@ -32,6 +32,7 @@ const SOURCE_LABELS: Record<string, [string, string]> = {
   import: ['bal_log_src_import', 'Import'],
   sync: ['bal_log_src_sync', 'Sync'],
   opening: ['bal_log_src_opening', 'Opening balance'],
+  history_start: ['bal_log_src_history_start', 'History start'],
   recalculation: ['bal_log_src_recalculation', 'Recalculation'],
   manual_edit: ['bal_log_src_manual_edit', 'Manual edit'],
 };

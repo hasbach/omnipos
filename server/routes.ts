@@ -1,5 +1,6 @@
 import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
+import { buildStatement } from "./statement.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
@@ -2243,100 +2244,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   });
 
   app.get("/api/reports/customer-statement/:id", authenticate, (req: any, res) => {
-    const tenantId = req.session.tenantId;
-    const stakeholderId = req.params.id;
-
-    // Get all transactions for this stakeholder, including any already moved to
-    // archived_transactions by End-of-Day settlement — a customer statement needs the full
-    // history, not just activity since the last settlement.
-    const transactions = db.prepare(`
-    SELECT t.*, u.name as user_name
-    FROM (
-      SELECT ${TX_LIVE_COLUMNS}, 0 as archived FROM transactions WHERE tenant_id = ? AND stakeholder_id = ?
-      UNION ALL
-      SELECT ${TX_ARCHIVED_COLUMNS}, 1 as archived FROM archived_transactions WHERE tenant_id = ? AND stakeholder_id = ?
-    ) t
-    LEFT JOIN users u ON t.user_id = u.id
-    ORDER BY t.created_at ASC
-  `).all(tenantId, stakeholderId, tenantId, stakeholderId) as any[];
-
-    const statement: any[] = [];
-    let runningBalance = 0;
-
-    for (const t of transactions) {
-      // 1. Add the transaction itself as a debit (for sales) or credit (for refunds/purchases)
-      // For a customer statement: Sale is Debit (+), Refund is Credit (-), Purchase is usually not for customers but let's handle it
-      let debit = 0;
-      let credit = 0;
-      let description = "";
-
-      if (t.type === 'sale') {
-        debit = t.total_amount;
-        description = `Invoice #${t.id}`;
-      } else if (t.type === 'refund') {
-        credit = t.total_amount;
-        description = `Refund #${t.id}`;
-      } else if (t.type === 'purchase') {
-        // If a customer is also a supplier? Usually separate, but let's say purchase decreases what they owe us? 
-        // Actually for a customer, a purchase from them is like a credit to their account.
-        credit = t.total_amount;
-        description = `Purchase #${t.id}`;
-      }
-
-      // Get items for this transaction to include in description
-      const itemsTable = t.archived ? "archived_transaction_items" : "transaction_items";
-      const items = db.prepare(`
-      SELECT ti.quantity, p.name
-      FROM ${itemsTable} ti
-      JOIN products p ON ti.product_id = p.id
-      WHERE ti.transaction_id = ?
-    `).all(t.id) as any[];
-
-      const itemsList = items.map(i => `${i.quantity}x ${i.name}`).join(', ');
-      if (itemsList) description += ` (${itemsList})`;
-
-      runningBalance += (debit - credit);
-
-      statement.push({
-        date: t.created_at,
-        type: t.type,
-        reference: `#${t.id}`,
-        description,
-        debit,
-        credit,
-        balance: runningBalance,
-        user: t.user_name
-      });
-
-      // 2. Add payments for this transaction as credits
-      const paymentsTable = t.archived ? "archived_payments" : "payments";
-      const payments = db.prepare(`
-      SELECT * FROM ${paymentsTable} WHERE transaction_id = ?
-    `).all(t.id) as any[];
-
-      for (const p of payments) {
-        const pRate = p.exchange_rate || 1;
-        const pCredit = p.amount / pRate; // USD value (p.amount is in the payment's own currency)
-        const pDebit = 0;
-        runningBalance -= pCredit;
-
-        statement.push({
-          date: p.created_at,
-          type: 'payment',
-          reference: `Pay for #${t.id}`,
-          description: `Payment (${p.method})`,
-          debit: pDebit,
-          credit: pCredit,
-          currency: p.currency || 'USD',
-          amount_original: p.amount,
-          exchange_rate: pRate,
-          balance: runningBalance,
-          user: t.user_name // Payment usually recorded by same user or we don't track user per payment in schema
-        });
-      }
-    }
-
-    res.json(statement);
+    // Events + reconciling opening line so the last running balance equals stakeholders.balance
+    // (server/statement.ts). Includes archived (settled) invoices.
+    res.json(buildStatement(req.session.tenantId, req.params.id));
   });
 
   // Cash Flow & Reports
