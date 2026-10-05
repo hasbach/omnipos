@@ -6,6 +6,8 @@ import { formatMoney, formatDateTime, stakeholderTypeLabel, partyDisplayName } f
 import { ReportToolbar } from './ReportToolbar';
 import { exportRowsToExcel, exportRowsToPdf, type ExportColumn } from './exportUtils';
 import type { CustomerStatementRow, StakeholderLite } from './types';
+import { originalAmountLabel } from './statementUtils';
+import { BalanceLogTable } from '../stakeholders/BalanceLogTable';
 
 export interface CustomerStatementTabProps {
   businessName: string;
@@ -23,12 +25,14 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
   const [internalId, setInternalId] = useState('');
   const [rows, setRows] = useState<CustomerStatementRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [currencies, setCurrencies] = useState<{ code: string; symbol: string; rate?: number }[]>([]);
 
   const id = selectedId !== undefined ? selectedId : internalId;
   const setId = onSelectedIdChange || setInternalId;
 
   useEffect(() => {
     api.get<StakeholderLite[]>('/api/stakeholders').then(setStakeholders).catch(() => {});
+    api.get<{ code: string; symbol: string; rate?: number }[]>('/api/currencies').then(setCurrencies).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -59,7 +63,16 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
     { key: 'type', header: t('rep_col_type', 'Type'), sortable: true, render: (r) => <Badge variant={TYPE_VARIANT[r.type] || 'neutral'}>{kindLabel(r.type)}</Badge> },
     { key: 'description', header: t('rep_col_description', 'Description') },
     { key: 'debit', header: t('rep_col_debit', 'Debit'), sortable: true, align: 'end', render: (r) => (r.debit ? usd(r.debit) : '—') },
-    { key: 'credit', header: t('rep_col_credit', 'Credit'), sortable: true, align: 'end', render: (r) => (r.credit ? usd(r.credit) : '—') },
+    { key: 'credit', header: t('rep_col_credit', 'Credit'), sortable: true, align: 'end', render: (r) => {
+        if (!r.credit) return '—';
+        const orig = originalAmountLabel(r, currencies);
+        return orig ? (
+          <div>
+            <div>{usd(r.credit)}</div>
+            <div className="text-[11px] text-text-3">{orig}</div>
+          </div>
+        ) : usd(r.credit);
+      } },
     { key: 'balance', header: t('rep_col_running_balance', 'Balance'), align: 'end', render: (r) => usd(r.balance) },
   ];
 
@@ -67,7 +80,7 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
     { key: 'date', header: t('rep_col_date', 'Date'), value: (r) => formatDateTime(r.date, lang) },
     { key: 'reference', header: t('rep_col_reference', 'Reference'), value: (r) => r.reference },
     { key: 'type', header: t('rep_col_type', 'Type'), value: (r) => kindLabel(r.type) },
-    { key: 'description', header: t('rep_col_description', 'Description'), value: (r) => r.description },
+    { key: 'description', header: t('rep_col_description', 'Description'), value: (r) => { const orig = originalAmountLabel(r, currencies); return orig ? `${r.description} — ${orig}` : r.description; } },
     { key: 'debit', header: t('rep_col_debit', 'Debit'), value: (r) => r.debit, align: 'right' },
     { key: 'credit', header: t('rep_col_credit', 'Credit'), value: (r) => r.credit, align: 'right' },
     { key: 'balance', header: t('rep_col_running_balance', 'Balance'), value: (r) => r.balance, align: 'right' },
@@ -113,6 +126,10 @@ export function CustomerStatementTab({ businessName, selectedId, onSelectedIdCha
             loading={loading}
             emptyTitle={t('rep_no_data', 'No activity found.')}
           />
+          <div className="pt-4 print:hidden">
+            <p className="mb-2 text-sm font-semibold text-text">{t('bal_log_title', 'Balance history')}</p>
+            <BalanceLogTable stakeholderId={id} />
+          </div>
         </div>
       )}
     </div>

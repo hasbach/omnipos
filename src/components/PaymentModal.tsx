@@ -1,4 +1,5 @@
 import React from 'react';
+import { clampMoneyInput } from '../lib/money';
 import { searchProducts, MAX_SUGGESTIONS } from '../lib/productSearch';
 import {
   Search, User, CreditCard, Banknote, Package, Plus, Minus, Trash2, ArrowRight,
@@ -601,7 +602,7 @@ export default function PaymentModal() {
                       placeholder={t('pos_amount_in', 'Amount in {code}', { code: paymentCurrency.code })}
                       className="w-full p-4 min-h-[52px] bg-bg border border-border rounded-xl font-mono text-xl outline-none focus:border-primary transition-all num text-text"
                       value={paymentAmount}
-                      onChange={(e) => setPaymentAmount(e.target.value)}
+                      onChange={(e) => setPaymentAmount(clampMoneyInput(e.target.value))}
                     />
                     <button
                       onClick={() => {
@@ -696,7 +697,7 @@ export default function PaymentModal() {
               placeholder={t('pos_enter_amount', 'Enter amount...')}
               className="font-mono text-xl num"
               value={paymentAmount}
-              onChange={e => setPaymentAmount(e.target.value)}
+              onChange={e => setPaymentAmount(clampMoneyInput(e.target.value))}
             />
           </Field>
 

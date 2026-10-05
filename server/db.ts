@@ -730,6 +730,39 @@ if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'archived_balance_recove
   }
 }
 
+// Stakeholder balance changelog (additive audit trail, local only — not cloud-synced). Rows are
+// written by server/balance.ts whenever a persisted balance changes. Seed ONE opening row per
+// stakeholder that has no history so the chain starts at today's balance (read-only w.r.t. balances).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stakeholder_balance_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    stakeholder_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    source TEXT NOT NULL,
+    reference_id INTEGER,
+    delta REAL NOT NULL,
+    balance_before REAL NOT NULL,
+    balance_after REAL NOT NULL,
+    user_id INTEGER,
+    note TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_sbl_tenant_stakeholder ON stakeholder_balance_log(tenant_id, stakeholder_id, id);
+`);
+if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'balance_log_seed_v1'").get()) {
+  try {
+    db.exec(`
+      INSERT INTO stakeholder_balance_log (tenant_id, stakeholder_id, source, delta, balance_before, balance_after)
+      SELECT s.tenant_id, s.id, 'opening', IFNULL(s.balance, 0), 0, IFNULL(s.balance, 0)
+      FROM stakeholders s
+      WHERE NOT EXISTS (SELECT 1 FROM stakeholder_balance_log l WHERE l.stakeholder_id = s.id AND l.tenant_id = s.tenant_id)
+    `);
+    db.prepare("INSERT INTO _migrations (name) VALUES ('balance_log_seed_v1')").run();
+  } catch (e) {
+    console.error('balance_log_seed_v1 error:', e);
+  }
+}
+
 // Historical lines predate the unit_cost snapshot; the product's current cost is the best available
 // estimate. Done ONCE so later cost changes never rewrite history.
 if (!db.prepare("SELECT 1 FROM _migrations WHERE name = 'unit_cost_backfill_v1'").get()) {

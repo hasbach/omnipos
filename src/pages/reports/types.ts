@@ -189,6 +189,10 @@ export interface CustomerStatementRow {
   description: string;
   debit: number;
   credit: number;
+  /** Payment rows: the payment's own currency + original amount (credit is always USD). */
+  currency?: string;
+  amount_original?: number;
+  exchange_rate?: number;
   balance: number;
   user: string | null;
 }

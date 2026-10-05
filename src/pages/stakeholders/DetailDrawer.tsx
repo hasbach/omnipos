@@ -7,6 +7,8 @@ import { api } from '../../lib/api';
 import { formatDate, formatDateTime, formatMoney, transactionTypeLabel, partyDisplayName } from '../../lib/format';
 import { useSettings } from '../../lib/useSettings';
 import type { Currency, Stakeholder } from '../../types';
+import { originalAmountLabel } from '../reports/statementUtils';
+import { BalanceLogTable } from './BalanceLogTable';
 
 export interface DetailDrawerProps {
   open: boolean;
@@ -27,6 +29,9 @@ interface StatementRow {
   description: string;
   debit: number;
   credit: number;
+  currency?: string;
+  amount_original?: number;
+  exchange_rate?: number;
   balance: number;
   user?: string;
   _idx?: number;
@@ -114,7 +119,16 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
     { key: 'reference', header: t('stk_statement_col_ref') },
     { key: 'description', header: t('stk_statement_col_desc') },
     { key: 'debit', header: t('stk_statement_col_debit'), align: 'end', render: (r) => (r.debit ? formatMoney(r.debit, usd) : '—') },
-    { key: 'credit', header: t('stk_statement_col_credit'), align: 'end', render: (r) => (r.credit ? formatMoney(r.credit, usd) : '—') },
+    { key: 'credit', header: t('stk_statement_col_credit'), align: 'end', render: (r) => {
+        if (!r.credit) return '—';
+        const orig = originalAmountLabel(r, currencies);
+        return orig ? (
+          <div>
+            <div>{formatMoney(r.credit, usd)}</div>
+            <div className="text-[11px] text-text-3">{orig}</div>
+          </div>
+        ) : formatMoney(r.credit, usd);
+      } },
     { key: 'balance', header: t('stk_statement_col_balance'), align: 'end', render: (r) => formatMoney(r.balance, usd) },
   ];
 
@@ -149,7 +163,7 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
           head: [[t('stk_statement_col_date'), t('stk_statement_col_desc'), t('stk_statement_col_debit'), t('stk_statement_col_credit'), t('stk_statement_col_balance')]],
           body: statement.map((r) => [
             formatDate(r.date, lang),
-            r.description,
+            (() => { const orig = originalAmountLabel(r, currencies); return orig ? `${r.description} — ${orig}` : r.description; })(),
             r.debit ? formatMoney(r.debit, usd, { hideCurrency: false }) : '',
             r.credit ? formatMoney(r.credit, usd) : '',
             formatMoney(r.balance, usd),
@@ -204,6 +218,7 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
           items={[
             { value: 'summary', label: t('stk_detail_tab_summary') },
             { value: 'statement', label: t('stk_detail_tab_statement') },
+            { value: 'balance_log', label: t('bal_log_tab', 'Balance history') },
             { value: 'invoices', label: t('stk_detail_tab_invoices') },
           ]}
         />
@@ -302,6 +317,8 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
             )}
           </div>
         )}
+
+        {tab === 'balance_log' && <BalanceLogTable stakeholderId={stakeholder.id} />}
 
         {tab === 'invoices' && (
           <div>

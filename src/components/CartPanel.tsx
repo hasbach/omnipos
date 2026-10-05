@@ -13,6 +13,7 @@ import { usePermissions } from '../lib/usePermissions';
 import { usePosLayout } from '../hooks/usePosLayout';
 import PosLayoutMenu from './PosLayoutMenu';
 import { searchProducts, MAX_SUGGESTIONS } from '../lib/productSearch';
+import { clampMoneyInput } from '../lib/money';
 
 export default function CartPanel() {
   const pos = usePosContext();
@@ -382,7 +383,7 @@ export default function CartPanel() {
                         type="number"
                         className="flex-1 h-9 rounded-[var(--radius-input)] border border-border bg-surface px-3 text-sm num text-text outline-none focus:border-primary"
                         value={discountDraft.value}
-                        onChange={(e) => setDiscountDraft(d => ({ ...d, value: e.target.value }))}
+                        onChange={(e) => setDiscountDraft(d => ({ ...d, value: d.type === 'fixed' ? clampMoneyInput(e.target.value) : e.target.value }))}
                         onKeyDown={(e) => { if (e.key === 'Enter') saveDiscountEditor(); if (e.key === 'Escape') setDiscountEditorId(null); }}
                       />
                       <button onClick={saveDiscountEditor} className="px-3 h-9 bg-primary text-on-primary rounded-[var(--radius-input)] text-xs font-bold cursor-pointer">{t('save', 'Save')}</button>
@@ -399,7 +400,7 @@ export default function CartPanel() {
                         type="number"
                         className="flex-1 h-9 rounded-[var(--radius-input)] border border-border bg-surface px-3 text-sm num text-text outline-none focus:border-primary"
                         value={priceDraft}
-                        onChange={(e) => setPriceDraft(e.target.value)}
+                        onChange={(e) => setPriceDraft(clampMoneyInput(e.target.value))}
                         onFocus={(e) => e.target.select()}
                         onKeyDown={(e) => { if (e.key === 'Enter') savePriceEditor(item); if (e.key === 'Escape') setPriceEditorId(null); }}
                       />
@@ -461,7 +462,7 @@ export default function CartPanel() {
                     type="number"
                     className="w-14 bg-transparent border-none text-xs font-mono font-bold focus:ring-0 p-0 num text-text"
                     value={globalDiscount.value}
-                    onChange={(e) => setGlobalDiscount((prev: any) => ({ ...prev, value: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setGlobalDiscount((prev: any) => ({ ...prev, value: parseFloat(prev.type === 'fixed' ? clampMoneyInput(e.target.value) : e.target.value) || 0 }))}
                   />
                 </div>
               </div>}

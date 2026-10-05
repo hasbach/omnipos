@@ -1,5 +1,6 @@
 import React, { forwardRef } from 'react';
 import { Input, type InputProps } from './Input';
+import { clampMoneyInput, roundMoney } from '../../lib/money';
 
 export interface MoneyInputProps extends Omit<InputProps, 'type' | 'onChange' | 'value' | 'startAdornment' | 'endAdornment'> {
   value: number | '';
@@ -10,9 +11,9 @@ export interface MoneyInputProps extends Omit<InputProps, 'type' | 'onChange' | 
   step?: number;
 }
 
-/** Money input: currency suffix/prefix, tabular right-aligned figures, select-all-on-focus. */
+/** Money input (max 2 decimals in any currency): currency suffix/prefix, tabular right-aligned figures, select-all-on-focus. */
 export const MoneyInput = forwardRef<HTMLInputElement, MoneyInputProps>(function MoneyInput(
-  { value, onChange, currencySymbol, className = '', onFocus, step = 0.01, ...rest },
+  { value, onChange, currencySymbol, className = '', onFocus, onBlur, step = 0.01, ...rest },
   ref,
 ) {
   return (
@@ -29,8 +30,15 @@ export const MoneyInput = forwardRef<HTMLInputElement, MoneyInputProps>(function
         onFocus?.(e);
       }}
       onChange={(e) => {
-        const raw = e.target.value;
+        const raw = clampMoneyInput(e.target.value);
         onChange(raw === '' ? 0 : Number(raw));
+      }}
+      onBlur={(e) => {
+        if (value !== '' && Number.isFinite(value)) {
+          const r = roundMoney(value);
+          if (r !== value) onChange(r);
+        }
+        onBlur?.(e);
       }}
       {...rest}
     />

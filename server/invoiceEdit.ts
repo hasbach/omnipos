@@ -503,11 +503,12 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     const after = db.prepare(`SELECT * FROM ${txTable} WHERE id = ? AND tenant_id = ?`).get(id, tenantId) as any;
 
     // --- Balances. ---
+    const editCtx = { source: 'invoice_edit', reference_id: Number(id), user_id: editUserId, note: body.reason || null };
     if (!archived) {
       // Live: the balance is derived fresh from transactions + baseline — just recompute both the
       // old and new stakeholder (if the invoice moved to a different one).
-      if (oldStakeholderId) recomputeStakeholderBalance(oldStakeholderId, tenantId);
-      if (resolvedStakeholderId && resolvedStakeholderId !== oldStakeholderId) recomputeStakeholderBalance(resolvedStakeholderId, tenantId);
+      if (oldStakeholderId) recomputeStakeholderBalance(oldStakeholderId, tenantId, editCtx);
+      if (resolvedStakeholderId && resolvedStakeholderId !== oldStakeholderId) recomputeStakeholderBalance(resolvedStakeholderId, tenantId, editCtx);
     } else {
       // Archived: this invoice's effect is banked into balance_baseline (it isn't summed live
       // anymore), so adjust the baseline by the delta between its effect before and after this
@@ -531,12 +532,12 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       if (oldStakeholderId) {
         db.prepare("UPDATE stakeholders SET balance_baseline = IFNULL(balance_baseline, 0) - ? WHERE id = ? AND tenant_id = ?")
           .run(oldEffect, oldStakeholderId, tenantId);
-        recomputeStakeholderBalance(oldStakeholderId, tenantId);
+        recomputeStakeholderBalance(oldStakeholderId, tenantId, editCtx);
       }
       if (resolvedStakeholderId) {
         db.prepare("UPDATE stakeholders SET balance_baseline = IFNULL(balance_baseline, 0) + ? WHERE id = ? AND tenant_id = ?")
           .run(newEffect, resolvedStakeholderId, tenantId);
-        recomputeStakeholderBalance(resolvedStakeholderId, tenantId);
+        recomputeStakeholderBalance(resolvedStakeholderId, tenantId, editCtx);
       }
     }
 

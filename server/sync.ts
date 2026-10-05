@@ -312,7 +312,7 @@ async function runSyncCycleInner() {
   await pullFromCloud(session.client, session.localId, session.globalId);
   // A pull may have changed transactions/payments without going through the local write paths,
   // so re-derive balances from the freshly-synced data (see server/balance.ts).
-  recomputeAllBalances(session.localId);
+  recomputeAllBalances(session.localId, { source: 'sync' });
 }
 
 /**
@@ -327,7 +327,7 @@ async function forceInitialSyncInner() {
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   console.log('⚡ [SYNC] Forcing initial pull for tenant...');
   await pullFromCloud(session.client, session.localId, session.globalId);
-  recomputeAllBalances(session.localId);
+  recomputeAllBalances(session.localId, { source: 'sync' });
   console.log('⚡ [SYNC] Initial pull complete.');
 }
 

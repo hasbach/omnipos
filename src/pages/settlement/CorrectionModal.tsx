@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { clampMoneyInput } from '../../lib/money';
 import { ShieldCheck } from 'lucide-react';
 import { Button, Field, Input, Modal, Select, Tabs, Textarea, useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
@@ -176,7 +177,7 @@ export function CorrectionModal({ open, onClose, reportId, detail, currencies, o
                   value={counts[l.currency] ?? ''}
                   onFocus={(e) => e.target.select()}
                   onChange={(e) => {
-                    setCounts((prev) => ({ ...prev, [l.currency]: e.target.value }));
+                    setCounts((prev) => ({ ...prev, [l.currency]: clampMoneyInput(e.target.value) }));
                     clearError(`count:${l.currency}`);
                   }}
                 />
@@ -209,7 +210,7 @@ export function CorrectionModal({ open, onClose, reportId, detail, currencies, o
                   invalid={!!errors.amount}
                   value={amount}
                   onChange={(e) => {
-                    setAmount(e.target.value);
+                    setAmount(clampMoneyInput(e.target.value));
                     clearError('amount');
                   }}
                 />

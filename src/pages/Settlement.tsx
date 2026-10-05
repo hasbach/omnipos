@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { clampMoneyInput } from '../lib/money';
 import {
   Calculator,
   CalendarCheck,
@@ -602,7 +603,7 @@ export default function Settlement() {
                           className="num h-10 w-full rounded-[var(--radius-input)] border border-border bg-surface px-3 text-end text-lg outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                           value={actualBalances[c.code] ?? ''}
                           onFocus={(e) => e.target.select()}
-                          onChange={(e) => setActualBalances((prev) => ({ ...prev, [c.code]: e.target.value }))}
+                          onChange={(e) => setActualBalances((prev) => ({ ...prev, [c.code]: clampMoneyInput(e.target.value) }))}
                         />
                       )}
                     </div>

@@ -1,6 +1,6 @@
 import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
-import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect } from "./balance.js";
+import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
 import { forceInitialSync } from "./sync.js";
@@ -1140,6 +1140,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // so any starting balance is stored as the baseline.
       const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0, normalizeLevel(price_level), credit_limit || null);
+      if (balance && Math.abs(Number(balance)) > 0.0000001) {
+        writeBalanceLog(Number(result.lastInsertRowid), tenantId, 0, Number(balance), { source: 'opening', user_id: tenantUserId(tenantId, req.body.user_id), note: 'Opening balance at creation' });
+      }
       logAction(tenantId, 1, 'Stakeholder Created', `Name: ${name}, Type: ${type}`);
       res.json({ id: result.lastInsertRowid });
     } catch (err: any) {
@@ -1163,7 +1166,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     if (balance !== undefined && balance !== null) {
       const effect = stakeholderTxEffect(Number(req.params.id), tenantId);
       db.prepare("UPDATE stakeholders SET balance_baseline = ? WHERE id = ? AND tenant_id = ?").run(Number(balance) - effect, req.params.id, tenantId);
-      recomputeStakeholderBalance(Number(req.params.id), tenantId);
+      recomputeStakeholderBalance(Number(req.params.id), tenantId, { source: 'manual_edit', user_id: tenantUserId(tenantId, req.body.user_id), note: 'Balance edited manually' });
     }
     logAction(tenantId, 1, 'Stakeholder Updated', `ID: ${req.params.id}, Name: ${name}, Type: ${type}`);
     res.json({ success: true });
@@ -1197,7 +1200,13 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       VALUES (?, ?, ?, ?, ?)
     `).run(transactionId, amount, method, currency, exchange_rate);
 
-      recomputeStakeholderBalance(stakeholder_id, tenantId);
+      const stk = db.prepare("SELECT type FROM stakeholders WHERE id = ? AND tenant_id = ?").get(stakeholder_id, tenantId) as any;
+      recomputeStakeholderBalance(stakeholder_id, tenantId, {
+        source: stk?.type === 'supplier' ? 'supplier_payment' : 'balance_collection',
+        reference_id: Number(transactionId),
+        user_id: debtUserId,
+        note: `${amount} ${currency || 'USD'} via ${method || 'cash'}`,
+      });
       return transactionId;
     });
 
@@ -1649,7 +1658,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       // Balance is derived, not nudged: recompute it from this stakeholder's transactions +
       // baseline now that the new transaction and its payments are in place.
       if (resolvedStakeholderId) {
-        recomputeStakeholderBalance(resolvedStakeholderId, tenantId);
+        recomputeStakeholderBalance(resolvedStakeholderId, tenantId, { source: type, reference_id: Number(transactionId), user_id: resolvedUserId });
       }
 
       return transactionId;
@@ -1741,7 +1750,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       // Balance is derived — recompute from the stakeholder's REMAINING transactions.
       if (tx.stakeholder_id) {
-        recomputeStakeholderBalance(tx.stakeholder_id, tenantId);
+        recomputeStakeholderBalance(tx.stakeholder_id, tenantId, { source: 'invoice_delete', reference_id: Number(id), user_id: tenantUserId(tenantId, req.body?.user_id), note: `Deleted ${tx.type} #${id}` });
       }
     });
 
@@ -2218,6 +2227,21 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
   });
 
+  // Balance changelog for one stakeholder (newest first). Written by server/balance.ts.
+  app.get("/api/stakeholders/:id/balance-log", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || "500"), 10) || 500, 1), 5000);
+    const rows = db.prepare(`
+      SELECT l.id, l.stakeholder_id, l.created_at, l.source, l.reference_id, l.delta, l.balance_before, l.balance_after,
+             l.user_id, l.note, u.name AS user_name
+      FROM stakeholder_balance_log l
+      LEFT JOIN users u ON u.id = l.user_id
+      WHERE l.tenant_id = ? AND l.stakeholder_id = ?
+      ORDER BY l.id DESC LIMIT ?
+    `).all(tenantId, req.params.id, limit);
+    res.json(rows);
+  });
+
   app.get("/api/reports/customer-statement/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const stakeholderId = req.params.id;
@@ -2291,7 +2315,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     `).all(t.id) as any[];
 
       for (const p of payments) {
-        const pCredit = p.amount;
+        const pRate = p.exchange_rate || 1;
+        const pCredit = p.amount / pRate; // USD value (p.amount is in the payment's own currency)
         const pDebit = 0;
         runningBalance -= pCredit;
 
@@ -2302,6 +2327,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
           description: `Payment (${p.method})`,
           debit: pDebit,
           credit: pCredit,
+          currency: p.currency || 'USD',
+          amount_original: p.amount,
+          exchange_rate: pRate,
           balance: runningBalance,
           user: t.user_name // Payment usually recorded by same user or we don't track user per payment in schema
         });
@@ -2339,17 +2367,18 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const amountUSD = amount / (exchange_rate || 1);
     const cur = currency || 'USD';
     const exRate = exchange_rate || 1;
+    const bpNote = `${amount} ${cur}`;
 
     const balancePayment = db.transaction(() => {
       // A balance collection/payment isn't tied to a transaction, so it moves the derived balance
       // toward zero via the stakeholder's BASELINE (negative = owes, so a payment adds toward 0).
       if (direction === 'collect') {
-        adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD);
+        adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD, { source: 'balance_collection', user_id: userId, note: bpNote });
         db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty) VALUES (?, ?, 'in', ?, ?, ?, ?, 'customer_collection', ?)")
           .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`, stakeholder.name);
       } else {
         // Paying a supplier → reduce their outstanding (move toward zero), cash goes out
-        adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD);
+        adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD, { source: 'supplier_payment', user_id: userId, note: bpNote });
         db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty) VALUES (?, ?, 'out', ?, ?, ?, ?, 'supplier_payment', ?)")
           .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`, stakeholder.name);
       }

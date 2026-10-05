@@ -6,6 +6,7 @@ import {
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney, formatBalance, parseServerDate, partyDisplayName } from '../../lib/format';
+import { clampMoneyInput } from '../../lib/money';
 import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, uomUnitPrice, type PriceLevel } from '../../lib/pricing';
@@ -46,7 +47,7 @@ const EntryMoneyInput = forwardRef<HTMLInputElement, EntryMoneyInputProps>(funct
       onFocus={(e) => { e.target.select(); onFocus?.(e); }}
       onBlur={(e) => { setDraft(null); onBlur?.(e); }}
       onChange={(e) => {
-        const raw = e.target.value;
+        const raw = clampMoneyInput(e.target.value);
         setDraft(raw);
         onUsdChange(raw === '' ? 0 : Number(raw) / (rate || 1));
       }}
