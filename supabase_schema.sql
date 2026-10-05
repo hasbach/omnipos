@@ -55,11 +55,14 @@ CREATE TABLE public.product_barcodes (
     global_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     local_id INTEGER,
     product_id UUID REFERENCES public.products(global_id),
-    barcode TEXT UNIQUE NOT NULL,
+    -- Not UNIQUE: rows are soft-deleted, and uniqueness is per tenant (enforced by the desktop app).
+    barcode TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now(),
     deleted_at TIMESTAMP
 );
+CREATE INDEX idx_product_barcodes_barcode ON public.product_barcodes (barcode);
+CREATE INDEX idx_product_barcodes_product ON public.product_barcodes (product_id);
 
 CREATE TABLE public.stakeholders (
     global_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

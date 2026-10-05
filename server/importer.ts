@@ -8,6 +8,7 @@
 // translating them for display. `message` is a plain-English fallback for logs/CSV export.
 import { db, logAction } from "./db.js";
 import { recomputeStakeholderBalance, writeBalanceLog } from "./balance.js";
+import { setExtraBarcodes } from "./barcodes.js";
 
 type Entity = "products" | "customers" | "suppliers";
 type Mode = "create_only" | "upsert";
@@ -245,7 +246,7 @@ function findProductByBarcode(tenantId: number, barcode: string): any {
   if (byPrimary) return byPrimary;
   return db
     .prepare(
-      "SELECT p.* FROM product_barcodes pb JOIN products p ON p.id = pb.product_id WHERE pb.barcode = ? AND p.tenant_id = ?"
+      "SELECT p.* FROM product_barcodes pb JOIN products p ON p.id = pb.product_id WHERE pb.barcode = ? AND p.tenant_id = ? AND pb.deleted_at IS NULL"
     )
     .get(barcode, tenantId);
 }
@@ -536,12 +537,10 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
       price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
   const insertAdjustment = db.prepare(
     "INSERT INTO stock_adjustments (tenant_id, product_id, user_id, qty_before, qty_after, delta, reason, unit_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   );
   const updateStock = db.prepare("UPDATE products SET stock = ? WHERE id = ? AND tenant_id = ?");
-  const deleteBarcodes = db.prepare("DELETE FROM product_barcodes WHERE product_id = ?");
 
   for (const plan of plans) {
     if (plan.action === "create" && plan.data) {
@@ -552,9 +551,7 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
         d.price_wholesale, d.price_wholesale_lbp, d.price_super_wholesale, d.price_super_wholesale_lbp, d.min_price, d.active ? 1 : 0
       );
       const productId = Number(result.lastInsertRowid);
-      for (const bc of d.extraBarcodes) {
-        try { insertBarcode.run(productId, bc); } catch { /* stray duplicate within row — ignore */ }
-      }
+      setExtraBarcodes(tenantId, productId, d.extraBarcodes);
       if (d.stock > 0) {
         insertAdjustment.run(tenantId, productId, userId, 0, d.stock, d.stock, "Import: opening stock", d.cost ?? null);
       }
@@ -593,10 +590,7 @@ function executeProducts(tenantId: number, userId: number | null, body: ImportBo
         upsertPackUnit(tenantId, plan.existingId, pf.has("package_barcode") ? d.package_barcode : undefined);
       }
       if (pf.has("barcodes")) {
-        deleteBarcodes.run(plan.existingId);
-        for (const bc of d.extraBarcodes) {
-          try { insertBarcode.run(plan.existingId, bc); } catch { /* ignore */ }
-        }
+        setExtraBarcodes(tenantId, plan.existingId, d.extraBarcodes);
       }
       if (pf.has("stock")) {
         const current = db.prepare("SELECT stock FROM products WHERE id = ? AND tenant_id = ?").get(plan.existingId, tenantId) as any;

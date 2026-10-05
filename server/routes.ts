@@ -34,6 +34,7 @@ import {
   listDailyReports, setupSettlementRoutes,
 } from "./settlement.js";
 import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
+import { setExtraBarcodes } from "./barcodes.js";
 
 // The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
 // can't use it directly — translate it to the real address backing that Auth user (kept in
@@ -763,7 +764,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   function loadProductsWithBarcodesAndUnits(tenantId: number): any[] {
     const products = db.prepare("SELECT * FROM products WHERE tenant_id = ?").all(tenantId) as any[];
     const extraRows = db.prepare(
-      "SELECT pb.product_id, pb.barcode FROM product_barcodes pb JOIN products p ON p.id = pb.product_id WHERE p.tenant_id = ? ORDER BY pb.id"
+      "SELECT pb.product_id, pb.barcode FROM product_barcodes pb JOIN products p ON p.id = pb.product_id WHERE p.tenant_id = ? AND pb.deleted_at IS NULL ORDER BY pb.id"
     ).all(tenantId) as any[];
     const extraByProduct = new Map<number, string[]>();
     for (const r of extraRows) {
@@ -798,8 +799,6 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-    const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
-
     const transaction = db.transaction((prods) => {
       for (const p of prods) {
         const barcodes = p.barcodes || [p.barcode].filter(Boolean);
@@ -827,15 +826,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
         const productId = result.lastInsertRowid;
 
-        if (barcodes.length > 1) {
-          for (let i = 1; i < barcodes.length; i++) {
-            try {
-              insertBarcode.run(productId, barcodes[i]);
-            } catch (e) {
-              // Skip duplicate barcodes for bulk import
-            }
-          }
-        }
+        // Barcodes already live on another product are skipped for bulk import.
+        setExtraBarcodes(tenantId, Number(productId), barcodes.slice(1));
       }
     });
 
@@ -864,9 +856,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     assertBarcodesFree(tenantId, isNew ? null : productId, ownBarcodes, units || []);
 
     db.prepare("UPDATE products SET barcode = ? WHERE id = ? AND tenant_id = ?").run(ownBarcodes[0] ?? null, productId, tenantId);
-    db.prepare("DELETE FROM product_barcodes WHERE product_id = ?").run(productId);
-    const insertBarcode = db.prepare("INSERT INTO product_barcodes (product_id, barcode) VALUES (?, ?)");
-    for (let i = 1; i < ownBarcodes.length; i++) insertBarcode.run(productId, ownBarcodes[i]);
+    setExtraBarcodes(tenantId, productId, ownBarcodes.slice(1));
 
     if (units) {
       const saved = saveProductUnits(tenantId, productId, units);
@@ -1015,7 +1005,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     let product = db.prepare("SELECT * FROM products WHERE barcode = ? AND tenant_id = ?").get(query, tenantId) as any;
 
     if (!product) {
-      const extra = db.prepare("SELECT pb.product_id FROM product_barcodes pb JOIN products p ON pb.product_id = p.id WHERE pb.barcode = ? AND p.tenant_id = ?").get(query, tenantId) as any;
+      const extra = db.prepare("SELECT pb.product_id FROM product_barcodes pb JOIN products p ON pb.product_id = p.id WHERE pb.barcode = ? AND p.tenant_id = ? AND pb.deleted_at IS NULL").get(query, tenantId) as any;
       if (extra) {
         product = db.prepare("SELECT * FROM products WHERE id = ?").get(extra.product_id);
       }
@@ -1046,7 +1036,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
 
     if (product) {
-      const extraBarcodes = db.prepare("SELECT barcode FROM product_barcodes WHERE product_id = ?").all(product.id).map((b: any) => b.barcode);
+      const extraBarcodes = db.prepare("SELECT barcode FROM product_barcodes WHERE product_id = ? AND deleted_at IS NULL").all(product.id).map((b: any) => b.barcode);
       res.json({
         ...product,
         barcodes: [product.barcode, ...extraBarcodes].filter(Boolean),

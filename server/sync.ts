@@ -102,6 +102,37 @@ function noteMissingCloudTable(tableName: string) {
   console.warn(`⚠️ [SYNC] Cloud has no '${tableName}' table yet — skipping it until the cloud schema is migrated.`);
 }
 
+// A table whose push keeps failing (rows the cloud rejects every time) is retried with exponential
+// backoff instead of every cycle, so one bad row can't hammer the cloud with a request per row every
+// 10 seconds. Cleared by the first fully successful push; reset on restart.
+const MAX_PUSH_BACKOFF_MS = 10 * 60 * 1000;
+const pushBackoff: Record<string, { failures: number; until: number }> = {};
+function notePushFailure(tableName: string) {
+  const failures = (pushBackoff[tableName]?.failures || 0) + 1;
+  const delay = Math.min(SYNC_INTERVAL_MS * 2 ** failures, MAX_PUSH_BACKOFF_MS);
+  pushBackoff[tableName] = { failures, until: Date.now() + delay };
+  console.warn(`⏳ [SYNC] ${tableName}: push failed ${failures}x — next attempt in ${Math.round(delay / 1000)}s`);
+}
+
+// Extra barcodes are soft-deleted (server/barcodes.ts), but rows written by older versions were hard-
+// deleted locally and stayed live in the cloud. Before pushing live barcodes, mark any OTHER live cloud
+// row with the same barcode as deleted (RLS limits this to the tenant's own rows), so the cloud keeps
+// one live row per barcode. Soft delete only: the old rows remain in the cloud and can be restored.
+async function retireCloudBarcodeDuplicates(client: SupabaseClient, rows: any[]) {
+  const live = rows.filter((r) => !r.deleted_at && r.barcode && r.global_id);
+  const CHUNK = 100;
+  for (let i = 0; i < live.length; i += CHUNK) {
+    const chunk = live.slice(i, i + CHUNK);
+    const now = new Date().toISOString();
+    const { error } = await client.from('product_barcodes')
+      .update({ deleted_at: now, updated_at: now })
+      .in('barcode', chunk.map((r) => r.barcode))
+      .not('global_id', 'in', `(${chunk.map((r) => r.global_id).join(',')})`)
+      .is('deleted_at', null);
+    if (error) console.warn('⚠️ [SYNC] Could not retire duplicate cloud barcodes:', JSON.stringify(error));
+  }
+}
+
 // The tenants row is authoritative in the cloud (created at registration, license edited by the
 // super-admin) — the desktop only ever PULLS it, never pushes, so it can't stomp a freshly
 // activated license with a stale local copy.
@@ -130,6 +161,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
   for (const tableName of PUSH_TABLES) {
     if (syncPaused) return;
     if (cloudMissingTables.has(tableName)) continue;
+    if (Date.now() < (pushBackoff[tableName]?.until || 0)) continue;
     try {
       let queryStr = `SELECT * FROM ${tableName} WHERE (last_synced_at IS NULL OR updated_at > last_synced_at)`;
       if (Object.keys(fkMap[tableName] || {}).includes('tenant_id')) {
@@ -159,6 +191,8 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
 
       const markSynced = db.prepare(`UPDATE ${tableName} SET last_synced_at = CURRENT_TIMESTAMP WHERE global_id = ?`);
 
+      if (tableName === 'product_barcodes') await retireCloudBarcodeDuplicates(client, payload);
+
       const { error } = await upsertToCloud(client, tableName, payload);
       if (isMissingCloudTable(error)) { noteMissingCloudTable(tableName); continue; }
       if (!error) {
@@ -166,6 +200,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
           for (const record of records) markSynced.run(record.global_id);
         });
         tx(unsyncedRecords);
+        delete pushBackoff[tableName];
       } else {
         // A whole-batch upsert fails if EVEN ONE row is bad (e.g. an FK the cloud rejects),
         // which would otherwise block every other row indefinitely. Fall back to per-row so the
@@ -182,9 +217,11 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
           }
         }
         console.log(`↻ [SYNC] ${tableName}: pushed ${pushed}/${payload.length} rows individually`);
+        if (pushed < payload.length) notePushFailure(tableName); else delete pushBackoff[tableName];
       }
     } catch (err) {
       console.error(`❌ [SYNC] Error pushing ${tableName}:`, err);
+      notePushFailure(tableName);
     }
   }
 }
@@ -281,10 +318,22 @@ async function pullFromCloud(client: SupabaseClient, localId: number, globalId: 
       const checkStmt = db.prepare(`SELECT 1 FROM ${tableName} WHERE global_id = ?`);
       const updateStmt = db.prepare(`UPDATE ${tableName} SET ${updateSet} WHERE global_id = ?`);
       const insertStmt = db.prepare(`INSERT INTO ${tableName} (${insertCols}) VALUES (${insertVals})`);
+      const barcodeHolder = tableName === 'product_barcodes'
+        ? db.prepare(`SELECT id, deleted_at FROM product_barcodes WHERE barcode = ?`) : null;
+      const purgeBarcode = tableName === 'product_barcodes'
+        ? db.prepare(`DELETE FROM product_barcodes WHERE id = ?`) : null;
 
       const tx = db.transaction((records: any[]) => {
         for (const record of records) {
           const exists = checkStmt.get(record.global_id);
+          if (!exists && barcodeHolder) {
+            // product_barcodes.barcode is UNIQUE locally: a cloud row we don't have must not collide
+            // with a local row (which would fail the whole pull of this table every cycle).
+            if (record.deleted_at) continue; // a removal we never held — nothing to store
+            const holder = barcodeHolder.get(record.barcode) as any;
+            if (holder && !holder.deleted_at) continue; // live here already; our push wins
+            if (holder) purgeBarcode!.run(holder.id);
+          }
           const values = columns.map(col => record[col] ?? null);
           if (exists) updateStmt.run(...values, record.global_id);
           else insertStmt.run(...values);
@@ -301,9 +350,14 @@ async function pullFromCloud(client: SupabaseClient, localId: number, globalId: 
  * One full sync cycle for the currently logged-in tenant. No-op if nobody is logged in
  * (no active cloud session) or the active account is a seed/super-admin account.
  */
+// The interval fires every 10s whether or not the previous cycle finished; when the cloud is slow,
+// overlapping cycles would push the same rows again and again. Only one cycle runs at a time.
+let cycleInFlight: Promise<void> | null = null;
 function runSyncCycle(): Promise<void> {
   if (syncPaused) return Promise.resolve();
-  return track(runSyncCycleInner());
+  if (cycleInFlight) return cycleInFlight;
+  cycleInFlight = track(runSyncCycleInner()).finally(() => { cycleInFlight = null; });
+  return cycleInFlight;
 }
 async function runSyncCycleInner() {
   const session = getActiveSession();

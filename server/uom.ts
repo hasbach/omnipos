@@ -110,7 +110,7 @@ export function normalizeUnitsPayload(units: any): NormalizedUnit[] {
 // product being saved so it can keep its own barcodes.
 export function barcodeUsedElsewhere(tenantId: number, barcode: string, excludeProductId: number): boolean {
   if (db.prepare("SELECT 1 FROM products WHERE tenant_id = ? AND barcode = ? AND id != ? LIMIT 1").get(tenantId, barcode, excludeProductId)) return true;
-  if (db.prepare("SELECT 1 FROM product_barcodes WHERE barcode = ? AND product_id != ? LIMIT 1").get(barcode, excludeProductId)) return true;
+  if (db.prepare("SELECT 1 FROM product_barcodes WHERE barcode = ? AND product_id != ? AND deleted_at IS NULL LIMIT 1").get(barcode, excludeProductId)) return true;
   if (db.prepare("SELECT 1 FROM product_units WHERE tenant_id = ? AND barcode = ? AND product_id != ? AND deleted_at IS NULL LIMIT 1").get(tenantId, barcode, excludeProductId)) return true;
   return false;
 }
