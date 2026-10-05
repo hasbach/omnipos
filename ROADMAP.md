@@ -29,17 +29,29 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | 011 | OmniPOS marketplace (business/product discovery) | | Not started |
 
 Other items: _(add fixes and ideas here)_
+- [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or
+      duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
+- [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —
       keep as history or delete.
 - [ ] 1.6.2 and 1.7.x shipped without plan docs; their scope is recorded here only.
-
 ---
 
 ## Shipped
 
-### 1.7.x — Cash-flow categories, POS layout, shift vs day (2026-09-29 → 2026-10-01)
+### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-06)
+- **1.7.3** (2026-10-06)
+  - POS: Balance Payment button in the header menu; Collect lists customers only, Pay lists suppliers only.
+  - POS: barcodes sharing a prefix add the exact product; search shows up to 50 scrollable results with
+    arrow-key selection; F-key shortcuts paused while a popup is open.
+  - POS cart and new purchase table scroll to the last added item; tall popups scroll with buttons always visible.
+  - Balance history: local-only `stakeholder_balance_log` records every balance change (before/after, source,
+    reference, user); "Balance history" tab on each party and section on the statement report.
+  - Statement rebuilt (`server/statement.ts`): balance payments, opening balances, manual edits, refund payouts;
+    LBP payments converted to USD and shown in LL; closing balance always equals the party balance.
+  - Money inputs accept at most 2 decimals (USD and LBP).
 - **1.7.2** — Balance Payment: searchable customer/supplier picker (Combobox), each party listed once.
 - **1.7.1** — Cash Out reconciles the whole shared drawer since the last close; Settlement covers the whole day
   since the last settlement; shift / day views.
