@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Button, Field, Select, NumberInput } from '../../components/ui';
+import { Modal, Button, Field, Select, NumberInput, MoneyInput } from '../../components/ui';
 import { useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
@@ -161,7 +161,7 @@ export function BulkPriceModal({ open, onClose, products, selectedIds, categorie
             />
           </Field>
           <Field label={t('prod_bulk_value', 'Value')} helper={valueHelper}>
-            <NumberInput value={value} onChange={setValue} step={0.01} />
+            {mode === 'set' ? <MoneyInput value={value} onChange={setValue} /> : <NumberInput value={value} onChange={setValue} step={0.01} />}
           </Field>
           <Field label={t('prod_bulk_rounding', 'Round to nearest')}>
             <Select

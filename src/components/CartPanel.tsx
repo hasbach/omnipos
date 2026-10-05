@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShoppingCart, Banknote, Package, Plus, Minus, Trash2, Barcode, ArrowRight,
   Percent, DollarSign, Tag, X, Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import Fuse from 'fuse.js';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Badge } from './ui';
@@ -13,6 +12,8 @@ import { uomUnitPrice } from '../lib/pricing';
 import { usePermissions } from '../lib/usePermissions';
 import { usePosLayout } from '../hooks/usePosLayout';
 import PosLayoutMenu from './PosLayoutMenu';
+import { searchProducts, MAX_SUGGESTIONS } from '../lib/productSearch';
+import { clampMoneyInput } from '../lib/money';
 
 export default function CartPanel() {
   const pos = usePosContext();
@@ -25,7 +26,7 @@ export default function CartPanel() {
     priceLevel, allowPriceOverride, enforceMinPrice, unitPriceUSD, setItemPriceOverride,
     creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled, belowCostOf, sellableProducts,
     selectedStakeholder, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
-    saleTabs = [], activeTabId, newSaleTab, switchSaleTab, closeSaleTab,
+    lastAdded, saleTabs = [], activeTabId, newSaleTab, switchSaleTab, closeSaleTab,
   } = pos as any;
 
   const { layout } = usePosLayout();
@@ -38,6 +39,46 @@ export default function CartPanel() {
   const [discountDraft, setDiscountDraft] = useState<{ type: 'percentage' | 'fixed'; value: string }>({ type: 'percentage', value: '0' });
   const [priceEditorId, setPriceEditorId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState('');
+  const [highlight, setHighlight] = useState(-1);
+  const cartListRef = useRef<HTMLDivElement>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+
+  // Reset the highlighted suggestion whenever the list changes.
+  useEffect(() => { setHighlight(-1); }, [suggestions]);
+
+  // Keep the highlighted suggestion visible in the scrollable dropdown.
+  useEffect(() => {
+    if (highlight < 0) return;
+    suggestionsRef.current?.querySelector<HTMLElement>(`[data-sugg-index="${highlight}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [highlight]);
+
+  // Follow the last added / incremented cart line without stealing focus from the barcode input.
+  useEffect(() => {
+    if (!lastAdded) return;
+    const raf = requestAnimationFrame(() => {
+      const rows = cartListRef.current?.querySelectorAll<HTMLElement>('[data-line-key]');
+      const row = rows && Array.from(rows).find(r => r.dataset.lineKey === lastAdded.key);
+      row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [lastAdded]);
+
+  const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (suggestions.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlight(h => Math.min(suggestions.length - 1, h + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlight(h => Math.max(0, h - 1));
+    } else if (e.key === 'Enter' && highlight >= 0 && suggestions[highlight]) {
+      e.preventDefault();
+      const p = suggestions[highlight];
+      const mu = (p.units || []).find((u: any) => u.barcode && u.barcode === barcodeInput.trim());
+      handleSuggestionClick(p, mu ? mu.id : null);
+    }
+  };
 
   const openDiscountEditor = (item: any) => {
     setDiscountEditorId(item.line_key);
@@ -137,16 +178,9 @@ export default function CartPanel() {
               onChange={(e) => {
                 const val = e.target.value;
                 setBarcodeInput(val);
-                if (val.length > 1) {
-                  const fuse = new Fuse(sellableProducts || products, {
-                    keys: ['name', 'barcode', 'barcodes', 'units.barcode'],
-                    threshold: 0.3,
-                  });
-                  setSuggestions(fuse.search(val).map((r: any) => r.item).slice(0, 5));
-                } else {
-                  setSuggestions([]);
-                }
+                setSuggestions(searchProducts(sellableProducts || products, val, MAX_SUGGESTIONS));
               }}
+              onKeyDown={onSearchKeyDown}
               autoFocus
             />
           </form>
@@ -158,16 +192,19 @@ export default function CartPanel() {
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="absolute start-3 end-3 top-full mt-1 bg-surface border border-border shadow-[var(--shadow-modal)] z-50 rounded-lg overflow-hidden"
+                ref={suggestionsRef}
+                className="absolute start-3 end-3 top-full mt-1 bg-surface border border-border shadow-[var(--shadow-modal)] z-50 rounded-lg max-h-[60vh] overflow-y-auto"
               >
-                {suggestions.map((p: any) => {
+                {suggestions.map((p: any, idx: number) => {
                   // A typed unit barcode adds that unit (carton/pack) instead of a single piece.
                   const mu = (p.units || []).find((u: any) => u.barcode && u.barcode === barcodeInput.trim());
                   return (
                   <button
                     key={p.id}
+                    type="button"
+                    data-sugg-index={idx}
                     onClick={() => handleSuggestionClick(p, mu ? mu.id : null)}
-                    className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-primary hover:text-on-primary transition-colors text-start border-b border-border last:border-none cursor-pointer"
+                    className={`w-full flex items-center justify-between px-4 py-2.5 hover:bg-primary hover:text-on-primary transition-colors text-start border-b border-border last:border-none cursor-pointer ${idx === highlight ? 'bg-primary text-on-primary' : ''}`}
                   >
                     <div>
                       <div className="font-semibold">
@@ -189,7 +226,7 @@ export default function CartPanel() {
         </div>
 
         {/* Cart Items */}
-        <div className={`flex-1 min-h-0 overflow-y-auto ${compact ? 'p-2 space-y-1.5' : 'p-3 space-y-2'}`}>
+        <div ref={cartListRef} className={`flex-1 min-h-0 overflow-y-auto ${compact ? 'p-2 space-y-1.5' : 'p-3 space-y-2'}`}>
           <AnimatePresence mode="popLayout">
             {cart.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-text-3 italic gap-3">
@@ -208,6 +245,7 @@ export default function CartPanel() {
                 return (
                 <motion.div
                   key={item.line_key}
+                  data-line-key={item.line_key}
                   layout
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -345,7 +383,7 @@ export default function CartPanel() {
                         type="number"
                         className="flex-1 h-9 rounded-[var(--radius-input)] border border-border bg-surface px-3 text-sm num text-text outline-none focus:border-primary"
                         value={discountDraft.value}
-                        onChange={(e) => setDiscountDraft(d => ({ ...d, value: e.target.value }))}
+                        onChange={(e) => setDiscountDraft(d => ({ ...d, value: d.type === 'fixed' ? clampMoneyInput(e.target.value) : e.target.value }))}
                         onKeyDown={(e) => { if (e.key === 'Enter') saveDiscountEditor(); if (e.key === 'Escape') setDiscountEditorId(null); }}
                       />
                       <button onClick={saveDiscountEditor} className="px-3 h-9 bg-primary text-on-primary rounded-[var(--radius-input)] text-xs font-bold cursor-pointer">{t('save', 'Save')}</button>
@@ -362,7 +400,7 @@ export default function CartPanel() {
                         type="number"
                         className="flex-1 h-9 rounded-[var(--radius-input)] border border-border bg-surface px-3 text-sm num text-text outline-none focus:border-primary"
                         value={priceDraft}
-                        onChange={(e) => setPriceDraft(e.target.value)}
+                        onChange={(e) => setPriceDraft(clampMoneyInput(e.target.value))}
                         onFocus={(e) => e.target.select()}
                         onKeyDown={(e) => { if (e.key === 'Enter') savePriceEditor(item); if (e.key === 'Escape') setPriceEditorId(null); }}
                       />
@@ -424,7 +462,7 @@ export default function CartPanel() {
                     type="number"
                     className="w-14 bg-transparent border-none text-xs font-mono font-bold focus:ring-0 p-0 num text-text"
                     value={globalDiscount.value}
-                    onChange={(e) => setGlobalDiscount((prev: any) => ({ ...prev, value: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setGlobalDiscount((prev: any) => ({ ...prev, value: parseFloat(prev.type === 'fixed' ? clampMoneyInput(e.target.value) : e.target.value) || 0 }))}
                   />
                 </div>
               </div>}

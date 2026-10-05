@@ -186,6 +186,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/reports/unpaid-sales', need: ['reports.view', 'parties.view'] },
   { method: 'GET', pattern: '/api/reports/unpaid-purchases', need: ['reports.view', 'purchases.view'] },
   { method: 'GET', pattern: '/api/reports/customer-statement/:id', need: ['reports.view', 'parties.view'] },
+  { method: 'GET', pattern: '/api/stakeholders/:id/balance-log', need: ['reports.view', 'parties.view'] },
   // Closed-day history is its own permission: neither reports.view nor cash-out / close grants it.
   { method: 'GET', pattern: '/api/reports/daily', need: 'settlement.view' },
   { method: 'GET', pattern: '/api/reports/yearly', need: 'settlement.view' },

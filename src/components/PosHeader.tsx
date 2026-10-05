@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Search, ShoppingCart, User, Banknote, Menu, Pencil, Plus,
-  BarChart3, LayoutDashboard, Shield, Sun, Moon, Wallet
+  BarChart3, LayoutDashboard, Shield, Sun, Moon, Wallet, Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
@@ -11,6 +11,7 @@ import { Badge, IconButton, Kbd } from './ui';
 import { formatMoney, partyDisplayName } from '../lib/format';
 import type { PriceLevel } from '../lib/pricing';
 import { usePermissions, refreshPermissions } from '../lib/usePermissions';
+import { BalancePaymentModal } from '../pages/cashflow/BalancePaymentModal';
 
 export default function PosHeader() {
   const pos = usePosContext();
@@ -31,6 +32,7 @@ export default function PosHeader() {
   };
 
   const [showHeaderMenu, setShowHeaderMenu] = React.useState(false);
+  const [showBalanceModal, setShowBalanceModal] = React.useState(false);
   const headerMenuRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -265,6 +267,14 @@ export default function PosHeader() {
                 >
                   <Search size={14} /> {t('price_checker', 'Price Checker')}
                 </Link>
+                {(can('cash_flow.add') || can('parties.edit')) && (
+                  <button
+                    onClick={() => { setShowBalanceModal(true); setShowHeaderMenu(false); }}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 min-h-[40px] border border-border rounded-lg text-xs font-bold uppercase tracking-wide text-text hover:bg-surface-2 transition-all cursor-pointer"
+                  >
+                    <Users size={14} /> {t('fin_cfr_balance_payment', 'Balance Payment')}
+                  </button>
+                )}
                 {can('pos.open_dashboard') && (
                   <Link
                     to={`/dashboard?cashierId=${currentUser?.id || ''}`}
@@ -280,6 +290,7 @@ export default function PosHeader() {
           </AnimatePresence>
         </div>
       </div>
+      <BalancePaymentModal open={showBalanceModal} onClose={() => setShowBalanceModal(false)} />
     </header>
   );
 }

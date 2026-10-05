@@ -120,7 +120,7 @@ export function UpdateSellingPricesModal({ open, onClose, rows, onApplied }: Upd
       <p className="mb-3 text-sm text-text-2">{t('inv_editor_update_prices_desc')}</p>
       <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border">
         <table className="w-full border-collapse text-sm">
-          <thead className="bg-surface-2">
+          <thead className="sticky top-0 z-10 bg-surface-2">
             <tr className="text-xs uppercase tracking-wide text-text-3">
               <th className="w-8 px-2 py-2" />
               <th className="px-2 py-2 text-start">{t('inv_editor_update_prices_col_product', 'Product')}</th>

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Banknote, PiggyBank, Receipt, ShoppingBag, Users, Wallet } from 'lucide-react';
 import {
   Button,
-  Combobox,
   DataTable,
   Field,
   Input,
@@ -15,12 +14,13 @@ import {
   useToast,
 } from '../components/ui';
 import { AnalyticsPanel } from './cashflow/AnalyticsPanel';
+import { BalancePaymentModal } from './cashflow/BalancePaymentModal';
 import { CashFlowEditModal } from './cashflow/EditModal';
 import { cashFlowColumns } from './cashflow/columns';
 import { FitStat, STAT_GRID, cashFlowErrorMessage, type CashFlowRow } from './cashflow/common';
 import { useCashFlowCategories } from './cashflow/useCashFlowCategories';
 import { useI18n } from '../intl/index';
-import { formatMoney, partyDisplayName } from '../lib/format';
+import { formatMoney } from '../lib/format';
 import { api } from '../lib/api';
 import { usePermissions } from '../lib/usePermissions';
 
@@ -45,13 +45,6 @@ interface Summary {
   expectedBalance: number;
 }
 
-interface Stakeholder {
-  id: number;
-  name: string;
-  balance: number;
-  phone?: string | null;
-}
-
 // Only USD (rate 1) is safe as a hardcoded fallback — anything else must come from the tenant's
 // own configured rate (GET /api/currencies), or an entry recorded before that fetch resolves would
 // silently use a stale guessed exchange rate instead of the real one.
@@ -69,7 +62,6 @@ export default function CashFlowRegister() {
   const canEditEntries = can('cash_flow.edit');
   const canBalancePayment = canAdd || can('parties.edit'); // POST /api/balance-payment
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'register' | 'analytics'>('register');
@@ -94,26 +86,18 @@ export default function CashFlowRegister() {
 
   // Balance payment modal
   const [balanceOpen, setBalanceOpen] = useState(false);
-  const [balDirection, setBalDirection] = useState<'collect' | 'pay'>('collect');
-  const [balStakeholderId, setBalStakeholderId] = useState('');
-  const [balAmount, setBalAmount] = useState<number | ''>('');
-  const [balCurrencyCode, setBalCurrencyCode] = useState('USD');
-  const [submittingBalance, setSubmittingBalance] = useState(false);
 
   const currentCurrency = currencies.find((c) => c.code === currencyCode) || currencies[0];
-  const balCurrency = currencies.find((c) => c.code === balCurrencyCode) || currencies[0];
 
   const fetchData = useCallback(async () => {
     try {
-      const [entriesRes, summaryRes, stakeholdersRes, currenciesRes] = await Promise.all([
+      const [entriesRes, summaryRes, currenciesRes] = await Promise.all([
         api.get<CashFlowEntry[]>(`/api/cash-flow?scope=${scope}`),
         api.get<Summary>(`/api/cash-flow/summary?scope=${scope}`),
-        api.get<Stakeholder[]>('/api/stakeholders'),
         api.get<Currency[]>('/api/currencies'),
       ]);
       setEntries(entriesRes || []);
       setSummary(summaryRes || null);
-      setStakeholders(stakeholdersRes || []);
       if (Array.isArray(currenciesRes) && currenciesRes.length > 0) setCurrencies(currenciesRes);
     } catch (err: any) {
       toast.error(err.message || String(err));
@@ -175,64 +159,6 @@ export default function CashFlowRegister() {
     }
   };
 
-  const selectedStakeholder = stakeholders.find((s) => s.id === parseInt(balStakeholderId));
-  const customersWithBalance = stakeholders.filter((s) => s.balance > 0.01);
-  const suppliersWithBalance = stakeholders.filter((s) => s.balance < -0.01);
-  // Searchable party list: whoever has a balance in this direction first (with what's owed), then
-  // everyone else — each party once. Search matches the name (Arabic-variant insensitive) and phone.
-  const balanceOptions = useMemo(() => {
-    const first = balDirection === 'collect' ? customersWithBalance : suppliersWithBalance;
-    const firstIds = new Set(first.map((s) => s.id));
-    const usd = (n: number) => formatMoney(n, { code: 'USD', symbol: '$' });
-    return [
-      ...first.map((s) => ({
-        value: String(s.id),
-        label: partyDisplayName(s.name, t),
-        secondary: `${usd(Math.abs(s.balance))} ${s.balance > 0 ? t('fin_cfr_owed', 'owed to you') : t('fin_cfr_outstanding', 'you owe')}`,
-        keywords: [s.name, s.phone].filter(Boolean).join(' '),
-      })),
-      ...stakeholders.filter((s) => !firstIds.has(s.id)).map((s) => ({
-        value: String(s.id),
-        label: partyDisplayName(s.name, t),
-        secondary: usd(s.balance),
-        keywords: [s.name, s.phone].filter(Boolean).join(' '),
-      })),
-    ];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stakeholders, balDirection, t]);
-
-  const openBalanceModal = (direction: 'collect' | 'pay') => {
-    setBalDirection(direction);
-    setBalStakeholderId('');
-    setBalAmount('');
-    setBalCurrencyCode('USD');
-    setBalanceOpen(true);
-  };
-
-  const handleSubmitBalance = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const numAmount = typeof balAmount === 'number' ? balAmount : parseFloat(String(balAmount));
-    if (!balStakeholderId || !numAmount || numAmount <= 0) return;
-
-    setSubmittingBalance(true);
-    try {
-      await api.post('/api/balance-payment', {
-        stakeholder_id: parseInt(balStakeholderId),
-        amount: numAmount,
-        currency: balCurrency.code,
-        exchange_rate: balCurrency.rate,
-        direction: balDirection,
-      });
-      setBalanceOpen(false);
-      toast.success(t('fin_cfr_payment_recorded', 'Payment recorded.'));
-      fetchData();
-    } catch (err: any) {
-      toast.error(err.message || t('fin_cfr_balance_payment_failed', 'Failed to process payment'));
-    } finally {
-      setSubmittingBalance(false);
-    }
-  };
-
   const columns = useMemo(
     () => cashFlowColumns({ t, lang, currencies, categoryLabel: cats.label, onEdit: canEditEntries ? setEditing : undefined }),
     [t, lang, currencies, canEditEntries, cats.label],
@@ -246,7 +172,7 @@ export default function CashFlowRegister() {
         actions={
           <>
             {canBalancePayment && (
-              <Button variant="secondary" onClick={() => openBalanceModal('collect')}>
+              <Button variant="secondary" onClick={() => setBalanceOpen(true)}>
                 <Users size={15} /> {t('fin_cfr_balance_payment', 'Balance Payment')}
               </Button>
             )}
@@ -397,86 +323,7 @@ export default function CashFlowRegister() {
         </form>
       </Modal>
 
-      {/* Balance payment modal */}
-      <Modal
-        open={balanceOpen}
-        onClose={() => setBalanceOpen(false)}
-        title={balDirection === 'collect' ? t('fin_cfr_collect', 'Collect from Customer') : t('fin_cfr_pay', 'Pay Supplier')}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setBalanceOpen(false)}>{t('fin_cancel', 'Cancel')}</Button>
-            <Button
-              type="submit"
-              form="cfr-balance-form"
-              variant={balDirection === 'collect' ? 'success' : 'danger'}
-              loading={submittingBalance}
-            >
-              {balDirection === 'collect' ? t('fin_cfr_record_collection', 'Record Collection') : t('fin_cfr_record_payment', 'Record Payment')}
-            </Button>
-          </>
-        }
-      >
-        <form id="cfr-balance-form" className="flex flex-col gap-4" onSubmit={handleSubmitBalance}>
-          <div className="flex gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 p-1">
-            <button
-              type="button"
-              onClick={() => openBalanceModal('collect')}
-              className={[
-                'flex-1 cursor-pointer rounded-md py-1.5 text-xs font-semibold uppercase tracking-[0.04em]',
-                balDirection === 'collect' ? 'bg-success text-white' : 'text-text-3',
-              ].join(' ')}
-            >
-              {t('fin_cfr_collect', 'Collect from Customer')}
-            </button>
-            <button
-              type="button"
-              onClick={() => openBalanceModal('pay')}
-              className={[
-                'flex-1 cursor-pointer rounded-md py-1.5 text-xs font-semibold uppercase tracking-[0.04em]',
-                balDirection === 'pay' ? 'bg-danger text-white' : 'text-text-3',
-              ].join(' ')}
-            >
-              {t('fin_cfr_pay', 'Pay Supplier')}
-            </button>
-          </div>
-
-          <Field label={balDirection === 'collect' ? t('fin_cfr_customer', 'Customer') : t('fin_cfr_supplier', 'Supplier')}>
-            <Combobox
-              value={balStakeholderId}
-              onChange={setBalStakeholderId}
-              placeholder={balDirection === 'collect' ? t('fin_cfr_select_customer', 'Select customer…') : t('fin_cfr_select_supplier', 'Select supplier…')}
-              aria-label={balDirection === 'collect' ? t('fin_cfr_customer', 'Customer') : t('fin_cfr_supplier', 'Supplier')}
-              options={balanceOptions}
-            />
-            {selectedStakeholder && (
-              <p className="mt-1 text-xs text-text-3">
-                {t('fin_cfr_current_balance', 'Current balance')}:{' '}
-                <span className={selectedStakeholder.balance > 0 ? 'font-semibold text-accent' : selectedStakeholder.balance < 0 ? 'font-semibold text-danger' : 'text-success'}>
-                  {formatMoney(selectedStakeholder.balance, { code: 'USD', symbol: '$' })}
-                </span>
-              </p>
-            )}
-          </Field>
-
-          <Field label={t('fin_currency', 'Currency')}>
-            <Select
-              value={balCurrencyCode}
-              onChange={(e) => setBalCurrencyCode(e.target.value)}
-              options={currencies.map((c) => ({ value: c.code, label: `${c.code} (rate ${c.rate})` }))}
-            />
-          </Field>
-
-          <Field label={`${t('fin_amount', 'Amount')} (${balCurrency.symbol})`}
-            helper={
-              balCurrency.code !== 'USD' && balAmount
-                ? `${t('fin_approx_usd', 'Approx. USD')}: ${formatMoney((typeof balAmount === 'number' ? balAmount : 0) / balCurrency.rate, { code: 'USD', symbol: '$' })}`
-                : undefined
-            }
-          >
-            <MoneyInput value={balAmount} onChange={setBalAmount} currencySymbol={balCurrency.symbol} />
-          </Field>
-        </form>
-      </Modal>
+      <BalancePaymentModal open={balanceOpen} onClose={() => setBalanceOpen(false)} onRecorded={fetchData} />
     </div>
   );
 }

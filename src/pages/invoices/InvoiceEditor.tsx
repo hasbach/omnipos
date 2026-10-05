@@ -6,6 +6,7 @@ import {
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney, formatBalance, parseServerDate, partyDisplayName } from '../../lib/format';
+import { clampMoneyInput } from '../../lib/money';
 import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, uomUnitPrice, type PriceLevel } from '../../lib/pricing';
@@ -46,7 +47,7 @@ const EntryMoneyInput = forwardRef<HTMLInputElement, EntryMoneyInputProps>(funct
       onFocus={(e) => { e.target.select(); onFocus?.(e); }}
       onBlur={(e) => { setDraft(null); onBlur?.(e); }}
       onChange={(e) => {
-        const raw = e.target.value;
+        const raw = clampMoneyInput(e.target.value);
         setDraft(raw);
         onUsdChange(raw === '' ? 0 : Number(raw) / (rate || 1));
       }}
@@ -282,8 +283,12 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     const el = qtyRefs.current[key];
     if (!el) return;
     pendingFocusKey.current = null;
-    el.focus();
+    el.focus({ preventScroll: true });
     el.select();
+    // Follow the new row once layout has settled.
+    requestAnimationFrame(() => {
+      (el.closest('tr') || el).scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
   }, [lines]);
 
   // Matches name, primary barcode, extra barcodes and unit barcodes. A unit-barcode hit adds that

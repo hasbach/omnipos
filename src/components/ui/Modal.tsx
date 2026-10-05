@@ -9,10 +9,10 @@ import { useI18n } from '../../intl/index';
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'full';
 
 const SIZE_CLASSES: Record<ModalSize, string> = {
-  sm: 'max-w-sm',
-  md: 'max-w-lg',
-  lg: 'max-w-2xl',
-  xl: 'max-w-4xl',
+  sm: 'max-w-sm max-h-[calc(100vh-48px)]',
+  md: 'max-w-lg max-h-[calc(100vh-48px)]',
+  lg: 'max-w-2xl max-h-[calc(100vh-48px)]',
+  xl: 'max-w-4xl max-h-[calc(100vh-48px)]',
   full: 'max-w-[calc(100vw-48px)] h-[calc(100vh-48px)]',
 };
 
@@ -66,15 +66,15 @@ export function Modal({ open, onClose, title, size = 'md', footer, children, cla
             ].join(' ')}
           >
             {title && (
-              <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-3.5">
                 <h2 className="text-base font-semibold text-text">{title}</h2>
                 <IconButton aria-label={closeLabel} size="sm" onClick={onClose}>
                   <X size={16} />
                 </IconButton>
               </div>
             )}
-            <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
-            {footer && <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">{footer}</div>}
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+            {footer && <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3.5">{footer}</div>}
           </motion.div>
         </div>
       )}

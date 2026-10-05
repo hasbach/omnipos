@@ -7,7 +7,7 @@
 // Error/warning `code`s are stable, English-free identifiers — the UI is responsible for
 // translating them for display. `message` is a plain-English fallback for logs/CSV export.
 import { db, logAction } from "./db.js";
-import { recomputeStakeholderBalance } from "./balance.js";
+import { recomputeStakeholderBalance, writeBalanceLog } from "./balance.js";
 
 type Entity = "products" | "customers" | "suppliers";
 type Mode = "create_only" | "upsert";
@@ -797,6 +797,7 @@ function executeStakeholders(tenantId: number, userId: number | null, body: Impo
         .run(tenantId, d.name, type, d.email, d.phone, d.address, baseline, baseline, d.price_level || "retail", d.credit_limit);
       const id = Number(result.lastInsertRowid);
       plan.existingId = id;
+      if (Math.abs(baseline) > 0.0000001) writeBalanceLog(id, tenantId, 0, baseline, { source: 'import', user_id: userId, note: 'Opening balance' });
       const rr = body.results.find((r) => r.row === plan.row);
       if (rr) rr.id = id;
     } else if (plan.action === "update" && plan.data && plan.existingId) {
@@ -817,7 +818,7 @@ function executeStakeholders(tenantId: number, userId: number | null, body: Impo
         const baseline = -d.opening_balance;
         db.prepare("UPDATE stakeholders SET balance_baseline = ? WHERE id = ? AND tenant_id = ?").run(baseline, plan.existingId, tenantId);
       }
-      recomputeStakeholderBalance(plan.existingId, tenantId);
+      recomputeStakeholderBalance(plan.existingId, tenantId, { source: 'import', user_id: userId, note: 'Opening balance import' });
     }
   }
 }
