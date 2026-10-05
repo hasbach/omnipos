@@ -16,6 +16,7 @@ import {
 import { useSettings } from '../lib/useSettings';
 import { translateServerError } from '../lib/serverErrors';
 import { formatDateTime, partyDisplayName } from '../lib/format';
+import { findExactBarcodeMatches } from '../lib/productSearch';
 
 export const CURRENCIES = [
   { code: 'USD', symbol: '$', rate: 1 },
@@ -89,6 +90,8 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [suggestions, setSuggestions] = useState<Product[]>([]);
+  // Last line added/incremented by addToCart; the nonce makes repeat scans of the same line re-trigger.
+  const [lastAdded, setLastAdded] = useState<{ key: string; nonce: number } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 12;
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
@@ -768,6 +771,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         return;
       }
     }
+    setLastAdded(prev => ({ key, nonce: (prev?.nonce || 0) + 1 }));
     setCart(prev => {
       const existing = prev.find(item => item.line_key === key);
       if (existing) {
@@ -788,10 +792,23 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
   const handleBarcodeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!barcodeInput) return;
+    // Scanners may append whitespace / CR.
+    const code = barcodeInput.trim();
+    if (!code) return;
+
+    // Resolve locally first: an exact barcode / extra barcode / unit barcode hit adds immediately.
+    const local = findExactBarcodeMatches(sellableProducts || products, code);
+    if (local.length === 1) {
+      const product: any = local[0];
+      const mu = (product.units || []).find((u: any) => u.barcode && String(u.barcode).trim() === code);
+      addToCart(product, mu ? mu.id : null);
+      setBarcodeInput('');
+      setSuggestions([]);
+      return;
+    }
 
     try {
-      const res = await fetch(`/api/products/${encodeURIComponent(barcodeInput)}`);
+      const res = await fetch(`/api/products/${encodeURIComponent(code)}`);
       if (res.ok) {
         const product = await res.json();
         if (product.active === 0) {
@@ -1230,6 +1247,8 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // A modal opened over the POS (e.g. Balance Payment) owns the keyboard: F3 must not quick-cash the cart behind it.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (e.key === 'F1') {
         e.preventDefault();
         setLastTransaction(null);
@@ -1499,6 +1518,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     setSelectedCategory,
     suggestions,
     setSuggestions,
+    lastAdded,
     currentPage,
     setCurrentPage,
     lang,

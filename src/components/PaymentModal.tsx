@@ -1,5 +1,5 @@
 import React from 'react';
-import Fuse from 'fuse.js';
+import { searchProducts, MAX_SUGGESTIONS } from '../lib/productSearch';
 import {
   Search, User, CreditCard, Banknote, Package, Plus, Minus, Trash2, ArrowRight,
   Percent, Printer, CheckCircle2, Calendar, X, RotateCcw, RefreshCw, Clock
@@ -138,12 +138,7 @@ export default function PaymentModal() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setBarcodeInput(val);
-                      if (val.length > 1) {
-                        const fuse = new Fuse(sellableProducts || products, { keys: ['name', 'barcode', 'barcodes', 'units.barcode'], threshold: 0.3 });
-                        setSuggestions(fuse.search(val).map((r: any) => r.item).slice(0, 5));
-                      } else {
-                        setSuggestions([]);
-                      }
+                      setSuggestions(searchProducts(sellableProducts || products, val, MAX_SUGGESTIONS));
                     }}
                   />
                 </form>
@@ -154,7 +149,7 @@ export default function PaymentModal() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 10 }}
-                      className="absolute start-0 end-0 top-full mt-4 bg-surface text-text rounded-2xl shadow-[var(--shadow-modal)] overflow-hidden z-50"
+                      className="absolute start-0 end-0 top-full mt-4 bg-surface text-text rounded-2xl shadow-[var(--shadow-modal)] max-h-[60vh] overflow-y-auto z-50"
                     >
                       {suggestions.map((p: any) => {
                         const mu = (p.units || []).find((u: any) => u.barcode && u.barcode === barcodeInput.trim());

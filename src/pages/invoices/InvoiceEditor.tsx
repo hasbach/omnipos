@@ -282,8 +282,12 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     const el = qtyRefs.current[key];
     if (!el) return;
     pendingFocusKey.current = null;
-    el.focus();
+    el.focus({ preventScroll: true });
     el.select();
+    // Follow the new row once layout has settled.
+    requestAnimationFrame(() => {
+      (el.closest('tr') || el).scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
   }, [lines]);
 
   // Matches name, primary barcode, extra barcodes and unit barcodes. A unit-barcode hit adds that
