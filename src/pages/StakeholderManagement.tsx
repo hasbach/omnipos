@@ -126,7 +126,14 @@ export default function StakeholderManagement() {
       : t('stk_price_level_retail');
 
   const columns: DataTableColumn<Stakeholder>[] = [
-    { key: 'name', header: t('stk_col_name'), sortable: true, render: (s) => <span className="font-medium text-text">{partyDisplayName(s.name, t)}</span> },
+    { key: 'name', header: t('stk_col_name'), sortable: true, render: (s) => (
+      <span className="font-medium text-text">
+        {partyDisplayName(s.name, t)}
+        {!!s.local_rate && s.local_rate > 0 && (
+          <Badge variant="neutral" className="ms-2 align-middle">{t('stk_rate_badge', 'Custom rate')}</Badge>
+        )}
+      </span>
+    ) },
     {
       key: 'contact',
       header: t('stk_col_contact'),
@@ -298,6 +305,7 @@ export default function StakeholderManagement() {
         stakeholder={editing}
         defaultType={tab}
         onSaved={fetchStakeholders}
+        currencies={currencies}
       />
 
       <DetailDrawer

@@ -4,7 +4,8 @@ import { useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { useSettings } from '../../lib/useSettings';
-import type { PriceLevel, Stakeholder } from '../../types';
+import { formatRate, localCurrencyOf } from '../../lib/orderTotals';
+import type { Currency, PriceLevel, Stakeholder } from '../../types';
 
 export interface EditDrawerProps {
   open: boolean;
@@ -14,6 +15,8 @@ export interface EditDrawerProps {
   /** Default type when creating (driven by the active tab). */
   defaultType: 'customer' | 'supplier';
   onSaved: () => void;
+  /** Configured currencies; the rate field is shown only when one is non-USD. */
+  currencies?: Currency[];
 }
 
 interface FormState {
@@ -26,6 +29,7 @@ interface FormState {
   credit_limit: string; // blank = unlimited
   overrideBalance: boolean;
   balance: string;
+  local_rate: string; // blank = use the global rate
 }
 
 function emptyForm(defaultType: 'customer' | 'supplier'): FormState {
@@ -39,10 +43,11 @@ function emptyForm(defaultType: 'customer' | 'supplier'): FormState {
     credit_limit: '',
     overrideBalance: false,
     balance: '0',
+    local_rate: '',
   };
 }
 
-export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved }: EditDrawerProps) {
+export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved, currencies = [] }: EditDrawerProps) {
   const { t } = useI18n();
   const toast = useToast();
   const { priceLevelsEnabled } = useSettings();
@@ -62,12 +67,14 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved }:
         credit_limit: stakeholder.credit_limit ? String(stakeholder.credit_limit) : '',
         overrideBalance: false,
         balance: String(stakeholder.balance ?? 0),
+        local_rate: stakeholder.local_rate && stakeholder.local_rate > 0 ? String(stakeholder.local_rate) : '',
       });
     } else {
       setForm(emptyForm(defaultType));
     }
   }, [open, stakeholder, defaultType]);
 
+  const localCur = localCurrencyOf(currencies);
   const isEdit = !!stakeholder?.id;
   const title = isEdit
     ? form.type === 'customer' ? t('stk_edit_customer') : t('stk_edit_supplier')
@@ -86,6 +93,10 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved }:
         price_level: form.price_level,
         credit_limit: form.credit_limit.trim() === '' ? null : Number(form.credit_limit),
       };
+      if (localCur) {
+        const r = Number(form.local_rate);
+        payload.local_rate = form.local_rate.trim() === '' || !(r > 0) ? null : r;
+      }
       // The PUT/POST handler treats `balance` as an override of the derived balance — only
       // send it when the user explicitly opted in, or on create (starting balance).
       if (!isEdit || form.overrideBalance) {
@@ -173,6 +184,24 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved }:
             onChange={(v) => setForm({ ...form, credit_limit: v === 0 ? '' : String(v) })}
           />
         </Field>
+
+        {localCur && (
+          <Field
+            label={t('stk_field_local_rate', 'Exchange rate ({code} per $1)').replace('{code}', localCur.symbol || localCur.code)}
+            helper={t('stk_local_rate_help', 'Leave empty to use the global rate')}
+          >
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
+              className="num"
+              placeholder={t('stk_local_rate_global_ph', 'Global: {rate}').replace('{rate}', formatRate(localCur.rate || 1))}
+              value={form.local_rate}
+              onChange={(e) => setForm({ ...form, local_rate: e.target.value })}
+            />
+          </Field>
+        )}
 
         {isEdit ? (
           <div className="rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">

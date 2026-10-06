@@ -8,6 +8,7 @@ import { formatDate, formatDateTime, formatMoney, formatBalance, transactionType
 import { useSettings } from '../../lib/useSettings';
 import type { Currency, Stakeholder } from '../../types';
 import { originalAmountLabel, statementKindLabel, statementDescription, balanceText, balanceColorClass } from '../reports/statementUtils';
+import { effectiveLocalCurrency, formatRate } from '../../lib/orderTotals';
 import { BalanceLogTable } from './BalanceLogTable';
 
 export interface DetailDrawerProps {
@@ -75,6 +76,7 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
   const [loading, setLoading] = useState(false);
 
   const local = currencies.find((c) => c.code !== 'USD');
+  const effLocal = effectiveLocalCurrency(currencies, stakeholder);
 
   useEffect(() => {
     if (!open || !stakeholder) return;
@@ -276,6 +278,14 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
                 )}
               </div>
             </div>
+
+            {effLocal && (
+              <p className="num text-xs text-text-3">
+                {t(effLocal.source === 'party' ? 'stk_rate_custom' : 'stk_rate_global', effLocal.source === 'party' ? 'Rate: {rate} {symbol}/$ (custom)' : 'Rate: {rate} {symbol}/$ (global)')
+                  .replace('{rate}', formatRate(effLocal.rate))
+                  .replace('{symbol}', effLocal.symbol || effLocal.code)}
+              </p>
+            )}
 
             {aging && (
               <div className="rounded-[var(--radius-card)] border border-border p-3">

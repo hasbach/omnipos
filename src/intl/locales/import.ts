@@ -126,6 +126,7 @@ export default {
     imp_field_address: 'Address',
     imp_field_price_level: 'Price level',
     imp_field_credit_limit: 'Credit limit (USD)',
+    imp_field_local_rate: 'Exchange rate (local per $1)',
     imp_field_opening_balance: 'Opening balance (USD)',
     imp_field_notes: 'Notes',
 
@@ -294,6 +295,7 @@ export default {
     imp_field_address: 'العنوان',
     imp_field_price_level: 'مستوى السعر',
     imp_field_credit_limit: 'حد الائتمان (دولار)',
+    imp_field_local_rate: 'سعر الصرف (محلي لكل 1$)',
     imp_field_opening_balance: 'الرصيد الافتتاحي (دولار)',
     imp_field_notes: 'ملاحظات',
 
@@ -457,6 +459,7 @@ export default {
     imp_field_address: 'Adresse',
     imp_field_price_level: 'Niveau de prix',
     imp_field_credit_limit: 'Limite de crédit (USD)',
+    imp_field_local_rate: 'Taux de change (local pour 1 $)',
     imp_field_opening_balance: 'Solde initial (USD)',
     imp_field_notes: 'Notes',
 

@@ -16,6 +16,7 @@ import {
 import { useSettings } from '../lib/useSettings';
 import { translateServerError } from '../lib/serverErrors';
 import { formatDateTime, partyDisplayName } from '../lib/format';
+import { orderLocal, formatLocal, effectiveLocalCurrency } from '../lib/orderTotals';
 import { findExactBarcodeMatches } from '../lib/productSearch';
 
 export const CURRENCIES = [
@@ -74,7 +75,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit' | 'store_credit'>('cash');
-  const [paymentCurrency, setPaymentCurrency] = useState(CURRENCIES[0]);
+  const [paymentCurrencyState, setPaymentCurrency] = useState(CURRENCIES[0]);
   // Refund method for the POS refund modal: 'cash' pays back in cash; 'credit' keeps the amount on
   // the customer's account (payments: [] submitted, matching store_credit/credit semantics
   // server-side — never available for the tenant's Walk-in customer).
@@ -1011,6 +1012,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
   // --- Credit limit -------------------------------------------------------------------------
   const selectedStakeholderObj = stakeholders.find((s: any) => s.id === selectedStakeholder) as any;
+  // The selected customer's own local-currency rate (when set) replaces the global one for payment
+  // entry / conversion ONLY — product LBP prices and cart LL totals keep using the global rate.
+  const effectiveLocal = effectiveLocalCurrency(currencies, selectedStakeholder !== 1 ? selectedStakeholderObj : null);
+  const paymentCurrencies = currencies.map((c: any) => (effectiveLocal && c.code === effectiveLocal.code ? { ...c, rate: effectiveLocal.rate } : c));
+  const paymentCurrency = paymentCurrencies.find((c: any) => c.code === paymentCurrencyState?.code) || paymentCurrencyState;
   const creditLimit = selectedStakeholderObj?.credit_limit && selectedStakeholderObj.credit_limit > 0
     ? selectedStakeholderObj.credit_limit
     : 0;
@@ -1365,6 +1371,8 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
 
     lines.push("--------------------------------");
     lines.push(`TOTAL:            $${transaction.total_amount.toFixed(2)}`);
+    const lbpTotal = orderLocal(transaction.total_amount, transaction, currencies);
+    if (lbpTotal) lines.push(`                  ${formatLocal(lbpTotal.amount, lbpTotal.currency)}`);
 
     if (transaction.discount?.value > 0) {
       const disc = transaction.discount.type === 'percentage' ? `${transaction.discount.value}%` : `$${transaction.discount.value}`;
@@ -1501,6 +1509,8 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     paymentMethod,
     setPaymentMethod,
     paymentCurrency,
+    paymentCurrencies,
+    effectiveLocal,
     setPaymentCurrency,
     showAddCustomerModal,
     setShowAddCustomerModal,

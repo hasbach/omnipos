@@ -40,6 +40,10 @@ interface ReceiptTransaction {
   // Both undefined/null for Walk-in or a transaction with no stakeholder.
   stakeholder_balance?: number | null;
   balance_effect?: number | null;
+  // Local-currency rate (units per USD) frozen when the sale was made (transactions.local_rate /
+  // local_currency); falls back to the tenant's current local currency for older rows.
+  local_rate?: number | null;
+  local_currency?: string | null;
 }
 
 // "$12.00 Due" (negative), "$0.00 Settled" (exactly zero) or "$12.00 Credit" (positive), in the
@@ -66,6 +70,10 @@ export function buildReceiptBuffer(opts: {
   // Store's language (settings key `language`, server/routes.ts) — every fixed receipt string
   // is printed in this language; defaults to English. See server/printing/receiptLabels.ts.
   language?: ReceiptLanguage | string | null;
+  // The tenant's current local currency (server/localCurrency.ts); null/absent = USD-only tenant.
+  localCurrency?: { code: string; symbol?: string | null; rate: number } | null;
+  // code -> symbol for every tenant currency, so a sale stored under an older local code still prints its symbol.
+  currencySymbols?: Record<string, string>;
 }): Buffer {
   const width = paperWidthToColumns(opts.paperWidth);
   const p = new EscPos(width, opts.arabic);
@@ -116,6 +124,19 @@ export function buildReceiptBuffer(opts: {
   p.bold(true);
   p.kv(labels.total, `$${Number(tx.total_amount || 0).toFixed(2)}`);
   p.bold(false);
+
+  // Local-currency total for sale/refund receipts, at the rate frozen on the sale when we have it.
+  const isSaleOrRefund = (tx.type ?? 'sale') === 'sale' || tx.type === 'refund';
+  if (isSaleOrRefund && opts.localCurrency) {
+    const rate = Number(tx.local_rate) > 0 ? Number(tx.local_rate) : Number(opts.localCurrency.rate);
+    if (rate > 0) {
+      const code = tx.local_rate && tx.local_currency ? tx.local_currency : opts.localCurrency.code;
+      const symbol = opts.currencySymbols?.[code]
+        || (opts.localCurrency.code === code && opts.localCurrency.symbol) || code;
+      const local = Math.round(Number(tx.total_amount || 0) * rate).toLocaleString('en-US');
+      p.kv(`${labels.totalLocal} ${symbol}`, local);
+    }
+  }
 
   if (tx.discount && tx.discount.value > 0) {
     const disc = tx.discount.type === 'percentage' ? `${tx.discount.value}%` : `$${tx.discount.value}`;

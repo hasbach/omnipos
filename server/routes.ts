@@ -13,6 +13,7 @@ import {
   clearActiveSession,
 } from "./session.js";
 import { EscPos } from "./printing/escpos.js";
+import { localCurrencyFor, effectiveLocalRate, isLocalCode, parsePartyRate } from "./localCurrency.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
@@ -83,8 +84,8 @@ function localToday(): string {
 // column lists keep that UNION consistent across every query that needs it. `archived_transactions`
 // has no `idempotency_key` column (that check only matters for still-live inserts), so the
 // archived side selects NULL in its place to keep the column count/order aligned.
-export const TX_LIVE_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at";
-export const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, NULL as idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at";
+export const TX_LIVE_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at";
+export const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, NULL as idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at";
 
 // Same guard for stakeholder_id. The POS defaults the customer to id 1, which for any tenant
 // other than the seed tenant is a FOREIGN tenant's Walk-in — pushing that trips the cloud
@@ -611,8 +612,8 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
       // Move transactions
       db.prepare(`
-      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at)
-      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, created_at
+      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at)
+      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
@@ -1127,10 +1128,12 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     try {
       const tenantId = req.session.tenantId;
       const { name, type, email, phone, address, balance, price_level, credit_limit } = req.body;
+      const rate = parsePartyRate(req.body.local_rate);
+      if (!rate.ok) return res.status(400).json({ error: "Exchange rate must be a number greater than 0.", code: 'INVALID_RATE', field: 'local_rate' });
       // balance is derived (baseline + tx effects). A brand-new stakeholder has no transactions,
       // so any starting balance is stored as the baseline.
-      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0, normalizeLevel(price_level), credit_limit || null);
+      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit, local_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0, normalizeLevel(price_level), credit_limit || null, rate.value);
       if (balance && Math.abs(Number(balance)) > 0.0000001) {
         writeBalanceLog(Number(result.lastInsertRowid), tenantId, 0, Number(balance), { source: 'opening', user_id: tenantUserId(tenantId, req.body.user_id), note: 'Opening balance at creation' });
       }
@@ -1145,13 +1148,17 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
   app.put("/api/stakeholders/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { name, type, email, phone, address, balance, price_level, credit_limit } = req.body;
+    // local_rate is optional too: undefined = leave untouched, null/'' = clear (use the global rate).
+    const rateIn = req.body.local_rate !== undefined ? parsePartyRate(req.body.local_rate) : null;
+    if (rateIn && !rateIn.ok) return res.status(400).json({ error: "Exchange rate must be a number greater than 0.", code: 'INVALID_RATE', field: 'local_rate' });
     // price_level/credit_limit are optional on this endpoint (older/other callers may not send
     // them at all) — leave them untouched rather than silently resetting to 'retail'/unlimited.
-    const current = db.prepare("SELECT price_level, credit_limit FROM stakeholders WHERE id = ? AND tenant_id = ?").get(req.params.id, tenantId) as any;
+    const current = db.prepare("SELECT price_level, credit_limit, local_rate FROM stakeholders WHERE id = ? AND tenant_id = ?").get(req.params.id, tenantId) as any;
+    const resolvedLocalRate = rateIn && rateIn.ok ? rateIn.value : (current?.local_rate ?? null);
     const resolvedPriceLevel = price_level !== undefined ? normalizeLevel(price_level) : (current?.price_level || 'retail');
     const resolvedCreditLimit = credit_limit !== undefined ? (credit_limit || null) : (current?.credit_limit ?? null);
-    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, address = ?, price_level = ?, credit_limit = ? WHERE id = ? AND tenant_id = ?")
-      .run(name, type, email || null, phone || null, address || null, resolvedPriceLevel, resolvedCreditLimit, req.params.id, tenantId);
+    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, address = ?, price_level = ?, credit_limit = ?, local_rate = ? WHERE id = ? AND tenant_id = ?")
+      .run(name, type, email || null, phone || null, address || null, resolvedPriceLevel, resolvedCreditLimit, resolvedLocalRate, req.params.id, tenantId);
     // A manually-entered balance is treated as an override: set the baseline so the DERIVED
     // balance equals what was typed (baseline = entered − transaction effect), then recompute.
     if (balance !== undefined && balance !== null) {
@@ -1174,14 +1181,18 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const { stakeholder_id, amount, method, currency, exchange_rate } = req.body;
     const debtUserId = tenantUserId(tenantId, req.body.user_id);
 
+    // The party's own rate (else the global one) converts a local-currency payment; the client's
+    // exchange_rate is ignored for it. Other currencies keep what the client sent.
+    const localCur = effectiveLocalRate(tenantId, stakeholder_id);
+    const payRate = isLocalCode(localCur, currency) ? localCur!.rate : exchange_rate;
     const processDebt = db.transaction(() => {
       // Create a system transaction ticket (0-total 'sale') carrying the payment received. In the
       // derived-balance model this payment is exactly what moves the balance toward zero, so we
       // just recompute afterwards instead of nudging the balance directly.
       const result = db.prepare(`
-      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, status)
-      VALUES (?, ?, ?, 'sale', 0, ?, ?, 'completed')
-    `).run(tenantId, stakeholder_id, debtUserId, currency, exchange_rate); // type sale with 0 total marks a debt payment
+      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, status, local_rate, local_currency)
+      VALUES (?, ?, ?, 'sale', 0, ?, ?, 'completed', ?, ?)
+    `).run(tenantId, stakeholder_id, debtUserId, currency, payRate, localCur?.rate ?? null, localCur?.code ?? null); // type sale with 0 total marks a debt payment
 
       const transactionId = result.lastInsertRowid;
 
@@ -1189,7 +1200,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       db.prepare(`
       INSERT INTO payments (transaction_id, amount, method, currency, exchange_rate)
       VALUES (?, ?, ?, ?, ?)
-    `).run(transactionId, amount, method, currency, exchange_rate);
+    `).run(transactionId, amount, method, currency, payRate);
 
       const stk = db.prepare("SELECT type FROM stakeholders WHERE id = ? AND tenant_id = ?").get(stakeholder_id, tenantId) as any;
       recomputeStakeholderBalance(stakeholder_id, tenantId, {
@@ -1548,13 +1559,19 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       const storedTax = type === 'refund' ? pct(refundAdjust.taxPct) : tax;
       const finalTotal = computeTotals([calculatedTotal], storedDiscount, storedTax);
 
+      // Effective party rate (own override, else global) - server-side only: the client never supplies it.
+      const localCur = effectiveLocalRate(tenantId, resolvedStakeholderId);
+      // A purchase keyed in the local currency is converted at the supplier's rate. (Line prices
+      // arrive in USD already, so only the stored rate changes.) Refunds keep the client-sent rate,
+      // which is the original sale's.
+      const txExchangeRate = type !== 'refund' && isLocalCode(localCur, currency) ? localCur!.rate : exchange_rate;
       const termId = terminalId || 'MAIN';
       const sequenceRow = db.prepare(`SELECT IFNULL(MAX(terminal_sequence), 0) + 1 as next_seq FROM transactions WHERE terminal_id = ? AND tenant_id = ?`).get(termId, tenantId) as any;
       const termSeq = sequenceRow.next_seq;
 
       const info = db.prepare(`
-      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, local_rate, local_currency)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         tenantId,
         resolvedStakeholderId,
@@ -1562,7 +1579,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         type || 'sale',
         finalTotal,
         currency,
-        exchange_rate,
+        txExchangeRate,
         storedDiscount?.type || null,
         storedDiscount?.value || null,
         storedTax?.type || null,
@@ -1573,7 +1590,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         type === 'refund' ? original_transaction_id : null,
         resolvedPriceLevel,
         notes || null,
-        reference || null
+        reference || null,
+        localCur?.rate ?? null,
+        localCur?.code ?? null
       );
 
       const transactionId = info.lastInsertRowid;
@@ -1620,11 +1639,12 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         VALUES (?, ?, ?, ?, ?)
       `);
         for (const payment of payments) {
-          insertPayment.run(transactionId, payment.amount, payment.method, payment.currency, payment.exchange_rate);
+          const payRate = type !== 'refund' && isLocalCode(localCur, payment.currency) ? localCur!.rate : payment.exchange_rate;
+          insertPayment.run(transactionId, payment.amount, payment.method, payment.currency, payRate);
           // BALANCE MATH (server/paymentMethods.ts): store_credit is not money either, exactly
           // like credit — it stays "unpaid" so its effect keeps consuming the positive balance.
           if (isRealMoney(payment.method)) {
-            totalPaid += (payment.amount / (payment.exchange_rate || 1));
+            totalPaid += (payment.amount / (payRate || 1));
           }
         }
       }
@@ -2264,9 +2284,11 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     const stakeholder = db.prepare("SELECT * FROM stakeholders WHERE id = ? AND tenant_id = ?").get(stakeholder_id, tenantId) as any;
     if (!stakeholder) return res.status(404).json({ error: "Stakeholder not found" });
 
-    const amountUSD = amount / (exchange_rate || 1);
     const cur = currency || 'USD';
-    const exRate = exchange_rate || 1;
+    // A local-currency payment converts at the party's own rate (else the global one), never the client's.
+    const bpLocal = effectiveLocalRate(tenantId, stakeholder_id);
+    const exRate = isLocalCode(bpLocal, cur) ? bpLocal!.rate : (exchange_rate || 1);
+    const amountUSD = amount / exRate;
     const bpNote = `${amount} ${cur}`;
 
     const balancePayment = db.transaction(() => {
@@ -2792,7 +2814,10 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
         transaction,
         openDrawer: !!openDrawer,
         arabic: printerArabicMode(printer),
-        language: settings.language
+        language: settings.language,
+        localCurrency: localCurrencyFor(tenantId),
+        currencySymbols: Object.fromEntries((db.prepare("SELECT code, symbol FROM currencies WHERE tenant_id = ?").all(tenantId) as any[])
+          .filter((c) => c.symbol).map((c) => [c.code, c.symbol])),
       });
 
       await sendToPrinter(printer, buffer);

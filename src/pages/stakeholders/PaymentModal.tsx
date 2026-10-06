@@ -3,6 +3,7 @@ import { Modal, Field, MoneyInput, Select, Button, useToast, useConfirm } from '
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney, partyDisplayName } from '../../lib/format';
+import { effectiveLocalCurrency, formatRate } from '../../lib/orderTotals';
 import { translateServerError } from '../../lib/serverErrors';
 import type { Currency, Stakeholder } from '../../types';
 
@@ -32,10 +33,21 @@ export function PaymentModal({ open, onClose, stakeholder, currencies, onDone }:
     setCurrencyCode(usd ? 'USD' : currencies[0]?.code || 'USD');
   }, [open, currencies]);
 
-  const currency = useMemo(() => currencies.find((c) => c.code === currencyCode), [currencies, currencyCode]);
+  // The party's own local-currency rate (when set) overrides the global one.
+  const effLocal = effectiveLocalCurrency(currencies, stakeholder);
+  const effCurrencies = useMemo(
+    () => currencies.map((c) => (effLocal && c.code === effLocal.code ? { ...c, rate: effLocal.rate } : c)),
+    [currencies, effLocal?.code, effLocal?.rate],
+  );
+  const currency = useMemo(() => effCurrencies.find((c) => c.code === currencyCode), [effCurrencies, currencyCode]);
   const exchangeRate = currency?.rate || 1;
 
-  const currencyOptions = currencies.map((c) => ({ value: c.code, label: `${c.code} (${c.symbol})` }));
+  const currencyOptions = effCurrencies.map((c) => ({
+    value: c.code,
+    label: effLocal && c.code === effLocal.code
+      ? `${c.code} (${c.symbol}) @ ${formatRate(c.rate)}${effLocal.source === 'party' ? ` ${direction === 'pay' ? t('party_rate_supplier', 'supplier rate') : t('party_rate_customer', 'customer rate')}` : ''}`
+      : `${c.code} (${c.symbol})`,
+  }));
 
   const handleSubmit = async () => {
     if (!stakeholder || amount <= 0) return;

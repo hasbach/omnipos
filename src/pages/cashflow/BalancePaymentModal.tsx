@@ -3,6 +3,7 @@ import { Button, Combobox, Field, Modal, MoneyInput, Select, useToast } from '..
 import { useI18n } from '../../intl/index';
 import { formatMoney, partyDisplayName } from '../../lib/format';
 import { api } from '../../lib/api';
+import { effectiveLocalCurrency, formatRate } from '../../lib/orderTotals';
 
 interface Currency {
   id?: number;
@@ -17,6 +18,7 @@ interface Stakeholder {
   balance: number;
   phone?: string | null;
   type?: 'customer' | 'supplier';
+  local_rate?: number | null;
 }
 
 const DEFAULT_CURRENCIES: Currency[] = [{ code: 'USD', symbol: '$', rate: 1 }];
@@ -66,7 +68,6 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const currency = currencies.find((c) => c.code === currencyCode) || currencies[0];
 
   const switchDirection = (d: 'collect' | 'pay') => {
     setDirection(d);
@@ -76,6 +77,15 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
   };
 
   const selectedStakeholder = stakeholders.find((s) => s.id === parseInt(stakeholderId));
+
+  // A party's own local-currency rate overrides the global one for converting what's entered.
+  const effLocal = effectiveLocalCurrency(currencies, selectedStakeholder);
+  const effCurrencies: Currency[] = currencies.map((c) => (effLocal && c.code === effLocal.code ? { ...c, rate: effLocal.rate } : c));
+  const currency = effCurrencies.find((c) => c.code === currencyCode) || effCurrencies[0];
+  const partyRateHint = (c: Currency) =>
+    effLocal?.source === 'party' && c.code === effLocal.code
+      ? ` ${direction === 'pay' ? t('party_rate_supplier', 'supplier rate') : t('party_rate_customer', 'customer rate')}`
+      : '';
 
   // Searchable party list, restricted to the relevant type: customers when collecting, suppliers when
   // paying. Whoever has a balance in this direction first (with what's owed), then the rest of that type.
@@ -190,7 +200,7 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
           <Select
             value={currencyCode}
             onChange={(e) => setCurrencyCode(e.target.value)}
-            options={currencies.map((c) => ({ value: c.code, label: `${c.code} (rate ${c.rate})` }))}
+            options={effCurrencies.map((c) => ({ value: c.code, label: `${c.code} (rate ${formatRate(c.rate)}${partyRateHint(c) ? ',' + partyRateHint(c) : ''})` }))}
           />
         </Field>
 

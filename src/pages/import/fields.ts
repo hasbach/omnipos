@@ -341,6 +341,18 @@ const PARTY_BASE_FIELDS: FieldDef[] = [
     ],
   },
   {
+    key: 'local_rate',
+    required: false,
+    type: 'number',
+    labelKey: 'imp_field_local_rate',
+    labelFallback: 'Exchange rate (local per $1)',
+    aliases: [
+      'exchange rate', 'rate', 'local rate', 'lbp rate', 'dollar rate',
+      'سعر الصرف', 'سعر الدولار',
+      'taux de change', 'taux',
+    ],
+  },
+  {
     key: 'opening_balance',
     required: false,
     type: 'number',

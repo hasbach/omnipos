@@ -71,6 +71,8 @@ export interface Stakeholder {
   balance: number;
   price_level?: PriceLevel;
   credit_limit?: number; // NULL/0 = unlimited
+  /** Party-specific local-currency rate (LL per $1); null/undefined = use the global rate. */
+  local_rate?: number | null;
 }
 
 export interface Discount {

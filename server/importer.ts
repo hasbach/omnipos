@@ -624,6 +624,7 @@ interface StakeholderPlanRow {
     price_level: PriceLevelValue | null;
     credit_limit: number | null;
     opening_balance: number | null;
+    local_rate: number | null;
   };
   presentFields?: Set<string>;
 }
@@ -696,6 +697,12 @@ function planStakeholders(tenantId: number, rows: any[], mode: Mode, type: "cust
     if (creditLimitParsed === INVALID) { errorOut("credit_limit is not a valid number.", "INVALID_NUMBER", "credit_limit"); continue; }
     if (typeof creditLimitParsed === "number" && creditLimitParsed < 0) { errorOut("credit_limit cannot be negative.", "INVALID_NUMBER", "credit_limit"); continue; }
 
+    // Optional per-party exchange rate (units of the local currency per USD); header `local_rate`
+    // or `exchange_rate`. Blank = leave as is.
+    const rateKey = present(raw, "local_rate") ? "local_rate" : present(raw, "exchange_rate") ? "exchange_rate" : null;
+    const rateParsed = rateKey ? parseNumber(raw[rateKey]) : null;
+    if (rateParsed === INVALID || (typeof rateParsed === "number" && !(rateParsed > 0))) { errorOut("Exchange rate must be a number greater than 0.", "INVALID_RATE", rateKey || "local_rate"); continue; }
+
     const openingBalanceParsed = present(raw, "opening_balance") ? parseNumber(raw.opening_balance) : null;
     if (openingBalanceParsed === INVALID) { errorOut("opening_balance is not a valid number.", "INVALID_NUMBER", "opening_balance"); continue; }
 
@@ -723,6 +730,7 @@ function planStakeholders(tenantId: number, rows: any[], mode: Mode, type: "cust
       name, phone, email, address,
       price_level: priceLevel,
       credit_limit: creditLimitParsed ?? null,
+      local_rate: typeof rateParsed === "number" ? rateParsed : null,
       opening_balance: openingBalanceParsed ?? null,
     };
 
@@ -732,6 +740,7 @@ function planStakeholders(tenantId: number, rows: any[], mode: Mode, type: "cust
     if (present(raw, "address")) presentFields.add("address");
     if (present(raw, "price_level")) presentFields.add("price_level");
     if (present(raw, "credit_limit")) presentFields.add("credit_limit");
+    if (rateKey) presentFields.add("local_rate");
     if (present(raw, "opening_balance")) presentFields.add("opening_balance");
 
     if (existing) {
@@ -786,9 +795,9 @@ function executeStakeholders(tenantId: number, userId: number | null, body: Impo
       const baseline = d.opening_balance != null ? -d.opening_balance : 0;
       const result = db
         .prepare(
-          "INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+          "INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit, local_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        .run(tenantId, d.name, type, d.email, d.phone, d.address, baseline, baseline, d.price_level || "retail", d.credit_limit);
+        .run(tenantId, d.name, type, d.email, d.phone, d.address, baseline, baseline, d.price_level || "retail", d.credit_limit, d.local_rate);
       const id = Number(result.lastInsertRowid);
       plan.existingId = id;
       if (Math.abs(baseline) > 0.0000001) writeBalanceLog(id, tenantId, 0, baseline, { source: 'import', user_id: userId, note: 'Opening balance' });
@@ -804,6 +813,7 @@ function executeStakeholders(tenantId: number, userId: number | null, body: Impo
       if (pf.has("address")) { sets.push("address = ?"); params.push(d.address); }
       if (pf.has("price_level") && d.price_level) { sets.push("price_level = ?"); params.push(d.price_level); }
       if (pf.has("credit_limit")) { sets.push("credit_limit = ?"); params.push(d.credit_limit); }
+      if (pf.has("local_rate") && d.local_rate != null) { sets.push("local_rate = ?"); params.push(d.local_rate); }
       if (sets.length > 0) {
         params.push(plan.existingId, tenantId);
         db.prepare(`UPDATE stakeholders SET ${sets.join(", ")} WHERE id = ? AND tenant_id = ?`).run(...params);

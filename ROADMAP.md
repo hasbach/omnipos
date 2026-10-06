@@ -33,6 +33,9 @@ Other items: _(add fixes and ideas here)_
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
 - [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.
 - [ ] Sync: product deletes are hard deletes locally, so they never reach the cloud.
+- [ ] **Cloud migration pending:** apply `supabase/migrations/2026-10-06_local_rates.sql` only after EVERY register
+      runs >= 1.7.6 (older versions copy every cloud column on pull and would stop syncing sales). Registers detect
+      the new columns within ~30 min and backfill party rates / sale-time rates automatically.
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —
@@ -43,6 +46,17 @@ Other items: _(add fixes and ideas here)_
 ## Shipped
 
 ### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-06)
+- **1.7.6** (2026-10-06)
+  - POS order history: totals in USD and the local currency; order preview (lines, totals, payments in their own
+    currency, refunds) with Print Receipt / Process Refund in the preview; arrow-key navigation.
+  - Sale-time exchange rate: `transactions.local_rate/local_currency` frozen at creation (kept through settlement
+    and invoice edits); the printed receipt shows the local-currency total.
+  - Per-party exchange rate: `stakeholders.local_rate` overrides the global rate for converting local-currency
+    payments and for invoices entered in the local currency (not product LBP prices; refunds keep the original
+    rate; walk-in uses the global rate). Enforced server-side (`server/localCurrency.ts`); party page, badge,
+    import column.
+  - Sync: pull ignores cloud columns the local DB lacks; optional cloud columns are pushed only once the cloud has
+    them, with automatic backfill (cloud migration pending — see To do).
 - **1.7.5** (2026-10-06) — Cloud sync: products with fractional stock (kg/g, fractional unit factors) failed to
   push because `products.stock` / `reorder_point` / `units_per_package` were INTEGER in the cloud. Migration
   `2026-10-06_products_stock_numeric.sql` makes them NUMERIC (applied 2026-10-06); the push rounds these

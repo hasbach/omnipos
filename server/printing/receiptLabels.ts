@@ -20,6 +20,7 @@ export interface ReceiptLabels {
   discount: string;
   tax: string;
   total: string;
+  totalLocal: string;        // prefix of the local-currency total line, followed by the currency symbol ("Total LL")
   paid: string;
   change: string;
   due: string;
@@ -55,6 +56,7 @@ const LABELS: Record<ReceiptLanguage, ReceiptLabels> = {
     discount: 'Discount',
     tax: 'Tax',
     total: 'TOTAL',
+    totalLocal: 'Total',
     paid: 'Paid',
     change: 'Change',
     due: 'Due',
@@ -85,6 +87,7 @@ const LABELS: Record<ReceiptLanguage, ReceiptLabels> = {
     discount: 'الخصم',
     tax: 'الضريبة',
     total: 'المجموع',
+    totalLocal: 'المجموع بـ',
     paid: 'المدفوع',
     change: 'الباقي',
     due: 'المستحق',
@@ -113,6 +116,7 @@ const LABELS: Record<ReceiptLanguage, ReceiptLabels> = {
     discount: 'Remise',
     tax: 'Taxe',
     total: 'TOTAL',
+    totalLocal: 'Total en',
     paid: 'Payé',
     change: 'Monnaie',
     due: 'Solde dû',
