@@ -51,6 +51,7 @@ export default {
     party_walk_in: 'Walk-in Customer',
 
     // ---- Server error translation (src/lib/serverErrors.ts) ----
+    err_invalid_rate: 'The exchange rate must be a number greater than zero.',
     err_credit_limit: "This would exceed the customer's credit limit.",
     err_credit_limit_amount: 'This would exceed the credit limit ({limit}).',
     err_store_credit_exceeded: 'Exceeds the available account balance ({amount}).',
@@ -119,6 +120,7 @@ export default {
     party_walk_in: 'زبون عابر',
 
     // ---- Server error translation (src/lib/serverErrors.ts) ----
+    err_invalid_rate: 'يجب أن يكون سعر الصرف رقماً أكبر من الصفر.',
     err_credit_limit: 'سيتجاوز هذا سقف ائتمان الزبون.',
     err_credit_limit_amount: 'سيتجاوز هذا سقف الائتمان ({limit}).',
     err_store_credit_exceeded: 'يتجاوز الرصيد المتاح في الحساب ({amount}).',
@@ -187,6 +189,7 @@ export default {
     party_walk_in: 'Client de passage',
 
     // ---- Server error translation (src/lib/serverErrors.ts) ----
+    err_invalid_rate: 'Le taux de change doit être un nombre supérieur à zéro.',
     err_credit_limit: 'Cela dépasserait la limite de crédit du client.',
     err_credit_limit_amount: 'Cela dépasserait la limite de crédit ({limit}).',
     err_store_credit_exceeded: 'Dépasse le solde disponible du compte ({amount}).',

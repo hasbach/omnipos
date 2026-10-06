@@ -8,6 +8,7 @@ import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPri
 import { loadUnit, loadUnitsForProduct } from "./uom.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { ValidationError } from "./errors.js";
+import { effectiveLocalRate, isLocalCode } from "./localCurrency.js";
 import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
 
 // Same guard as tenantStakeholderId in server/routes.ts (kept local to avoid a circular import
@@ -201,6 +202,15 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     : tx.stakeholder_id;
   const oldStakeholderId = tx.stakeholder_id;
 
+  // Local-currency amounts convert at the party's CURRENT effective rate (own override, else global):
+  // the client's rate is ignored for NEW local-currency payments (existing ones keep theirs) and for
+  // the invoice's own entry rate. transactions.local_rate is never touched by an edit.
+  const editLocal = effectiveLocalRate(tenantId, resolvedStakeholderId);
+  for (const p of Array.isArray(body.payments) ? body.payments : []) {
+    if (p.id !== undefined && p.id !== null) continue;
+    if (isLocalCode(editLocal, p.currency)) p.exchange_rate = editLocal!.rate;
+  }
+
   const settings = getSettingsMap(tenantId);
   const priceLevelsEnabled = settings.enable_price_levels !== '0';
   const priceLevel: PriceLevel = priceLevelsEnabled ? normalizeLevel(body.price_level ?? tx.price_level) : 'retail';
@@ -281,6 +291,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     if (!(Number.isFinite(body.exchange_rate) && Number(body.exchange_rate) > 0)) throw new ValidationError("Invalid invoice exchange rate.");
     entryRate = Number(body.exchange_rate);
   }
+  if ((entryCurrency !== null || entryRate !== null) && isLocalCode(editLocal, entryCurrency ?? tx.currency)) entryRate = editLocal!.rate;
 
   const productCache: Record<number, any> = {};
   const getProduct = (pid: number) => {

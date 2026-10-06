@@ -199,6 +199,8 @@ export function translateServerError(err: unknown, t: Translate): string {
       return t('cf_err_cat_direction_in_use', 'Movements of the opposite type already use this category, so its direction cannot be narrowed.');
     case 'CASHFLOW_CATEGORY_NOT_FOUND':
       return t('cf_err_cat_not_found', 'This category no longer exists.');
+    case 'INVALID_RATE':
+      return t('err_invalid_rate', 'The exchange rate must be a number greater than zero.');
     case 'UOM_INVALID':
       return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
   }

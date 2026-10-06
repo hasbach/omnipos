@@ -7,6 +7,7 @@ import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatMoney, formatBalance, parseServerDate, partyDisplayName } from '../../lib/format';
 import { clampMoneyInput } from '../../lib/money';
+import { effectiveLocalCurrency, formatRate } from '../../lib/orderTotals';
 import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, uomUnitPrice, type PriceLevel } from '../../lib/pricing';
@@ -148,8 +149,21 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const pendingFocusKey = useRef<string | null>(null);
 
   const entryOptions = useMemo(() => (currencies.some((c) => c.code === 'USD') ? currencies : [USD, ...currencies]), [currencies]);
-  const entryCur = entryOptions.find((c) => c.code === entryCurrency) || USD;
+  // The party's own local-currency rate (when set) overrides the global one for new conversions —
+  // entering the invoice in the local currency and adding local-currency payments. A reopened invoice
+  // keeps the rate it was saved with (savedRate).
+  const partyForRate = stakeholders.find((s) => s.id === partyId) || null;
+  const effLocal = effectiveLocalCurrency(currencies, partyForRate);
+  const effOptions = useMemo(
+    () => entryOptions.map((c) => (effLocal && c.code === effLocal.code ? { ...c, rate: effLocal.rate } : c)),
+    [entryOptions, effLocal?.code, effLocal?.rate],
+  );
+  const entryCur = effOptions.find((c) => c.code === entryCurrency) || USD;
   const rate = savedRate ?? (entryCur.rate || 1);
+  const partyRateLabel = isPurchase ? t('party_rate_supplier', 'supplier rate') : t('party_rate_customer', 'customer rate');
+  const rateSource = savedRate != null
+    ? t('party_rate_saved', 'saved rate')
+    : effLocal && entryCur.code === effLocal.code && effLocal.source === 'party' ? partyRateLabel : t('party_rate_global', 'global rate');
   // Local currencies with big rates (LBP) have no useful decimals; USD-like ones show cents.
   const totalDecimals = rate >= 100 ? 0 : 2;
   const priceDecimals = rate >= 100 ? 0 : 4;
@@ -347,12 +361,34 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     updateLine(l._key, { unit_price });
     clearFieldError(`items.${lines.indexOf(l)}.unit_price`);
   };
+  /**
+   * New (unsaved) invoice keyed in the local currency: when picking a party changes the effective rate,
+   * keep every typed LL amount constant by re-converting the USD-stored values (usd_new = usd_old × old / new).
+   * Unsaved LL payments keep their LL amount and just take the new rate. Skipped for reopened saved
+   * invoices (savedRate set) and for USD entry.
+   */
+  const changePartyRate = (newPartyId: number | '') => {
+    const newParty = stakeholders.find((s) => s.id === newPartyId) || null;
+    const next = effectiveLocalCurrency(currencies, newParty);
+    if (savedRate != null || !effLocal || !next || entryCurrency !== effLocal.code) return;
+    const oldRate = effLocal.rate;
+    const newRate = next.rate;
+    if (!(oldRate > 0) || !(newRate > 0) || oldRate === newRate) return;
+    const k = oldRate / newRate;
+    setLines((prev) => prev.map((l) => ({
+      ...l,
+      unit_price: l.unit_price * k,
+      discount: l.discount.type === 'fixed' ? { ...l.discount, value: l.discount.value * k } : l.discount,
+    })));
+    setGlobalDiscount((d) => (d.type === 'fixed' ? { ...d, value: d.value * k } : d));
+    setPayments((prev) => prev.map((p) => (!p.id && p.currency === effLocal.code ? { ...p, exchange_rate: newRate } : p)));
+  };
   const removeLine = (key: string) => { setLines((prev) => prev.filter((l) => l._key !== key)); setDirty(true); };
 
   const totals = computeInvoiceTotals(lines, globalDiscount.value ? globalDiscount : null, globalTax.value ? globalTax : null);
   const paid = paidFromPayments(payments);
   const due = Math.max(0, totals.total - paid);
-  const local = currencies.find((c) => c.code !== 'USD') || null;
+  const local = effLocal;
 
   // Old / new balance panel. "Old" = balance without this invoice's own effect (party's current
   // balance for a new invoice; server-provided base for an edit — see baseBalance above).
@@ -370,7 +406,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   };
   const addPayment = (amount: number) => {
     if (!amount || amount <= 0) return;
-    const cur = currencies.find((c) => c.code === newPayCurrency) || USD;
+    const cur = effOptions.find((c) => c.code === newPayCurrency) || USD;
     setPayments((prev) => [...prev, {
       _key: nextKey('p'),
       amount,
@@ -518,7 +554,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                   }))}
                   placeholder={t('inv_editor_party_placeholder')}
                   invalid={!!fieldErrors.stakeholder_id}
-                  onChange={(v) => { setPartyId(v ? Number(v) : ''); setDirty(true); clearFieldError('stakeholder_id'); }}
+                  onChange={(v) => { changePartyRate(v ? Number(v) : ''); setPartyId(v ? Number(v) : ''); setDirty(true); clearFieldError('stakeholder_id'); }}
                 />
                 {party && (
                   <p className="text-xs text-text-3">
@@ -547,7 +583,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                 <Input type="datetime-local" value={dateTime} onChange={(e) => { setDateTime(e.target.value); setDirty(true); }} />
               </Field>
 
-              <Field label={t('inv_editor_currency', 'Invoice currency')}>
+              <Field
+                label={t('inv_editor_currency', 'Invoice currency')}
+                helper={entryCurrency !== 'USD' ? t('party_rate_at', '@ {rate} ({source})').replace('{rate}', formatRate(rate)).replace('{source}', rateSource) : undefined}
+              >
                 <Select
                   value={entryCurrency}
                   onChange={(e) => { setEntryCurrency(e.target.value); setSavedRate(null); setDirty(true); }}
@@ -768,7 +807,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                   { value: 'credit', label: t('inv_editor_payment_method_credit', 'Credit') },
                   { value: 'store_credit', label: t('inv_editor_payment_method_store_credit', 'From account balance'), disabled: availableStoreCredit <= 0.005 },
                 ]} />
-                <Select value={newPayCurrency} onChange={(e) => setNewPayCurrency(e.target.value)} options={currencies.map((c) => ({ value: c.code, label: c.code }))} />
+                <Select value={newPayCurrency} onChange={(e) => setNewPayCurrency(e.target.value)} options={effOptions.filter((c) => currencies.some((x) => x.code === c.code)).map((c) => ({ value: c.code, label: c.code }))} />
               </div>
               <div className="flex gap-2">
                 <Button
@@ -778,7 +817,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                   onClick={() => {
                     if (!newPayAmount || newPayAmount <= 0) { setFieldErrors((prev) => ({ ...prev, payments: t('inv_editor_validation_payment_amount', 'Payment amount must be greater than 0.') })); return; }
                     if (newPayMethod === 'store_credit') {
-                      const cur = currencies.find((c) => c.code === newPayCurrency) || USD;
+                      const cur = effOptions.find((c) => c.code === newPayCurrency) || USD;
                       const amountUsd = newPayAmount / (cur.rate || 1);
                       if (storeCreditUsed + amountUsd > availableStoreCredit + 0.005) {
                         setFieldErrors((prev) => ({ ...prev, payments: t('inv_editor_validation_store_credit_exceeded', 'Exceeds the available account balance ({amount}).').replace('{amount}', formatMoney(availableStoreCredit, USD)) }));
@@ -790,7 +829,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                 >
                   <Plus size={14} /> {t('inv_editor_payments_add', 'Add payment')}
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => { const cur = currencies.find((c) => c.code === newPayCurrency) || USD; addPayment(Number((due * cur.rate).toFixed(2))); }}>{t('inv_editor_pay_remaining', 'Pay remaining')}</Button>
+                <Button variant="ghost" size="sm" onClick={() => { const cur = effOptions.find((c) => c.code === newPayCurrency) || USD; addPayment(Number((due * cur.rate).toFixed(2))); }}>{t('inv_editor_pay_remaining', 'Pay remaining')}</Button>
               </div>
               <div className="flex justify-between text-xs text-text-3 pt-1">
                 <span>{t('inv_editor_paid', 'Paid')}: <span className="num text-success">{fmt(paid)}</span></span>

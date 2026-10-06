@@ -10,6 +10,8 @@ import { usePosContext } from '../context/PosContext';
 import { usePermissions } from '../lib/usePermissions';
 import { CURRENCIES } from '../hooks/usePos';
 import { Modal, Button, Field, Input, Textarea, Badge, IconButton } from './ui';
+import OrderHistoryPreview from './OrderHistoryPreview';
+import { localCurrencyOf, orderLocal, formatLocal, formatRate } from '../lib/orderTotals';
 import { formatMoney, formatBalance, paymentMethodLabel, formatTime, formatDate, formatNumber, partyDisplayName } from '../lib/format';
 
 const QUICK_CASH_STEPS = [5, 10, 20, 50, 100];
@@ -20,7 +22,7 @@ export default function PaymentModal() {
   const {
     products, sellableProducts, cart, barcodeInput, setBarcodeInput, isProcessing,
     currencies = CURRENCIES, selectedCurrency, showCheckout, setShowCheckout, payments, setPayments,
-    paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency,
+    paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency, paymentCurrencies, effectiveLocal,
     showAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, setIsPriceChecker,
     lastTransaction, setLastTransaction, suggestions, setSuggestions, finishSaleTab,
     stakeholders, selectedStakeholder, selectedStakeholderObj, creditLimit, availableCredit,
@@ -47,6 +49,15 @@ export default function PaymentModal() {
     tx.terminal_id && tx.terminal_sequence
       ? `${tx.terminal_id}-${String(tx.terminal_sequence).padStart(4, '0')}`
       : `#${tx.id}`;
+
+  // Daily-history totals: refunds/purchases subtract. The local value is summed per order so each
+  // order uses its own rate rule (see src/lib/orderTotals.ts).
+  const localCurrency = localCurrencyOf(currencies);
+  const historySign = (tr: any) => (tr.type === 'refund' || tr.type === 'purchase' ? -1 : 1);
+  const dayNetUSD = (dailyTransactions || []).reduce((sum: number, tr: any) => sum + historySign(tr) * tr.total_amount, 0);
+  const dayNetLocal: number | null = localCurrency
+    ? (dailyTransactions || []).reduce((sum: number, tr: any) => sum + historySign(tr) * (orderLocal(tr.total_amount, tr, currencies)?.amount || 0), 0)
+    : null;
 
   const paidUSD = payments.reduce((sum: number, p: any) => sum + (p.amount / p.exchange_rate), 0);
   const remainingUSD = totalUSD - paidUSD;
@@ -210,7 +221,27 @@ export default function PaymentModal() {
 
       {/* Daily History Overlay */}
       <Modal open={showDailyHistory} onClose={() => setShowDailyHistory(false)} size="full" title={t('pos_daily_order_history', 'Daily Order History')}>
-        <div className="flex flex-col h-full -m-4 md:-m-4">
+        <div
+          className="flex flex-col h-full -m-4 md:-m-4 outline-none"
+          tabIndex={-1}
+          onKeyDown={(e) => {
+            // Up/Down walks the list — but not while typing in the date input.
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            const el = e.target as HTMLElement;
+            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
+            if (!dailyTransactions.length) return;
+            e.preventDefault();
+            const idx = dailyTransactions.findIndex((x: any) => x.id === selectedHistoryTransaction?.id);
+            const next = e.key === 'ArrowDown'
+              ? Math.min(dailyTransactions.length - 1, idx + 1)
+              : Math.max(0, idx === -1 ? 0 : idx - 1);
+            const row = dailyTransactions[next];
+            if (row) {
+              setSelectedHistoryTransaction(row);
+              document.querySelector(`[data-history-row="${row.id}"]`)?.scrollIntoView({ block: 'nearest' });
+            }
+          }}
+        >
           <div className="p-4 border-b border-border flex justify-between items-center bg-surface-2 flex-wrap gap-3">
             <p className="text-sm text-text-3">{t('pos_history_subtitle', 'Review transactions and re-print receipts.')}</p>
             <div className="relative">
@@ -219,102 +250,125 @@ export default function PaymentModal() {
                 type="date"
                 className="ps-10 pe-4 py-2 min-h-[40px] bg-surface border border-border rounded-xl font-semibold text-sm outline-none focus:border-primary transition-all text-text"
                 value={historyDate}
-                onChange={(e) => setHistoryDate(e.target.value)}
+                onChange={(e) => { setSelectedHistoryTransaction(null); setHistoryDate(e.target.value); }}
               />
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4">
-            <div className="bg-surface rounded-2xl border border-border overflow-hidden">
-              <table className="w-full text-start border-collapse">
-                <thead>
-                  <tr className="bg-surface-2 text-text-2 text-[10px] uppercase tracking-wide font-bold">
-                    <th className="p-3 text-start">{t('pos_hist_id', 'ID')}</th>
-                    <th className="p-3 text-start">{t('pos_hist_time', 'Time')}</th>
-                    <th className="p-3 text-start">{t('pos_hist_customer', 'Customer')}</th>
-                    <th className="p-3 text-start">{t('pos_hist_user', 'User')}</th>
-                    <th className="p-3 text-end">{t('pos_hist_total', 'Total')}</th>
-                    <th className="p-3 text-center">{t('pos_hist_type', 'Type')}</th>
-                  </tr>
-                </thead>
-                <tbody className="text-sm">
-                  {loadingHistory ? (
-                    <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">{t('pos_hist_loading', 'Loading history...')}</td></tr>
-                  ) : dailyTransactions.length === 0 ? (
-                    <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">{t('pos_hist_no_transactions', 'No transactions found for this date.')}</td></tr>
-                  ) : (
-                    dailyTransactions.map((tr: any) => (
-                      <tr
-                        key={tr.id}
-                        onClick={() => setSelectedHistoryTransaction(tr)}
-                        className={`border-b border-border hover:bg-surface-2 transition-colors cursor-pointer ${selectedHistoryTransaction?.id === tr.id ? 'bg-primary-soft' : ''}`}
+          <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+            <div className="p-4 lg:w-3/5 lg:overflow-y-auto lg:min-h-0 shrink-0 lg:shrink">
+              <div className="bg-surface rounded-2xl border border-border overflow-hidden">
+                <table className="w-full text-start border-collapse">
+                  <thead>
+                    <tr className="bg-surface-2 text-text-2 text-[10px] uppercase tracking-wide font-bold">
+                      <th className="p-3 text-start">{t('pos_hist_id', 'ID')}</th>
+                      <th className="p-3 text-start">{t('pos_hist_time', 'Time')}</th>
+                      <th className="p-3 text-start">{t('pos_hist_customer', 'Customer')}</th>
+                      <th className="p-3 text-start">{t('pos_hist_user', 'User')}</th>
+                      <th className="p-3 text-end">{t('pos_hist_total', 'Total')}</th>
+                      <th className="p-3 text-center">{t('pos_hist_type', 'Type')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-sm">
+                    {loadingHistory ? (
+                      <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">{t('pos_hist_loading', 'Loading history...')}</td></tr>
+                    ) : dailyTransactions.length === 0 ? (
+                      <tr><td colSpan={6} className="p-12 text-center text-text-3 italic">{t('pos_hist_no_transactions', 'No transactions found for this date.')}</td></tr>
+                    ) : (
+                      dailyTransactions.map((tr: any) => {
+                        const lbp = orderLocal(tr.total_amount, tr, currencies);
+                        return (
+                        <tr
+                          key={tr.id}
+                          data-history-row={tr.id}
+                          onClick={() => setSelectedHistoryTransaction(tr)}
+                          className={`border-b border-border hover:bg-surface-2 transition-colors cursor-pointer ${selectedHistoryTransaction?.id === tr.id ? 'bg-primary-soft' : ''}`}
+                        >
+                          <td className="p-3 font-mono font-bold text-text">{formatTxId(tr)}</td>
+                          <td className="p-3 text-text-3">{formatTime(tr.created_at, lang, { seconds: true })}</td>
+                          <td className="p-3 font-semibold text-text">{tr.stakeholder_name ? partyDisplayName(tr.stakeholder_name, t) : t('pos_walk_in', 'Walk-in')}</td>
+                          <td className="p-3 text-text-2">{tr.user_name || t('pos_hist_system', 'System')}</td>
+                          <td className="p-3 text-end font-mono num">
+                            <div className="font-bold text-text">{formatMoney(tr.total_amount, { code: 'USD', symbol: '$' })}</div>
+                            {lbp && <div className="text-[11px] text-text-3">{formatLocal(lbp.amount, lbp.currency)}</div>}
+                          </td>
+                          <td className="p-3 text-center">
+                            <Badge variant={tr.type === 'refund' ? 'danger' : tr.type === 'purchase' ? 'info' : 'success'}>
+                              {tr.type === 'sale' ? t('pos_type_sale', 'sale') : tr.type === 'refund' ? t('pos_type_refund', 'refund') : tr.type === 'purchase' ? t('pos_type_purchase', 'purchase') : tr.type}
+                            </Badge>
+                          </td>
+                        </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="lg:w-2/5 lg:overflow-y-auto lg:min-h-0 border-t lg:border-t-0 lg:border-s border-border bg-surface">
+              <OrderHistoryPreview
+                tx={selectedHistoryTransaction}
+                refreshKey={dailyTransactions}
+                currencies={currencies}
+                t={t}
+                lang={lang}
+                formatTxId={formatTxId}
+                actions={selectedHistoryTransaction && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={async () => {
+                        const res = await fetch(`/api/transactions/${selectedHistoryTransaction.id}`);
+                        if (res.ok) printReceipt(await res.json());
+                      }}
+                    >
+                      <Printer size={14} /> {t('pos_print_receipt', 'Print Receipt')}
+                    </Button>
+                    {selectedHistoryTransaction.type === 'sale' && can('pos.refund') && (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={async () => {
+                          const [res, refRes] = await Promise.all([
+                            fetch(`/api/transactions/${selectedHistoryTransaction.id}`),
+                            fetch(`/api/transactions/${selectedHistoryTransaction.id}/refundable`),
+                          ]);
+                          if (res.ok && refRes.ok) {
+                            const full = await res.json();
+                            const refundable = await refRes.json();
+                            // One refund row per ORIGINAL LINE, in that line's unit (server /refundable).
+                            full.refund_lines = refundable.lines || [];
+                            setSelectedHistoryTransaction(full);
+                            const initialRefunds: Record<number, number> = {};
+                            full.refund_lines.forEach((l: any) => initialRefunds[l.item_id] = 0);
+                            setRefundQuantities(initialRefunds);
+                            setRefundMethod('cash');
+                            setShowRefundModal(true);
+                          }
+                        }}
                       >
-                        <td className="p-3 font-mono font-bold text-text">{formatTxId(tr)}</td>
-                        <td className="p-3 text-text-3">{formatTime(tr.created_at, lang, { seconds: true })}</td>
-                        <td className="p-3 font-semibold text-text">{tr.stakeholder_name ? partyDisplayName(tr.stakeholder_name, t) : t('pos_walk_in', 'Walk-in')}</td>
-                        <td className="p-3 text-text-2">{tr.user_name || t('pos_hist_system', 'System')}</td>
-                        <td className="p-3 text-end font-mono font-bold num text-text">${tr.total_amount.toFixed(2)}</td>
-                        <td className="p-3 text-center">
-                          <Badge variant={tr.type === 'refund' ? 'danger' : tr.type === 'purchase' ? 'info' : 'success'}>
-                            {tr.type === 'sale' ? t('pos_type_sale', 'sale') : tr.type === 'refund' ? t('pos_type_refund', 'refund') : tr.type === 'purchase' ? t('pos_type_purchase', 'purchase') : tr.type}
-                          </Badge>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                        <RotateCcw size={14} /> {t('pos_process_refund', 'Process Refund')}
+                      </Button>
+                    )}
+                  </>
+                )}
+              />
             </div>
           </div>
 
           <div className="p-4 border-t border-border bg-surface-2 flex justify-between items-center flex-wrap gap-3">
-            <div className="flex gap-3 items-center flex-wrap">
-              <div className="text-sm font-bold text-text-3">
-                {t('pos_total_transactions', 'Total Transactions: {count}', { count: dailyTransactions.length })}
-              </div>
-              {selectedHistoryTransaction && (
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={async () => {
-                      const res = await fetch(`/api/transactions/${selectedHistoryTransaction.id}`);
-                      if (res.ok) printReceipt(await res.json());
-                    }}
-                  >
-                    <Printer size={14} /> {t('pos_print_receipt', 'Print Receipt')}
-                  </Button>
-                  {selectedHistoryTransaction.type === 'sale' && can('pos.refund') && (
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={async () => {
-                        const [res, refRes] = await Promise.all([
-                          fetch(`/api/transactions/${selectedHistoryTransaction.id}`),
-                          fetch(`/api/transactions/${selectedHistoryTransaction.id}/refundable`),
-                        ]);
-                        if (res.ok && refRes.ok) {
-                          const full = await res.json();
-                          const refundable = await refRes.json();
-                          // One refund row per ORIGINAL LINE, in that line's unit (server /refundable).
-                          full.refund_lines = refundable.lines || [];
-                          setSelectedHistoryTransaction(full);
-                          const initialRefunds: Record<number, number> = {};
-                          full.refund_lines.forEach((l: any) => initialRefunds[l.item_id] = 0);
-                          setRefundQuantities(initialRefunds);
-                          setRefundMethod('cash');
-                          setShowRefundModal(true);
-                        }
-                      }}
-                    >
-                      <RotateCcw size={14} /> {t('pos_process_refund', 'Process Refund')}
-                    </Button>
-                  )}
-                </div>
-              )}
+            <div className="text-sm font-bold text-text-3">
+              {t('pos_total_transactions', 'Total Transactions: {count}', { count: dailyTransactions.length })}
             </div>
-            <div className="text-xl font-black font-mono num text-text">
-              {t('pos_hist_total_label', 'Total:')} ${dailyTransactions.reduce((sum: number, tr: any) => sum + (tr.type === 'refund' || tr.type === 'purchase' ? -tr.total_amount : tr.total_amount), 0).toFixed(2)}
+            <div className="text-end font-mono num text-text">
+              <div className="text-xl font-black">
+                {t('pos_hist_total_label', 'Total:')} {formatMoney(dayNetUSD, { code: 'USD', symbol: '$' })}
+              </div>
+              {localCurrency && dayNetLocal != null && (
+                <div className="text-sm font-bold text-text-3">{formatLocal(dayNetLocal, localCurrency)}</div>
+              )}
             </div>
           </div>
         </div>
@@ -490,6 +544,12 @@ export default function PaymentModal() {
                 <span className="text-xs font-bold text-text-3 uppercase tracking-wide">{t('pos_total_due', 'Total Due')}</span>
                 <span className="text-2xl font-black font-mono num text-text">${totalUSD.toFixed(2)}</span>
               </div>
+              {effectiveLocal?.source === 'party' && !isWalkIn && (
+                <div className="-mt-2 flex justify-between items-center px-4 text-xs text-text-3 num">
+                  <span>{t('party_rate_at', '@ {rate} ({source})', { rate: formatRate(effectiveLocal.rate), source: t('party_rate_customer', 'customer rate') })}</span>
+                  <span className="font-mono font-bold">{formatLocal(Math.round(totalUSD * effectiveLocal.rate), effectiveLocal)}</span>
+                </div>
+              )}
 
               {payments.length > 0 && (
                 <div className="space-y-2">
@@ -563,7 +623,7 @@ export default function PaymentModal() {
 
                   {paymentMethod !== 'store_credit' && (
                     <div className="grid grid-cols-3 gap-2">
-                      {currencies.map((c: any) => (
+                      {(paymentCurrencies || currencies).map((c: any) => (
                         <button key={c.code} onClick={() => setPaymentCurrency(c)} className={`py-2 min-h-[36px] rounded-lg text-[10px] font-bold uppercase border transition-all cursor-pointer ${paymentCurrency.code === c.code ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}>{c.code}</button>
                       ))}
                     </div>
@@ -707,7 +767,7 @@ export default function PaymentModal() {
           </div>
 
           <div className="grid grid-cols-3 gap-2">
-            {currencies.map((c: any) => (
+            {(paymentCurrencies || currencies).map((c: any) => (
               <button key={c.code} onClick={() => setPaymentCurrency(c)} className={`py-2 min-h-[36px] rounded-lg text-[10px] font-bold uppercase border transition-all cursor-pointer ${paymentCurrency.code === c.code ? 'bg-primary text-on-primary border-primary' : 'text-text-2 border-border'}`}>{c.code}</button>
             ))}
           </div>

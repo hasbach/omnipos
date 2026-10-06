@@ -409,6 +409,8 @@ for (const col of ['price_wholesale', 'price_wholesale_lbp', 'price_super_wholes
 }
 try { db.exec("ALTER TABLE stakeholders ADD COLUMN price_level TEXT DEFAULT 'retail';"); } catch {}
 try { db.exec("ALTER TABLE stakeholders ADD COLUMN credit_limit REAL;"); } catch {}
+// A party's own local-currency exchange rate (units per USD); NULL = use the global currencies rate.
+try { db.exec("ALTER TABLE stakeholders ADD COLUMN local_rate REAL;"); } catch {}
 // Every column added to a live transactional table must also exist on its archived twin and be
 // copied by /api/tenant/settlement — settlement moves rows between them.
 for (const t of ['transactions', 'archived_transactions']) {
@@ -417,6 +419,10 @@ for (const t of ['transactions', 'archived_transactions']) {
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN reference TEXT;`); } catch {}
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN edited_at DATETIME;`); } catch {}
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN edit_count INTEGER DEFAULT 0;`); } catch {}
+  // The tenant's local-currency rate (units per USD) and code at the moment of sale. Server-set,
+  // never edited afterwards, local-only for now (see the push strip in server/sync.ts).
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN local_rate REAL;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN local_currency TEXT;`); } catch {}
 }
 // USD cost of one unit at the time the line was recorded — the basis of COGS / gross profit.
 try { db.exec("ALTER TABLE transaction_items ADD COLUMN unit_cost REAL;"); } catch {}

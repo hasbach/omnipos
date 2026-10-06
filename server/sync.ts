@@ -72,18 +72,37 @@ export function resumeSync(): void { syncPaused = false; }
 // before its Supabase migration has been run). PostgREST rejects the WHOLE upsert with PGRST204
 // for one unknown column, so rather than blocking all sync for that table we learn the column
 // here, strip it from the payload, and retry. Reset on restart, so it's re-probed after migrating.
-const cloudMissingColumns: Record<string, Set<string>> = {};
+// Each learned column is forgotten after CLOUD_COLUMN_REPROBE_MS (and on restart) so applying the cloud
+// migration is picked up without a restart: the next push includes the column again.
+const CLOUD_COLUMN_REPROBE_MS = 30 * 60 * 1000;
+const cloudMissingColumns: Record<string, Map<string, number>> = {}; // table -> column -> forget-at (ms)
+function activeMissingColumns(tableName: string): Set<string> | null {
+  const m = cloudMissingColumns[tableName];
+  if (!m) return null;
+  const now = Date.now();
+  for (const [col, until] of m) if (until <= now) m.delete(col);
+  return m.size ? new Set(m.keys()) : null;
+}
+/** Test hook: forget what we learned about the cloud's missing columns. */
+export function resetCloudColumnProbe() { for (const k of Object.keys(cloudMissingColumns)) delete cloudMissingColumns[k]; }
+/** Column named by a PostgREST PGRST204 ("Could not find the 'x' column of ...") or Postgres 42703 error. */
+export function parseMissingColumn(error: any): string | undefined {
+  if (!error) return undefined;
+  if (error.code === 'PGRST204') return /'([^']+)' column/.exec(error.message || '')?.[1];
+  if (error.code === '42703') return /column "([^"]+)"/.exec(error.message || '')?.[1] ?? /'([^']+)' column/.exec(error.message || '')?.[1];
+  return undefined;
+}
 
-async function upsertToCloud(client: SupabaseClient, tableName: string, payload: any) {
+export async function upsertToCloud(client: SupabaseClient, tableName: string, payload: any) {
   const rows: any[] = Array.isArray(payload) ? payload : [payload];
   for (let attempt = 0; attempt < 5; attempt++) {
-    const missing = cloudMissingColumns[tableName];
+    const missing = activeMissingColumns(tableName);
     if (missing) for (const r of rows) for (const col of missing) delete r[col];
     const { error } = await client.from(tableName).upsert(Array.isArray(payload) ? rows : rows[0], { onConflict: 'global_id' });
-    const col = error?.code === 'PGRST204' ? /'([^']+)' column/.exec(error.message || '')?.[1] : undefined;
+    const col = parseMissingColumn(error);
     if (!col || missing?.has(col)) return { error };
     console.warn(`⚠️ [SYNC] Cloud ${tableName} has no '${col}' column — pushing without it until the cloud schema is migrated.`);
-    (cloudMissingColumns[tableName] ||= new Set()).add(col);
+    (cloudMissingColumns[tableName] ||= new Map()).set(col, Date.now() + CLOUD_COLUMN_REPROBE_MS);
   }
   return { error: { message: `Too many unknown columns for ${tableName}` } };
 }
@@ -139,6 +158,61 @@ async function retireCloudBarcodeDuplicates(client: SupabaseClient, rows: any[])
 const QUANTITY_COLUMNS: Record<string, string[]> = {
   products: ['stock', 'reorder_point', 'units_per_package'],
 };
+// Columns that exist only in the local database and must never be pushed.
+//  - stakeholders.balance_baseline (see server/balance.ts)
+const LOCAL_ONLY_COLUMNS: Record<string, string[]> = {
+  stakeholders: ['balance_baseline'],
+};
+// Columns pushed only once the cloud has them (supabase/migrations/2026-10-06_local_rates.sql). They
+// are always included in the payload; if the cloud rejects one as unknown, upsertToCloud learns that,
+// strips it and retries. The first successful push that INCLUDED a column persists a flag in
+// `_migrations` and re-marks the rows holding a value as unsynced, so values set before the cloud
+// migration get pushed once.
+export const OPTIONAL_CLOUD_COLUMNS: Record<string, string[]> = {
+  stakeholders: ['local_rate'],
+  transactions: ['local_rate', 'local_currency'],
+};
+const cloudColFlag = (table: string, col: string) => `cloud_col_ok:${table}.${col}`;
+function noteCloudColumnsAccepted(tableName: string, payload: any[]) {
+  if (!payload.length) return;
+  for (const col of OPTIONAL_CLOUD_COLUMNS[tableName] || []) {
+    if (!(col in payload[0])) continue; // was stripped: the cloud doesn't have it (yet)
+    const name = cloudColFlag(tableName, col);
+    if (db.prepare("SELECT 1 FROM _migrations WHERE name = ?").get(name)) continue;
+    db.transaction(() => {
+      db.prepare("INSERT OR IGNORE INTO _migrations (name) VALUES (?)").run(name);
+      db.prepare(`UPDATE ${tableName} SET last_synced_at = NULL WHERE ${col} IS NOT NULL`).run();
+    })();
+    console.log(`[SYNC] Cloud ${tableName}.${col} is available - re-pushing rows that hold a value.`);
+  }
+}
+/** Row -> cloud upsert payload (before FK translation): drops local-only columns, id -> local_id. */
+export function toCloudRecord(tableName: string, record: any) {
+  const { id, last_synced_at, ...rest } = record;
+  const mapped: any = { ...rest };
+  for (const col of LOCAL_ONLY_COLUMNS[tableName] || []) delete mapped[col];
+  if (id !== undefined) mapped.local_id = id;
+  return mapped;
+}
+
+// Cloud columns this database doesn't have (a newer cloud schema) are dropped on pull instead of
+// failing the whole INSERT/UPDATE. PRAGMA results are cached per table for the process lifetime.
+const localColumnCache = new Map<string, Set<string>>();
+export function localColumns(tableName: string): Set<string> {
+  let cols = localColumnCache.get(tableName);
+  if (!cols) {
+    cols = new Set((db.prepare(`PRAGMA table_info(${tableName})`).all() as any[]).map(c => c.name));
+    localColumnCache.set(tableName, cols);
+  }
+  return cols;
+}
+export function dropUnknownLocalColumns(tableName: string, record: any) {
+  const cols = localColumns(tableName);
+  const out: any = {};
+  for (const k of Object.keys(record)) if (cols.has(k)) out[k] = record[k];
+  return out;
+}
+
 export function cleanQuantity(v: any) {
   if (typeof v !== 'number' || !Number.isFinite(v) || Number.isInteger(v)) return v;
   const r = Math.round(v * 1e6) / 1e6;
@@ -169,7 +243,7 @@ function syncableTenant(email: string): boolean {
 /**
  * Pushes the active tenant's local changes to Supabase (records where updated_at > last_synced_at).
  */
-async function pushToCloud(client: SupabaseClient, localId: number) {
+export async function pushToCloud(client: SupabaseClient, localId: number) {
   for (const tableName of PUSH_TABLES) {
     if (syncPaused) return;
     if (cloudMissingTables.has(tableName)) continue;
@@ -187,12 +261,10 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
       if (unsyncedRecords.length === 0) continue;
 
       // Map local integer 'id' -> 'local_id', strip 'last_synced_at', translate FK ids -> UUIDs.
-      // `balance_baseline` is a local-only column (see server/balance.ts) — never push it to the
-      // cloud, whose stakeholders table doesn't have it (pushing an unknown column errors).
+      // Local-only columns (see LOCAL_ONLY_COLUMNS) are never pushed — the cloud tables don't have
+      // them and pushing an unknown column errors.
       const payload = unsyncedRecords.map(record => {
-        const { id, last_synced_at, balance_baseline, ...rest } = record;
-        const mapped: any = { ...rest };
-        if (id !== undefined) mapped.local_id = id;
+        const mapped: any = toCloudRecord(tableName, record);
         for (const col of QUANTITY_COLUMNS[tableName] || []) if (col in mapped) mapped[col] = cleanQuantity(mapped[col]);
         if (fkMap[tableName]) {
           for (const [col, refTable] of Object.entries(fkMap[tableName])) {
@@ -209,6 +281,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
       const { error } = await upsertToCloud(client, tableName, payload);
       if (isMissingCloudTable(error)) { noteMissingCloudTable(tableName); continue; }
       if (!error) {
+        noteCloudColumnsAccepted(tableName, payload);
         const tx = db.transaction((records: any[]) => {
           for (const record of records) markSynced.run(record.global_id);
         });
@@ -242,7 +315,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
 /**
  * Pulls the active tenant's newer cloud rows into local SQLite.
  */
-async function pullFromCloud(client: SupabaseClient, localId: number, globalId: string) {
+export async function pullFromCloud(client: SupabaseClient, localId: number, globalId: string) {
   async function fetchChunked(tableName: string, columnName: string, ids: string[], lastUpdate: string) {
     const CHUNK_SIZE = 100;
     let allResults: any[] = [];
@@ -320,7 +393,7 @@ async function pullFromCloud(client: SupabaseClient, localId: number, globalId: 
             if (mapped[col]) mapped[col] = getLocalId(refTable, mapped[col]);
           }
         }
-        return mapped;
+        return dropUnknownLocalColumns(tableName, mapped);
       });
 
       const columns = Object.keys(mappedData[0]);
