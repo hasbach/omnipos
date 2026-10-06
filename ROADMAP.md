@@ -32,6 +32,9 @@ Other items: _(add fixes and ideas here)_
 - [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
 - [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.
+- [ ] Sync: fractional values pushed into integer cloud columns fail every cycle (`invalid input syntax for type
+      integer`, e.g. 1.8000000000000016) — round before push or make those cloud columns numeric.
+- [ ] Sync: product deletes are hard deletes locally, so they never reach the cloud.
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —
@@ -42,6 +45,12 @@ Other items: _(add fixes and ideas here)_
 ## Shipped
 
 ### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-06)
+- **1.7.4** (2026-10-06) — Cloud sync fix: extra product barcodes are soft-deleted and keep their global_id
+  across saves (`server/barcodes.ts`). The old delete-and-reinsert made every barcode push fail on the cloud's
+  UNIQUE(barcode) and retry every 10 s (~1.2M failing requests/day, project overloaded). Sync now runs one cycle
+  at a time, backs off on tables that keep failing, and retires older live cloud barcode duplicates (soft
+  delete). Cloud migration `2026-10-06_product_barcodes_soft_delete.sql`: step 1 applied 2026-10-06; step 2
+  (duplicate cleanup) re-runnable until every register is on 1.7.4.
 - **1.7.3** (2026-10-06)
   - POS: Balance Payment button in the header menu; Collect lists customers only, Pay lists suppliers only.
   - POS: barcodes sharing a prefix add the exact product; search shows up to 50 scrollable results with
