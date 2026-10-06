@@ -133,6 +133,18 @@ async function retireCloudBarcodeDuplicates(client: SupabaseClient, rows: any[])
   }
 }
 
+// Quantities that are REAL locally (kg/g products, fractional unit factors) pick up floating-point
+// noise from stock arithmetic (1.8000000000000016, -6.1e-30). Round them before pushing so the cloud
+// stores clean values. Only these columns: money columns keep full precision (LBP conversions).
+const QUANTITY_COLUMNS: Record<string, string[]> = {
+  products: ['stock', 'reorder_point', 'units_per_package'],
+};
+export function cleanQuantity(v: any) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || Number.isInteger(v)) return v;
+  const r = Math.round(v * 1e6) / 1e6;
+  return Object.is(r, -0) ? 0 : r;
+}
+
 // The tenants row is authoritative in the cloud (created at registration, license edited by the
 // super-admin) — the desktop only ever PULLS it, never pushes, so it can't stomp a freshly
 // activated license with a stale local copy.
@@ -181,6 +193,7 @@ async function pushToCloud(client: SupabaseClient, localId: number) {
         const { id, last_synced_at, balance_baseline, ...rest } = record;
         const mapped: any = { ...rest };
         if (id !== undefined) mapped.local_id = id;
+        for (const col of QUANTITY_COLUMNS[tableName] || []) if (col in mapped) mapped[col] = cleanQuantity(mapped[col]);
         if (fkMap[tableName]) {
           for (const [col, refTable] of Object.entries(fkMap[tableName])) {
             if (mapped[col]) mapped[col] = getGlobalId(refTable, mapped[col]);
