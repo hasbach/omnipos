@@ -32,8 +32,6 @@ Other items: _(add fixes and ideas here)_
 - [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
 - [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.
-- [ ] Sync: fractional values pushed into integer cloud columns fail every cycle (`invalid input syntax for type
-      integer`, e.g. 1.8000000000000016) — round before push or make those cloud columns numeric.
 - [ ] Sync: product deletes are hard deletes locally, so they never reach the cloud.
 
 **Housekeeping**
@@ -45,6 +43,10 @@ Other items: _(add fixes and ideas here)_
 ## Shipped
 
 ### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-06)
+- **1.7.5** (2026-10-06) — Cloud sync: products with fractional stock (kg/g, fractional unit factors) failed to
+  push because `products.stock` / `reorder_point` / `units_per_package` were INTEGER in the cloud. Migration
+  `2026-10-06_products_stock_numeric.sql` makes them NUMERIC (applied 2026-10-06); the push rounds these
+  quantities to 6 decimals to drop floating-point noise.
 - **1.7.4** (2026-10-06) — Cloud sync fix: extra product barcodes are soft-deleted and keep their global_id
   across saves (`server/barcodes.ts`). The old delete-and-reinsert made every barcode push fail on the cloud's
   UNIQUE(barcode) and retry every 10 s (~1.2M failing requests/day, project overloaded). Sync now runs one cycle
