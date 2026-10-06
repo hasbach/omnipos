@@ -45,7 +45,14 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
-### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-06)
+### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-07)
+- **1.7.7** (2026-10-07) — Cloud sync stopped on every register from 2026-10-05 (~27 h): the Supabase session died
+  (`refresh_token_already_used` / `refresh_token_not_found`) and sync skipped silently. Fixes: single-flight
+  session rehydration (concurrent refreshes looked like token reuse); rotated refresh tokens persisted in the
+  local `cloud_session` table; sign-out uses scope `local` on registers and the Live Monitor (the default
+  `global` signed the shared business account out everywhere); replaced clients are stopped; a dead session is
+  never retried and shows a "Cloud sync stopped" banner with a password-only reconnect for the current business
+  (`POST /api/auth/cloud-reconnect`, `GET /api/sync/status`).
 - **1.7.6** (2026-10-06)
   - POS order history: totals in USD and the local currency; order preview (lines, totals, payments in their own
     currency, refunds) with Print Receipt / Process Refund in the preview; arrow-key navigation.

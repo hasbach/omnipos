@@ -4,13 +4,16 @@ import { buildStatement } from "./statement.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
-import { forceInitialSync } from "./sync.js";
+import { forceInitialSync, forcePushToCloud, getSyncTimes, countPendingPush } from "./sync.js";
 import {
   setActiveSession,
   getActiveSession,
   rehydrateActiveSession,
   createAuthedClient,
   clearActiveSession,
+  forgetCloudSession,
+  isAuthExpired,
+  getAuthHealth,
 } from "./session.js";
 import { EscPos } from "./printing/escpos.js";
 import { localCurrencyFor, effectiveLocalRate, isLocalCode, parsePartyRate } from "./localCurrency.js";
@@ -401,8 +404,9 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     }
   });
 
-  app.post("/api/auth/logout", (req, res) => {
+  app.post("/api/auth/logout", (req: any, res) => {
     clearActiveSession();
+    if (req.session?.tenantId) forgetCloudSession(req.session.tenantId);
     req.session.destroy(() => {
       res.json({ success: true });
     });
@@ -416,6 +420,101 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
     res.json({ port, addresses: getLanAddresses().map((ip) => ({ ip, url: `http://${ip}:${port}` })) });
   });
 
+  // Bring the in-memory cloud session back after an app restart. Single-flight and token-aware
+  // (see server/session.ts): concurrent callers share one refresh, the newest persisted token is
+  // used, and a rejected token is never retried.
+  async function ensureCloudSession(req: any, tenant: any): Promise<void> {
+    const current = getActiveSession();
+    if (current && current.localId === req.session.tenantId) return;
+    const globalId = req.session.sbGlobalId || tenant.global_id;
+    if (!globalId) return;
+    const result = await rehydrateActiveSession(
+      req.session.tenantId,
+      globalId,
+      req.session.sbEmail || tenant.email,
+      req.session.sbRefresh
+    );
+    if (result === 'ok') {
+      const s = getActiveSession();
+      if (s) { req.session.sbRefresh = s.refreshToken; req.session.sbGlobalId = s.globalId; }
+      forceInitialSync().catch(() => {});
+    }
+  }
+
+  // Cloud sync health for the "sync stopped" banner. Read-only.
+  app.get("/api/sync/status", authenticate, async (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(tenantId) as any;
+    if (!tenant) return res.status(401).json({ error: "Not logged in" });
+    await ensureCloudSession(req, tenant);
+    const s = getActiveSession();
+    const times = getSyncTimes();
+    let state: 'ok' | 'offline' | 'auth_expired' | 'not_signed_in';
+    if (s && s.localId === tenantId) {
+      state = times.recentError ? 'offline' : 'ok';
+    } else if (isAuthExpired(tenantId)) {
+      state = 'auth_expired';
+    } else if (getAuthHealth().networkRetryAt > Date.now()) {
+      state = 'offline';
+    } else {
+      state = 'not_signed_in';
+    }
+    res.json({
+      state,
+      email: tenant.email,
+      lastPushAt: times.lastPushAt,
+      lastPullAt: times.lastPullAt,
+      pendingCounts: countPendingPush(tenantId),
+    });
+  });
+
+  // Re-establish the cloud session for the CURRENT tenant after the stored refresh token died.
+  // Only runs a Supabase sign-in (the password goes nowhere else); never resets or switches data.
+  app.post("/api/auth/cloud-reconnect", authenticate, async (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(tenantId) as any;
+    if (!tenant) return res.status(401).json({ error: "Not logged in" });
+    const { password, email } = req.body || {};
+    if (typeof password !== 'string' || !password) return res.status(400).json({ error: "Password is required" });
+    if (email !== undefined && String(email).trim().toLowerCase() !== String(tenant.email).trim().toLowerCase()) {
+      return res.status(403).json({ error: "This account does not match the signed-in business." });
+    }
+    const loginEmail = String(tenant.email).trim().toLowerCase() === SUPER_ADMIN_LOGIN ? SUPER_ADMIN_AUTH_EMAIL : tenant.email;
+    let data: any, error: any;
+    try {
+      ({ data, error } = await anonSupabase.auth.signInWithPassword({ email: loginEmail, password }));
+    } catch {
+      return res.status(503).json({ error: "Could not reach the cloud. Check the connection and try again." });
+    }
+    if (error || !data?.session || !data?.user) {
+      const status = Number(error?.status);
+      if (error && (!status || status >= 500 || error.name === 'AuthRetryableFetchError')) {
+        return res.status(503).json({ error: "Could not reach the cloud. Check the connection and try again." });
+      }
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+    // The signed-in cloud user must be THIS tenant (never adopt another business's session). A tenant
+    // without a cloud id was never bound to an account: that needs the full sign-in, not a reconnect.
+    if (!tenant.global_id || data.user.id !== tenant.global_id) {
+      return res.status(403).json({ error: "This account does not match the signed-in business." });
+    }
+    try {
+      await setActiveSession(tenantId, tenant.global_id, tenant.email, {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      });
+    } catch {
+      return res.status(503).json({ error: "Could not start the cloud session. Please try again." });
+    }
+    const s = getActiveSession();
+    req.session.sbRefresh = s ? s.refreshToken : data.session.refresh_token;
+    req.session.sbGlobalId = tenant.global_id;
+    req.session.sbEmail = tenant.email;
+    // Resume syncing right away: pending local rows go up, newer cloud rows come down.
+    forcePushToCloud().then(() => forceInitialSync()).catch(() => {});
+    res.json({ success: true, state: 'ok' });
+  });
+
   app.get("/api/auth/me", async (req: any, res) => {
     if (!req.session.tenantId) {
       return res.status(401).json({ error: "Not logged in" });
@@ -427,19 +526,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
 
     // After an app restart the Express cookie still says "logged in", but the in-memory cloud
     // session is gone. Rehydrate it from the stored refresh token so sync + admin keep working.
-    if (!getActiveSession() && req.session.sbRefresh && req.session.sbGlobalId) {
-      const ok = await rehydrateActiveSession(
-        req.session.tenantId,
-        req.session.sbGlobalId,
-        req.session.sbEmail || tenant.email,
-        req.session.sbRefresh
-      );
-      if (ok) {
-        const s = getActiveSession();
-        if (s) req.session.sbRefresh = s.refreshToken;
-        forceInitialSync().catch(() => {});
-      }
-    }
+    await ensureCloudSession(req, tenant);
 
     res.json({
       tenantId: req.session.tenantId,

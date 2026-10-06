@@ -116,7 +116,8 @@ function MonitorAppInner() {
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    // 'local': only this browser. The default 'global' would also sign out every register.
+    await supabase.auth.signOut({ scope: 'local' });
     setTenant(null);
   };
 

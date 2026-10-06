@@ -8,6 +8,7 @@ import { PosProvider } from './context/PosContext';
 import CartPanel from './components/CartPanel';
 import ProductGrid from './components/ProductGrid';
 import PosHeader from './components/PosHeader';
+import CloudSyncBanner from './components/CloudSyncBanner';
 import PosSplitter from './components/PosSplitter';
 import { usePosLayout } from './hooks/usePosLayout';
 import PaymentModal from './components/PaymentModal';
@@ -313,6 +314,7 @@ function AppBody({
   return (
     <PosProvider tenant={tenant} setTenant={setTenant} currentUser={currentUser} setCurrentUser={setCurrentUser} users={users} setUsers={setUsers} handleLogout={handleLogout}>
       <WindowFrame title={`OmniPOS ${t('pos_terminal_title', 'Terminal')}`} icon={<ShoppingCart size={14} />}>
+        <CloudSyncBanner />
         <PosHeader />
         <PosMain />
         <PaymentModal />
