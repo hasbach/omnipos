@@ -17,6 +17,7 @@ import { ToastProvider } from './components/ui/ToastProvider';
 import { ConfirmProvider } from './components/ui/ConfirmDialog';
 import { Sidebar } from './components/shell/Sidebar';
 import { TopBar } from './components/shell/TopBar';
+import CloudSyncBanner from './components/CloudSyncBanner';
 
 import LiveMonitor from './pages/LiveMonitor';
 import DailySales from './pages/DailySales';
@@ -98,6 +99,7 @@ function DashboardShell({
       <Sidebar />
 
       <div className="flex flex-1 flex-col min-w-0">
+        <CloudSyncBanner />
         <TopBar
           isDarkMode={isDarkMode}
           onToggleTheme={setIsDarkMode}

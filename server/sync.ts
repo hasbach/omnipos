@@ -46,6 +46,19 @@ function getLocalId(tableName: string, globalId: string) {
 
 const SYNC_INTERVAL_MS = 10000; // 10 seconds
 
+// Observability only (GET /api/sync/status) — never consulted by push/pull decisions.
+let lastPushAt: number | null = null;
+let lastPullAt: number | null = null;
+let lastSyncErrorAt = 0;
+export function getSyncTimes() {
+  return {
+    lastPushAt: lastPushAt ? new Date(lastPushAt).toISOString() : null,
+    lastPullAt: lastPullAt ? new Date(lastPullAt).toISOString() : null,
+    // Offline when the most recent failure is newer than the most recent success.
+    recentError: lastSyncErrorAt > Math.max(lastPushAt || 0, lastPullAt || 0) && Date.now() - lastSyncErrorAt < 120000,
+  };
+}
+
 // Tenant data reset support (server/tenantReset.ts). While a reset runs, NO push or pull may touch
 // the cloud or the local tables: an in-flight pull would re-insert rows the reset just deleted, and
 // an in-flight push would upsert rows back into the cloud right after they were purged.
@@ -127,6 +140,7 @@ function noteMissingCloudTable(tableName: string) {
 const MAX_PUSH_BACKOFF_MS = 10 * 60 * 1000;
 const pushBackoff: Record<string, { failures: number; until: number }> = {};
 function notePushFailure(tableName: string) {
+  lastSyncErrorAt = Date.now();
   const failures = (pushBackoff[tableName]?.failures || 0) + 1;
   const delay = Math.min(SYNC_INTERVAL_MS * 2 ** failures, MAX_PUSH_BACKOFF_MS);
   pushBackoff[tableName] = { failures, until: Date.now() + delay };
@@ -312,6 +326,23 @@ export async function pushToCloud(client: SupabaseClient, localId: number) {
   }
 }
 
+/** How many local rows are still waiting to be pushed, per table (read-only). */
+export function countPendingPush(localId: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  const id = Number(localId);
+  for (const tableName of PUSH_TABLES) {
+    try {
+      let q = `SELECT COUNT(*) AS c FROM ${tableName} WHERE (last_synced_at IS NULL OR updated_at > last_synced_at)`;
+      if (Object.keys(fkMap[tableName] || {}).includes('tenant_id')) q += ` AND tenant_id = ${id}`;
+      else if (tableName === 'product_barcodes') q += ` AND product_id IN (SELECT id FROM products WHERE tenant_id = ${id})`;
+      else if (tableName === 'transaction_items' || tableName === 'payments') q += ` AND transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ${id})`;
+      const c = (db.prepare(q).get() as any)?.c || 0;
+      if (c > 0) out[tableName] = c;
+    } catch { /* table without these columns */ }
+  }
+  return out;
+}
+
 /**
  * Pulls the active tenant's newer cloud rows into local SQLite.
  */
@@ -427,6 +458,7 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
       });
       tx(mappedData);
     } catch (err) {
+      lastSyncErrorAt = Date.now();
       console.error(`❌ [SYNC] Error pulling ${tableName}:`, err);
     }
   }
@@ -449,7 +481,9 @@ async function runSyncCycleInner() {
   const session = getActiveSession();
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   await pushToCloud(session.client, session.localId);
+  if (!syncPaused) lastPushAt = Date.now();
   await pullFromCloud(session.client, session.localId, session.globalId);
+  if (!syncPaused) lastPullAt = Date.now();
   // A pull may have changed transactions/payments without going through the local write paths,
   // so re-derive balances from the freshly-synced data (see server/balance.ts).
   recomputeAllBalances(session.localId, { source: 'sync' });
