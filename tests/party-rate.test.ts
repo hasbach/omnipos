@@ -329,8 +329,9 @@ test("sync: pulling a stakeholder from a cloud WITHOUT local_rate never nulls th
   const tenantGlobal = (app.db.prepare("SELECT global_id FROM tenants WHERE id = ?").get(t) as any).global_id;
   const id = Number(app.db.prepare("INSERT INTO stakeholders (tenant_id, name, type, local_rate) VALUES (?, 'Pulled', 'customer', 90000)").run(t).lastInsertRowid);
   const gid = (app.db.prepare("SELECT global_id FROM stakeholders WHERE id = ?").get(id) as any).global_id;
+  app.db.prepare("UPDATE stakeholders SET last_synced_at = datetime('now', '+1 hour') WHERE id = ?").run(id); // clean: nothing pending a push, so the pull may apply
   const chain = (data: any[]) => {
-    const q: any = { select: () => q, gt: () => q, eq: () => q, in: () => q, then: (res: any) => res({ data, error: null }) };
+    const q: any = { select: () => q, gt: () => q, eq: () => q, in: () => q, order: () => q, range: () => q, limit: () => q, gte: () => q, or: () => q, then: (res: any) => res({ data, error: null }) };
     return q;
   };
   const cloudRow = { id: "x", local_id: id, global_id: gid, tenant_id: tenantGlobal, name: "Renamed in cloud", type: "customer", balance: 0, price_level: "retail", updated_at: "2099-01-01T00:00:00Z" };

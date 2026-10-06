@@ -8,7 +8,7 @@ import fs from "fs";
 import path from "path";
 import { db, dbDir, logAction } from "./db.js";
 import { getActiveSession } from "./session.js";
-import { pauseSync, resumeSync } from "./sync.js";
+import { pauseSync, resumeSync, clearSyncCursors } from "./sync.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
 
 export const RESET_SCOPES = ["transactions", "stock", "products", "parties"] as const;
@@ -159,6 +159,7 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
     db.prepare("DELETE FROM cash_flow_edits WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stock_adjustments WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stakeholder_balance_log WHERE tenant_id = ?").run(t);
+    clearSyncCursors(t); // the local rows are gone: pull everything again from scratch
     // Balances derive from baseline + transactions; with no transactions left, zero both.
     db.prepare("UPDATE stakeholders SET balance = 0, balance_baseline = 0 WHERE tenant_id = ? AND (IFNULL(balance, 0) <> 0 OR IFNULL(balance_baseline, 0) <> 0)").run(t);
   }
