@@ -30,7 +30,9 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
   });
 
   useEffect(() => {
+    let lastFetchAt = 0;
     const fetchTodayData = async () => {
+      lastFetchAt = Date.now();
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
@@ -73,6 +75,15 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
 
     fetchTodayData();
 
+    // No timer polling (it would burn Supabase egress while nobody looks): live updates arrive over
+    // the realtime channel below. A hidden tab/PWA can miss events, so refresh once when it becomes
+    // visible again, at most every MIN_REFRESH_MS.
+    const MIN_REFRESH_MS = 30_000;
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastFetchAt >= MIN_REFRESH_MS) fetchTodayData();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     // Subscribe to Real-time Inserts
     const channel = supabase.channel('monitor-transactions')
       .on('postgres_changes', { 
@@ -104,6 +115,7 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
       .subscribe();
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
       supabase.removeChannel(channel);
     };
   }, [tenant.global_id]);

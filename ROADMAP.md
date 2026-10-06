@@ -33,9 +33,8 @@ Other items: _(add fixes and ideas here)_
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
 - [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.
 - [ ] Sync: product deletes are hard deletes locally, so they never reach the cloud.
-- [ ] **Cloud migration pending:** apply `supabase/migrations/2026-10-06_local_rates.sql` only after EVERY register
-      runs >= 1.7.6 (older versions copy every cloud column on pull and would stop syncing sales). Registers detect
-      the new columns within ~30 min and backfill party rates / sale-time rates automatically.
+- [ ] **Cloud migration pending:** apply `supabase/migrations/2026-10-07_synced_at.sql` (safe while registers run
+      >= 1.7.6). Until then 1.7.8 uses the overlapped updated_at cursor.
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —
@@ -46,6 +45,12 @@ Other items: _(add fixes and ideas here)_
 ## Shipped
 
 ### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-07)
+- **1.7.8** (2026-10-07) — Lighter, safer sync (Supabase egress ~9× lower): hot tables pulled every 60 s, cold every
+  5 min (was all 16 tables every 10 s); push only when local rows are pending; child tables in one tenant-scoped
+  request; keyset paging (pulls were silently truncated at 1000 rows); pulled rows no longer echoed back (fixes the
+  stakeholder push ping-pong); pending local edits never overwritten by a pull; server-time `synced_at` pull cursor
+  so late/offline backlogs reach every register (migration `2026-10-07_synced_at.sql`, safe on >= 1.7.6; one-time
+  full re-download per register heals rows missed earlier); Live Monitor refetches on tab focus.
 - **1.7.7** (2026-10-07) — Cloud sync stopped on every register from 2026-10-05 (~27 h): the Supabase session died
   (`refresh_token_already_used` / `refresh_token_not_found`) and sync skipped silently. Fixes: single-flight
   session rehydration (concurrent refreshes looked like token reuse); rotated refresh tokens persisted in the

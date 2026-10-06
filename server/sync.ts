@@ -44,7 +44,23 @@ function getLocalId(tableName: string, globalId: string) {
   } catch (e) { return null; }
 }
 
-const SYNC_INTERVAL_MS = 10000; // 10 seconds
+// ---- Sync schedule --------------------------------------------------------------------------
+// Supabase Free plan egress is 5 GB/month, so the schedule is deliberately lazy:
+//  - PUSH is checked every SYNC_INTERVAL_MS. That is a cheap LOCAL query per table; the network is
+//    touched only when unsynced rows exist (pushToCloud `continue`s on an empty result).
+//  - PULL "hot" tables (data other registers change all day) every HOT_PULL_INTERVAL_MS.
+//  - PULL "cold" tables (setup data that rarely changes) every COLD_PULL_INTERVAL_MS.
+//  - Initial/forced pulls (login, reconnect, forceInitialSync) always pull everything immediately.
+export const SYNC_INTERVAL_MS = 10_000;
+export const HOT_PULL_INTERVAL_MS = 60_000;
+export const COLD_PULL_INTERVAL_MS = 5 * 60_000;
+// PostgREST returns at most 1000 rows per request; pulls page with .range() until a short page.
+export const PULL_PAGE_SIZE = 1000;
+
+// Cloud request counters (observability only; exposed by GET /api/sync/status).
+const requestCounts = { pull: 0, push: 0, since: new Date().toISOString() };
+export function getRequestCounts() { return { ...requestCounts }; }
+export function resetRequestCounts() { requestCounts.pull = 0; requestCounts.push = 0; requestCounts.since = new Date().toISOString(); }
 
 // Observability only (GET /api/sync/status) — never consulted by push/pull decisions.
 let lastPushAt: number | null = null;
@@ -111,6 +127,7 @@ export async function upsertToCloud(client: SupabaseClient, tableName: string, p
   for (let attempt = 0; attempt < 5; attempt++) {
     const missing = activeMissingColumns(tableName);
     if (missing) for (const r of rows) for (const col of missing) delete r[col];
+    requestCounts.push++;
     const { error } = await client.from(tableName).upsert(Array.isArray(payload) ? rows : rows[0], { onConflict: 'global_id' });
     const col = parseMissingColumn(error);
     if (!col || missing?.has(col)) return { error };
@@ -157,6 +174,7 @@ async function retireCloudBarcodeDuplicates(client: SupabaseClient, rows: any[])
   for (let i = 0; i < live.length; i += CHUNK) {
     const chunk = live.slice(i, i + CHUNK);
     const now = new Date().toISOString();
+    requestCounts.push++;
     const { error } = await client.from('product_barcodes')
       .update({ deleted_at: now, updated_at: now })
       .in('barcode', chunk.map((r) => r.barcode))
@@ -242,6 +260,15 @@ const PUSH_TABLES = [
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
 ];
 
+export const HOT_PULL_TABLES = [
+  'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
+  'transactions', 'transaction_items', 'payments', 'cash_flow',
+];
+export const COLD_PULL_TABLES = [
+  'tenants', 'currencies', 'settings', 'cash_flow_categories',
+  'daily_reports', 'cashier_shifts', 'settlement_corrections',
+];
+// Pull order: parents before children (FK translation needs the parent row locally).
 const PULL_TABLES = [
   'tenants',
   'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
@@ -346,117 +373,263 @@ export function countPendingPush(localId: number): Record<string, number> {
 /**
  * Pulls the active tenant's newer cloud rows into local SQLite.
  */
-export async function pullFromCloud(client: SupabaseClient, localId: number, globalId: string) {
-  async function fetchChunked(tableName: string, columnName: string, ids: string[], lastUpdate: string) {
-    const CHUNK_SIZE = 100;
-    let allResults: any[] = [];
-    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + CHUNK_SIZE);
-      const { data, error } = await client.from(tableName).select('*').gt('updated_at', lastUpdate).in(columnName, chunk);
-      if (error) return { data: null, error };
-      if (data) allResults = allResults.concat(data);
+// Child tables without their own tenant_id: pulled with ONE request through an inner join on the
+// parent (constant request count however much history exists). If the cloud rejects the embed we
+// fall back to the old per-chunk `.in(parent ids)` path, log once, and remember it for the session.
+const EMBED_PARENT: Record<string, { parent: string; fk: string }> = {
+  transaction_items: { parent: 'transactions', fk: 'transaction_id' },
+  payments: { parent: 'transactions', fk: 'transaction_id' },
+  product_barcodes: { parent: 'products', fk: 'product_id' },
+};
+const embedUnsupported = new Set<string>();
+/** Test hook: forget which child tables fell back to the chunked pull. */
+export function resetEmbedProbe() { embedUnsupported.clear(); }
+
+// ---- Pull cursors ---------------------------------------------------------------------------
+// Cloud `updated_at` is whatever clock the PUSHING register had, so a cursor based on it can skip
+// rows: this register's own later edit moves MAX(updated_at) past a row another register pushed
+// with an earlier stamp; an offline register that reconnects pushes a backlog with OLD stamps no
+// other cursor will ever reach. So, once the cloud has `synced_at` (server time, set by a trigger -
+// supabase/migrations/2026-10-07_synced_at.sql) pulls use a per-table (synced_at, global_id) cursor
+// kept in the local-only table `sync_cursor`, with keyset paging and a safety overlap for
+// commit-order skew. Without that column they fall back to an overlapped `updated_at` cursor.
+export const CURSOR_OVERLAP_MS = 2 * 60 * 1000;
+let pullPageSize = PULL_PAGE_SIZE;
+/** Test hook: shrink the page size so paging is exercised without thousands of rows. */
+export function __setPullPageSize(n?: number) { pullPageSize = n || PULL_PAGE_SIZE; }
+
+let cursorTableReady = false;
+function ensureCursorTable() {
+  if (cursorTableReady) return;
+  db.exec(`CREATE TABLE IF NOT EXISTS sync_cursor (
+    tenant_id INTEGER NOT NULL,
+    table_name TEXT NOT NULL,
+    synced_at TEXT,
+    global_id TEXT,
+    PRIMARY KEY (tenant_id, table_name)
+  )`);
+  cursorTableReady = true;
+}
+type Cursor = { synced_at: string; global_id: string };
+function getCursor(tenantId: number, table: string): Cursor | null {
+  ensureCursorTable();
+  const r = db.prepare('SELECT synced_at, global_id FROM sync_cursor WHERE tenant_id = ? AND table_name = ?').get(tenantId, table) as any;
+  return r && r.synced_at ? { synced_at: r.synced_at, global_id: r.global_id || '' } : null;
+}
+function cursorAfter(a: Cursor, b: Cursor | null): boolean {
+  if (!b) return true;
+  const ta = Date.parse(a.synced_at), tb = Date.parse(b.synced_at);
+  return ta !== tb ? ta > tb : a.global_id > b.global_id;
+}
+function setCursor(tenantId: number, table: string, c: Cursor) {
+  ensureCursorTable();
+  if (!cursorAfter(c, getCursor(tenantId, table))) return; // monotonic: the overlap re-reads older rows
+  db.prepare(`INSERT INTO sync_cursor (tenant_id, table_name, synced_at, global_id) VALUES (?, ?, ?, ?)
+              ON CONFLICT(tenant_id, table_name) DO UPDATE SET synced_at = excluded.synced_at, global_id = excluded.global_id`)
+    .run(tenantId, table, c.synced_at, c.global_id);
+}
+/** Forget the pull cursors (a tenant data reset wipes the local rows, so everything must be re-pulled). */
+export function clearSyncCursors(tenantId?: number) {
+  ensureCursorTable();
+  if (tenantId === undefined) db.prepare('DELETE FROM sync_cursor').run();
+  else db.prepare('DELETE FROM sync_cursor WHERE tenant_id = ?').run(tenantId);
+}
+
+// Tables whose cloud copy has no synced_at yet -> forget-at (ms). Re-probed after
+// CLOUD_COLUMN_REPROBE_MS and on restart, so applying the migration is picked up without a restart.
+const noSyncedAt = new Map<string, number>();
+export function resetSyncedAtProbe() { noSyncedAt.clear(); }
+function syncedAtAvailable(table: string): boolean {
+  const until = noSyncedAt.get(table);
+  if (until === undefined) return true;
+  if (until <= Date.now()) { noSyncedAt.delete(table); return true; }
+  return false;
+}
+function isMissingSyncedAt(error: any): boolean {
+  if (!error) return false;
+  const msg = String(error.message || '');
+  return /synced_at/.test(msg) && (error.code === '42703' || error.code === 'PGRST204' || /does not exist|could not find/i.test(msg));
+}
+function shiftIso(ts: string, deltaMs: number): string {
+  const hasTz = /(Z|[+-]\d{2}:?\d{2})$/.test(ts);
+  const d = new Date(ts.replace(' ', 'T') + (hasTz ? '' : 'Z'));
+  return new Date(d.getTime() + deltaMs).toISOString();
+}
+const EPOCH = '1970-01-01T00:00:00.000Z';
+
+export async function pullFromCloud(client: SupabaseClient, localId: number, globalId: string, tables: readonly string[] = PULL_TABLES) {
+  // KEYSET paging on (col, global_id): page 1 is `col >= start`, later pages `col > last OR (col = last
+  // AND global_id > lastId)`, so rows inserted or changed between pages can neither be skipped nor
+  // duplicated, and any number of rows sharing one timestamp are all returned. `onPage` stores the page.
+  async function pageThrough(col: 'synced_at' | 'updated_at', start: string, makeQuery: () => any, onPage: (rows: any[]) => void) {
+    let after: { v: string; g: string } | null = null;
+    for (;;) {
+      let q = makeQuery().order(col, { ascending: true }).order('global_id', { ascending: true }).limit(pullPageSize);
+      q = after ? q.or(`${col}.gt.${after.v},and(${col}.eq.${after.v},global_id.gt.${after.g})`) : q.gte(col, start);
+      requestCounts.pull++;
+      const { data, error } = await q;
+      if (error) return { error };
+      const rows: any[] = data || [];
+      if (rows.length && col === 'synced_at' && rows[0].synced_at === undefined) {
+        return { error: { code: '42703', message: 'column synced_at does not exist' } };
+      }
+      if (rows.length) onPage(rows);
+      if (rows.length < pullPageSize) return { error: null };
+      const last = rows[rows.length - 1];
+      after = { v: last[col], g: last.global_id };
     }
-    return { data: allResults, error: null };
+  }
+
+  // Strip cloud 'local_id'/'id'/'synced_at'/embedded parent, normalize timestamps, translate FK
+  // UUIDs -> local ids, then insert/update. Rows we must not touch are skipped (see below).
+  function applyRows(tableName: string, data: any[], embedParent?: string) {
+    const mappedData = data.map(record => {
+      const { local_id, id, synced_at, ...rest } = record;
+      if (embedParent) delete rest[embedParent];
+      const mapped: any = { ...rest };
+      if (mapped.updated_at) mapped.updated_at = mapped.updated_at.replace('T', ' ').replace('Z', '');
+      if (mapped.created_at) mapped.created_at = mapped.created_at.replace('T', ' ').replace('Z', '');
+      if (mapped.deleted_at) mapped.deleted_at = mapped.deleted_at.replace('T', ' ').replace('Z', '');
+      if (fkMap[tableName]) {
+        for (const [col, refTable] of Object.entries(fkMap[tableName])) {
+          if (mapped[col]) mapped[col] = getLocalId(refTable, mapped[col]);
+        }
+      }
+      const clean = dropUnknownLocalColumns(tableName, mapped);
+      // A row we just pulled IS the cloud's copy: mark it synced (last_synced_at = its updated_at) in
+      // the same write, so it is never pushed straight back. Must be part of the same statement: a
+      // separate UPDATE would fire the updated_at trigger and bump the row. Capped at "now" so a cloud
+      // stamp from a register whose clock runs ahead can't swallow a later local edit.
+      if (clean.updated_at && localColumns(tableName).has('last_synced_at')) {
+        const nowStamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+        clean.last_synced_at = String(clean.updated_at) < nowStamp ? clean.updated_at : nowStamp;
+      }
+      return clean;
+    });
+
+    const columns = Object.keys(mappedData[0]);
+    // Stakeholder balances are DERIVED locally (server/balance.ts): the cloud copy only seeds a
+    // brand-new row, never overwrites one we have (registers with different baselines would fight).
+    const updateColumns = tableName === 'stakeholders' ? columns.filter(c => c !== 'balance') : columns;
+    const updateSet = updateColumns.map(col => `${col} = ?`).join(', ');
+    const insertCols = columns.join(', ');
+    const insertVals = columns.map(() => '?').join(', ');
+
+    const checkStmt = db.prepare(`SELECT updated_at, last_synced_at FROM ${tableName} WHERE global_id = ?`);
+    const updateStmt = db.prepare(`UPDATE ${tableName} SET ${updateSet} WHERE global_id = ?`);
+    const insertStmt = db.prepare(`INSERT INTO ${tableName} (${insertCols}) VALUES (${insertVals})`);
+    const restoreStmt = columns.includes('updated_at') && columns.includes('last_synced_at')
+      ? db.prepare(`UPDATE ${tableName} SET updated_at = ?, last_synced_at = ? WHERE global_id = ?`) : null;
+    const barcodeHolder = tableName === 'product_barcodes'
+      ? db.prepare(`SELECT id, deleted_at FROM product_barcodes WHERE barcode = ?`) : null;
+    const purgeBarcode = tableName === 'product_barcodes'
+      ? db.prepare(`DELETE FROM product_barcodes WHERE id = ?`) : null;
+
+    const tx = db.transaction((records: any[]) => {
+      for (const record of records) {
+        const exists = checkStmt.get(record.global_id) as any;
+        if (!exists && barcodeHolder) {
+          // product_barcodes.barcode is UNIQUE locally: a cloud row we don't have must not collide
+          // with a local row (which would fail the whole pull of this table every cycle).
+          if (record.deleted_at) continue; // a removal we never held - nothing to store
+          const holder = barcodeHolder.get(record.barcode) as any;
+          if (holder && !holder.deleted_at) continue; // live here already; our push wins
+          if (holder) purgeBarcode!.run(holder.id);
+        }
+        if (exists) {
+          // Same version already held (overlap / re-fetch): nothing to do, and an UPDATE that leaves
+          // updated_at unchanged would make the trigger bump it and re-push the row.
+          if (exists.updated_at && record.updated_at && String(exists.updated_at) === String(record.updated_at)) continue;
+          // A row with a pending local edit (never pushed, or edited since the last push) is NEVER
+          // overwritten: the push will send ours. (The tenants row is cloud-authoritative, never pushed.)
+          if (tableName !== 'tenants' && (exists.last_synced_at == null || String(exists.updated_at) > String(exists.last_synced_at))) continue;
+          updateStmt.run(...updateColumns.map(col => record[col] ?? null), record.global_id);
+        } else {
+          insertStmt.run(...columns.map(col => record[col] ?? null));
+          // The AFTER INSERT trigger re-writes updated_at, which fires the updated_at trigger and
+          // stamps the row with "now" (it would look like a local edit and be pushed back). Restore
+          // the cloud's values (they differ from the stamped ones, so no trigger fires).
+          if (record.updated_at && restoreStmt) restoreStmt.run(record.updated_at, record.last_synced_at ?? record.updated_at, record.global_id);
+        }
+      }
+    });
+    tx(mappedData);
+  }
+
+  // Latest updated_at we hold for this tenant in a row that is NOT waiting to be pushed - the
+  // fallback cursor. Pending local edits and unfetched rows never move it, minus an overlap.
+  function fallbackStart(tableName: string): string {
+    let scope = '';
+    if (tableName === 'tenants') scope = `id = ${Number(localId)}`;
+    else if (Object.keys(fkMap[tableName] || {}).includes('tenant_id')) scope = `tenant_id = ${Number(localId)}`;
+    else if (tableName === 'product_barcodes') scope = `product_id IN (SELECT id FROM products WHERE tenant_id = ${Number(localId)})`;
+    else scope = `transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ${Number(localId)})`;
+    const cleanOnly = tableName === 'tenants' ? '' : ' AND last_synced_at IS NOT NULL AND updated_at <= last_synced_at';
+    const r = db.prepare(`SELECT MAX(updated_at) AS m FROM ${tableName} WHERE ${scope}${cleanOnly}`).get() as any;
+    return r?.m ? shiftIso(r.m, -CURSOR_OVERLAP_MS) : EPOCH;
   }
 
   for (const tableName of PULL_TABLES) {
+    if (!tables.includes(tableName)) continue;
     if (syncPaused) return;
     if (cloudMissingTables.has(tableName)) continue;
     try {
-      // Latest updated_at we already hold locally for this tenant (our pull cursor).
-      let lastUpdateQuery = `SELECT MAX(updated_at) as last_update FROM ${tableName}`;
-      let queryParams: any[] = [];
-      if (tableName === 'tenants') {
-        lastUpdateQuery += ` WHERE id = ?`;
-        queryParams = [localId];
-      } else if (Object.keys(fkMap[tableName] || {}).includes('tenant_id')) {
-        lastUpdateQuery += ` WHERE tenant_id = ?`;
-        queryParams = [localId];
-      } else if (tableName === 'product_barcodes') {
-        lastUpdateQuery += ` WHERE product_id IN (SELECT id FROM products WHERE tenant_id = ?)`;
-        queryParams = [localId];
-      } else if (tableName === 'transaction_items' || tableName === 'payments') {
-        lastUpdateQuery += ` WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)`;
-        queryParams = [localId];
-      }
-      const result = db.prepare(lastUpdateQuery).get(...queryParams) as any;
-      const lastUpdate = result?.last_update || '1970-01-01T00:00:00.000Z';
+      const embed = EMBED_PARENT[tableName]; // set for child tables without their own tenant_id
+      const hasTenantCol = Object.keys(fkMap[tableName] || {}).includes('tenant_id');
+      const select = embed && !embedUnsupported.has(tableName) ? `*, ${embed.parent}!inner(tenant_id)` : '*';
+      const baseQuery = () => {
+        const q = client.from(tableName).select(select);
+        if (tableName === 'tenants') return q.eq('global_id', globalId);
+        if (hasTenantCol) return q.eq('tenant_id', globalId);
+        return q.eq(`${embed.parent}.tenant_id`, globalId);
+      };
+      const embedParent = select === '*' ? undefined : embed?.parent;
 
-      let data: any[] | null = null;
-      let error: any = null;
+      let res: { error: any } = { error: null };
+      const chunkedOnly = !!embed && embedUnsupported.has(tableName); // the join was rejected earlier
+      const bySyncedAt = () => {
+        const cur = getCursor(localId, tableName);
+        return pageThrough('synced_at', cur ? shiftIso(cur.synced_at, -CURSOR_OVERLAP_MS) : EPOCH, baseQuery, (rows) => {
+          applyRows(tableName, rows, embedParent);
+          const last = rows[rows.length - 1];
+          if (last.synced_at) setCursor(localId, tableName, { synced_at: last.synced_at, global_id: last.global_id });
+        });
+      };
+      const byUpdatedAt = (query: () => any) =>
+        pageThrough('updated_at', fallbackStart(tableName), query, (rows) => applyRows(tableName, rows, embedParent));
 
-      if (tableName === 'tenants') {
-        const res = await client.from(tableName).select('*').gt('updated_at', lastUpdate).eq('global_id', globalId);
-        data = res.data; error = res.error;
-      } else if (Object.keys(fkMap[tableName] || {}).includes('tenant_id')) {
-        const res = await client.from(tableName).select('*').gt('updated_at', lastUpdate).eq('tenant_id', globalId);
-        data = res.data; error = res.error;
-      } else if (tableName === 'product_barcodes') {
-        const products = db.prepare(`SELECT global_id FROM products WHERE tenant_id = ? AND global_id IS NOT NULL`).all(localId) as any[];
-        const productIds = products.map(p => p.global_id);
-        if (productIds.length === 0) continue;
-        const res = await fetchChunked(tableName, 'product_id', productIds, lastUpdate);
-        data = res.data; error = res.error;
-      } else if (tableName === 'transaction_items' || tableName === 'payments') {
-        const transactions = db.prepare(`SELECT global_id FROM transactions WHERE tenant_id = ? AND global_id IS NOT NULL`).all(localId) as any[];
-        const txIds = transactions.map(t => t.global_id);
-        if (txIds.length === 0) continue;
-        const res = await fetchChunked(tableName, 'transaction_id', txIds, lastUpdate);
-        data = res.data; error = res.error;
-      }
-
-      if (isMissingCloudTable(error)) { noteMissingCloudTable(tableName); continue; }
-      if (error) {
-        console.error(`❌ [SYNC] Failed to pull ${tableName}:`, JSON.stringify(error));
-        continue;
-      }
-      if (!data || data.length === 0) continue;
-
-      // Strip cloud 'local_id'/'id', normalize timestamps, translate FK UUIDs -> local ids.
-      const mappedData = data.map(record => {
-        const { local_id, id, ...rest } = record;
-        const mapped: any = { ...rest };
-        if (mapped.updated_at) mapped.updated_at = mapped.updated_at.replace('T', ' ').replace('Z', '');
-        if (mapped.created_at) mapped.created_at = mapped.created_at.replace('T', ' ').replace('Z', '');
-        if (mapped.deleted_at) mapped.deleted_at = mapped.deleted_at.replace('T', ' ').replace('Z', '');
-        if (fkMap[tableName]) {
-          for (const [col, refTable] of Object.entries(fkMap[tableName])) {
-            if (mapped[col]) mapped[col] = getLocalId(refTable, mapped[col]);
-          }
+      if (chunkedOnly) {
+        // handled below
+      } else if (syncedAtAvailable(tableName)) {
+        res = await bySyncedAt();
+        if (isMissingSyncedAt(res.error)) {
+          noSyncedAt.set(tableName, Date.now() + CLOUD_COLUMN_REPROBE_MS);
+          console.warn(`⚠️ [SYNC] Cloud ${tableName} has no synced_at column yet - pulling by updated_at until the cloud schema is migrated.`);
+          res = await byUpdatedAt(baseQuery);
         }
-        return dropUnknownLocalColumns(tableName, mapped);
-      });
+      } else {
+        res = await byUpdatedAt(baseQuery);
+      }
 
-      const columns = Object.keys(mappedData[0]);
-      const updateSet = columns.map(col => `${col} = ?`).join(', ');
-      const insertCols = columns.join(', ');
-      const insertVals = columns.map(() => '?').join(', ');
-
-      const checkStmt = db.prepare(`SELECT 1 FROM ${tableName} WHERE global_id = ?`);
-      const updateStmt = db.prepare(`UPDATE ${tableName} SET ${updateSet} WHERE global_id = ?`);
-      const insertStmt = db.prepare(`INSERT INTO ${tableName} (${insertCols}) VALUES (${insertVals})`);
-      const barcodeHolder = tableName === 'product_barcodes'
-        ? db.prepare(`SELECT id, deleted_at FROM product_barcodes WHERE barcode = ?`) : null;
-      const purgeBarcode = tableName === 'product_barcodes'
-        ? db.prepare(`DELETE FROM product_barcodes WHERE id = ?`) : null;
-
-      const tx = db.transaction((records: any[]) => {
-        for (const record of records) {
-          const exists = checkStmt.get(record.global_id);
-          if (!exists && barcodeHolder) {
-            // product_barcodes.barcode is UNIQUE locally: a cloud row we don't have must not collide
-            // with a local row (which would fail the whole pull of this table every cycle).
-            if (record.deleted_at) continue; // a removal we never held — nothing to store
-            const holder = barcodeHolder.get(record.barcode) as any;
-            if (holder && !holder.deleted_at) continue; // live here already; our push wins
-            if (holder) purgeBarcode!.run(holder.id);
-          }
-          const values = columns.map(col => record[col] ?? null);
-          if (exists) updateStmt.run(...values, record.global_id);
-          else insertStmt.run(...values);
+      // The embed itself rejected (PGRST200/201 relationship missing/ambiguous, 42xxx): fall back to
+      // per-chunk `.in(parent ids)` pulls, by updated_at, remembered for the session.
+      if (embed && embedParent && res.error && !isMissingCloudTable(res.error) && /^(PGRST|42)/.test(String(res.error.code || ''))) {
+        embedUnsupported.add(tableName);
+        console.warn(`⚠️ [SYNC] Cloud rejected the ${tableName} -> ${embed.parent} join (${res.error.code || res.error.message}); falling back to chunked pulls for ${tableName}.`);
+        res = { error: null };
+      }
+      if (embed && embedUnsupported.has(tableName) && !res.error) {
+        const parents = db.prepare(`SELECT global_id FROM ${embed.parent} WHERE tenant_id = ? AND global_id IS NOT NULL`).all(localId) as any[];
+        const ids = parents.map(p => p.global_id);
+        for (let i = 0; i < ids.length && !res.error; i += 100) {
+          const chunk = ids.slice(i, i + 100);
+          res = await pageThrough('updated_at', fallbackStart(tableName), () => client.from(tableName).select('*').in(embed.fk, chunk),
+            (rows) => applyRows(tableName, rows));
         }
-      });
-      tx(mappedData);
+      }
+
+      if (isMissingCloudTable(res.error)) { noteMissingCloudTable(tableName); continue; }
+      if (res.error) console.error(`❌ [SYNC] Failed to pull ${tableName}:`, JSON.stringify(res.error));
     } catch (err) {
       lastSyncErrorAt = Date.now();
       console.error(`❌ [SYNC] Error pulling ${tableName}:`, err);
@@ -464,33 +637,79 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
   }
 }
 
+// A pull may have changed transactions/payments without going through the local write paths, so
+// balances are re-derived from the freshly-synced data (see server/balance.ts) - but QUIETLY.
+// The derived balance is a pure local function of (balance_baseline + transactions), so a recompute
+// that merely brings a row in line with the data just pulled is not an edit and must not make the
+// row pushable. Without this the recompute bumped updated_at (trigger), the row was pushed, the
+// other register pulled it, recomputed against ITS baseline, bumped, pushed ... forever
+// (the 73 POST /rest/v1/stakeholders in ~70 minutes). Rows that were already pending a push (a real
+// local edit) are left alone, so genuine edits still go up.
+export function recomputeBalancesAfterPull(localId: number): void {
+  const clean = db.prepare(
+    `SELECT id, updated_at FROM stakeholders
+     WHERE tenant_id = ? AND last_synced_at IS NOT NULL AND updated_at <= last_synced_at`
+  ).all(localId) as { id: number; updated_at: string }[];
+  recomputeAllBalances(localId, { source: 'sync' });
+  // Put updated_at back to what it was for rows that were clean: the value differs from the
+  // trigger's fresh CURRENT_TIMESTAMP, so this UPDATE does not fire the bump trigger again.
+  const restore = db.prepare(
+    `UPDATE stakeholders SET updated_at = ? WHERE id = ? AND tenant_id = ? AND updated_at <> ?`
+  );
+  db.transaction(() => { for (const r of clean) restore.run(r.updated_at, r.id, localId, r.updated_at); })();
+}
+
+// ---- Scheduler ------------------------------------------------------------------------------
+// Pull bookkeeping for the active tenant. A different tenant (or a reset) means "never pulled", so
+// the first cycle pulls everything immediately.
+let scheduleTenant: string | null = null;
+let lastHotPullAt = 0;
+let lastColdPullAt = 0;
+
+/** Which tables are due for a pull at `now` (injectable clock for tests). Advances the schedule. */
+export function duePullTables(now: number, sessionKey: string): string[] {
+  if (scheduleTenant !== sessionKey) { scheduleTenant = sessionKey; lastHotPullAt = 0; lastColdPullAt = 0; }
+  const hot = now - lastHotPullAt >= HOT_PULL_INTERVAL_MS;
+  const cold = now - lastColdPullAt >= COLD_PULL_INTERVAL_MS;
+  if (hot) lastHotPullAt = now;
+  if (cold) lastColdPullAt = now;
+  if (!hot && !cold) return [];
+  return PULL_TABLES.filter(t => (hot && HOT_PULL_TABLES.includes(t)) || (cold && COLD_PULL_TABLES.includes(t)));
+}
+/** Test hook: forget the pull schedule. */
+export function resetPullSchedule() { scheduleTenant = null; lastHotPullAt = 0; lastColdPullAt = 0; }
+
 /**
- * One full sync cycle for the currently logged-in tenant. No-op if nobody is logged in
+ * One sync cycle for the currently logged-in tenant. No-op if nobody is logged in
  * (no active cloud session) or the active account is a seed/super-admin account.
+ * Push is checked every cycle (local query; network only when rows are pending); pulls follow the
+ * hot/cold schedule above.
  */
 // The interval fires every 10s whether or not the previous cycle finished; when the cloud is slow,
 // overlapping cycles would push the same rows again and again. Only one cycle runs at a time.
 let cycleInFlight: Promise<void> | null = null;
-function runSyncCycle(): Promise<void> {
+function runSyncCycle(now: number = Date.now()): Promise<void> {
   if (syncPaused) return Promise.resolve();
   if (cycleInFlight) return cycleInFlight;
-  cycleInFlight = track(runSyncCycleInner()).finally(() => { cycleInFlight = null; });
+  cycleInFlight = track(runSyncCycleInner(now)).finally(() => { cycleInFlight = null; });
   return cycleInFlight;
 }
-async function runSyncCycleInner() {
+/** Test seam: run one scheduled cycle at a simulated time. */
+export function runSyncCycleAt(now: number): Promise<void> { return runSyncCycle(now); }
+async function runSyncCycleInner(now: number) {
   const session = getActiveSession();
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   await pushToCloud(session.client, session.localId);
   if (!syncPaused) lastPushAt = Date.now();
-  await pullFromCloud(session.client, session.localId, session.globalId);
+  const due = duePullTables(now, `${session.localId}:${session.globalId}`);
+  if (due.length === 0) return;
+  await pullFromCloud(session.client, session.localId, session.globalId, due);
   if (!syncPaused) lastPullAt = Date.now();
-  // A pull may have changed transactions/payments without going through the local write paths,
-  // so re-derive balances from the freshly-synced data (see server/balance.ts).
-  recomputeAllBalances(session.localId, { source: 'sync' });
+  recomputeBalancesAfterPull(session.localId);
 }
 
 /**
- * Forces an immediate pull for the active tenant (used right after login to populate local data).
+ * Forces an immediate pull of EVERYTHING for the active tenant (used right after login/reconnect).
  */
 export function forceInitialSync(): Promise<void> {
   if (syncPaused) return Promise.resolve();
@@ -499,10 +718,13 @@ export function forceInitialSync(): Promise<void> {
 async function forceInitialSyncInner() {
   const session = getActiveSession();
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
-  console.log('⚡ [SYNC] Forcing initial pull for tenant...');
+  console.log('[SYNC] Forcing initial pull for tenant...');
   await pullFromCloud(session.client, session.localId, session.globalId);
-  recomputeAllBalances(session.localId, { source: 'sync' });
-  console.log('⚡ [SYNC] Initial pull complete.');
+  // Count it as both schedules having just run, so the next cycle doesn't pull everything again.
+  scheduleTenant = `${session.localId}:${session.globalId}`;
+  lastHotPullAt = lastColdPullAt = Date.now();
+  recomputeBalancesAfterPull(session.localId);
+  console.log('[SYNC] Initial pull complete.');
 }
 
 export function forcePushToCloud(): Promise<void> {
@@ -515,16 +737,30 @@ async function forcePushToCloudInner() {
   await pushToCloud(session.client, session.localId);
 }
 
+// Call after a local write to push it within ~2 s instead of waiting for the next 10 s check.
+// Push-only (never pulls), debounced, and free of network traffic when nothing is pending.
+const NOTIFY_DEBOUNCE_MS = 2000;
+let notifyTimer: ReturnType<typeof setTimeout> | null = null;
+export function notifyLocalChange(): void {
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(() => {
+    notifyTimer = null;
+    if (cycleInFlight) return; // the running cycle's push (or the next tick) picks it up
+    forcePushToCloud().catch(() => {});
+  }, NOTIFY_DEBOUNCE_MS);
+  (notifyTimer as any).unref?.();
+}
+
 /**
  * Starts the continuous synchronization loop.
  */
 export function startSyncEngine() {
-  console.log('🚀 Starting Offline-First Sync Engine...');
+  console.log('Starting Offline-First Sync Engine...');
   setInterval(async () => {
     try {
       await runSyncCycle();
     } catch (err) {
-      console.error('❌ [SYNC] Critical engine error:', err);
+      console.error('[SYNC] Critical engine error:', err);
     }
   }, SYNC_INTERVAL_MS);
 }

@@ -4,7 +4,7 @@ import { buildStatement } from "./statement.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
-import { forceInitialSync, forcePushToCloud, getSyncTimes, countPendingPush } from "./sync.js";
+import { forceInitialSync, forcePushToCloud, getSyncTimes, countPendingPush, getRequestCounts, notifyLocalChange } from "./sync.js";
 import {
   setActiveSession,
   getActiveSession,
@@ -332,7 +332,10 @@ async function establishLogin(
   return { ok: false, status: 401, error: 'Invalid email or password', tenant: null };
 }
 
-export function setupRoutes(app: any, wss: any, broadcast: Function, authenticate: any) {
+export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenticate: any) {
+  // Every local write broadcasts to the UI; piggy-back on that to push it to the cloud within ~2 s
+  // (debounced, push-only; the 10 s local check remains the safety net).
+  const broadcast: Function = (...args: any[]) => { notifyLocalChange(); return rawBroadcast(...args); };
   setupReportRoutes(app, authenticate);
   setupImportRoutes(app, authenticate, broadcast);
   setupTenantResetRoutes(app, authenticate, broadcast, { purgeCloudTransactionalData });
@@ -465,6 +468,7 @@ export function setupRoutes(app: any, wss: any, broadcast: Function, authenticat
       lastPushAt: times.lastPushAt,
       lastPullAt: times.lastPullAt,
       pendingCounts: countPendingPush(tenantId),
+      requests: getRequestCounts(),
     });
   });
 
