@@ -239,11 +239,20 @@ server.on('error', (err: any) => {
 });
 
 import { startSyncEngine } from './server/sync.js';
+import { runRepair179 } from './server/repair179.js';
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://localhost:${PORT}`);
   startDiscoveryBeacon(PORT);
   
+  // One-time 1.7.9 repair of rows 1.7.8 re-downloaded from the cloud (guarded by _migrations; backs up
+  // first). Must run BEFORE the sync engine starts; a failure is logged and never blocks startup.
+  try {
+    runRepair179();
+  } catch (e) {
+    console.error('Repair 1.7.9 failed (will retry on next start):', e);
+  }
+
   // Start the background offline-first cloud sync
   startSyncEngine();
 });

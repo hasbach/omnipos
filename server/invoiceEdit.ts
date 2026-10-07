@@ -4,6 +4,7 @@
 import { db, logAction } from "./db.js";
 import { recomputeStakeholderBalance, transactionBalanceEffect } from "./balance.js";
 import { getActiveSession } from "./session.js";
+import { addTombstones, markTombstonesPurged } from "./sync.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
 import { loadUnit, loadUnitsForProduct } from "./uom.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
@@ -20,7 +21,7 @@ function resolveStakeholderId(tenantId: number, requested: any): number | null {
     if (s) return s.id;
   }
   const walkIn = db.prepare(
-    "SELECT id FROM stakeholders WHERE tenant_id = ? ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
+    "SELECT id FROM stakeholders WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
   ).get(tenantId) as any;
   return walkIn ? walkIn.id : null;
 }
@@ -62,6 +63,7 @@ async function purgeCloudRows(table: 'payments' | 'transaction_items', globalIds
   if (!session || !session.globalId) return;
   const { error } = await session.client.from(table).delete().in('global_id', ids);
   if (error) throw error;
+  markTombstonesPurged(ids.map((globalId) => ({ table, globalId }))); // the cloud copy is gone: no retry needed
 }
 
 interface EditItemInput {
@@ -156,7 +158,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   const editUserId: number | null = (() => {
     const u = body.user_id ? db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ?").get(body.user_id, tenantId) as any : null;
     if (u) return u.id;
-    const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
+    const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
     return first ? first.id : null;
   })();
   const discountError = invalidAdjustment(body.discount, 'discount');
@@ -416,6 +418,9 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
 
     // --- Items: full replace (matches the existing "edit = delete + recreate" convention). ---
     const removedItemGlobalIds = oldItems.map((oi) => oi.global_id);
+    // Live invoices only (archived ones are never synced). Tombstone the replaced lines so a pull can't
+    // bring them back while the cloud delete is pending; the NEW lines get fresh global_ids.
+    if (!archived) addTombstones(tenantId, oldItems.map((oi) => ({ table: 'transaction_items', globalId: oi.global_id, parentGlobalId: tx.global_id })));
     db.prepare(`DELETE FROM ${itemsTable} WHERE transaction_id = ?`).run(id);
     // Both tables use a plain INTEGER PRIMARY KEY (not AUTOINCREMENT for the archived twin, since
     // settlement inserts explicit ids carried over from the live table) — omitting the id column
@@ -451,6 +456,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     const toInsert = bodyPayments.filter((p) => p.id === undefined || p.id === null);
 
     const removedPaymentGlobalIds = toDelete.map((p) => p.global_id);
+    if (!archived) addTombstones(tenantId, toDelete.map((p) => ({ table: 'payments', globalId: p.global_id, parentGlobalId: tx.global_id })));
     if (toDelete.length) {
       const del = db.prepare(`DELETE FROM ${paymentsTable} WHERE id = ?`);
       for (const p of toDelete) del.run(p.id);

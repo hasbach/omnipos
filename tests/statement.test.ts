@@ -139,3 +139,22 @@ test("legacy collection recorded only in cash_flow before the balance log appear
   assert.equal(legacy.currency, "LBP"); near(legacy.amount_original, 1790000);
   assert.equal(rows.find((r) => r.type === "opening"), undefined, "fully explained, no reconciling row");
 });
+
+test("an LBP-paid invoice short by a sub-cent residue nets to 0 on the statement (no opening-adjustment line)", async () => {
+  const cust = (await app.api("POST", "/api/stakeholders", { tenantId, body: { name: "Tolerance Customer", type: "customer" } })).body.id;
+  // $25 = 2,237,500 LBP @ 89,500; paying 2,237,000 leaves 500 LBP = $0.0056 short - inside PAID_TOLERANCE_USD,
+  // so balance.ts books it as exactly settled.
+  const sale = await post({ type: "sale", stakeholder_id: cust, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1,
+    payments: [{ amount: 2237000, method: "cash", currency: "LBP", exchange_rate: 89500 }] });
+  assert.equal(balanceOf(cust), 0, "tolerance: no residue on the balance");
+
+  const rows = await statement(cust);
+  assert.equal(rows.find((r) => r.type === "opening"), undefined, "no reconciling opening line");
+  const pay = rows.find((r) => r.type === "payment" && r.reference === `Pay for #${sale}`);
+  assert.ok(pay, "payment row listed");
+  assert.equal(pay.currency, "LBP");
+  assert.equal(pay.amount_original, 2237000);
+  assert.equal(pay.exchange_rate, 89500);
+  assert.equal(pay.effect, 25, "last payment carries the residue so the invoice nets to exactly 0");
+  assert.ok(Math.abs(rows[rows.length - 1].balance - balanceOf(cust)) < 1e-9, "closes at the stakeholder balance");
+});

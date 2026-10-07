@@ -11,6 +11,7 @@ import { effectiveLocalCurrency, formatRate } from '../../lib/orderTotals';
 import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, uomUnitPrice, type PriceLevel } from '../../lib/pricing';
+import { getTerminalId } from '../../lib/terminal';
 import type { Product, ProductUnit, Stakeholder } from '../../types';
 import {
   computeInvoiceTotals, lineDraftTotal, nextKey, paidFromPayments, realMoneyFromPayments,
@@ -481,6 +482,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           stakeholder_id: partyId,
           user_id: currentUserId(),
           type: txType,
+          terminalId: getTerminalId(),
           // unit_price + source let the server keep a back-office price the user typed (as PUT does);
           // `price` is still what a purchase line is costed at.
           source: 'backoffice',

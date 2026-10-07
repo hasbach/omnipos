@@ -8,7 +8,7 @@ export interface LocalCurrency { code: string; symbol: string; rate: number }
 export function localCurrencyFor(tenantId: number): LocalCurrency | null {
   const row = db.prepare(
     `SELECT code, symbol, rate FROM currencies
-     WHERE tenant_id = ? AND UPPER(code) <> 'USD' AND rate > 0
+     WHERE tenant_id = ? AND deleted_at IS NULL AND UPPER(code) <> 'USD' AND rate > 0
      ORDER BY is_default DESC, id ASC LIMIT 1`
   ).get(tenantId) as any;
   return row ? { code: row.code, symbol: row.symbol, rate: Number(row.rate) } : null;

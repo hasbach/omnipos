@@ -292,7 +292,7 @@ function sessionUser(req: any): { id: number; name: string; role: string } | nul
   const userId = req.session?.userId;
   const tenantId = req.session?.tenantId;
   if (!userId || !tenantId) return null;
-  const row = db.prepare("SELECT id, name, role FROM users WHERE id = ? AND tenant_id = ?").get(userId, tenantId) as any;
+  const row = db.prepare("SELECT id, name, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(userId, tenantId) as any;
   return row ? { id: row.id, name: row.name, role: row.role } : { id: userId, name: '', role: '' };
 }
 

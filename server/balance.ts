@@ -22,12 +22,19 @@ import { REAL_MONEY_SQL } from './paymentMethods.js';
 // toward the paid amount here, which is what makes an invoice paid with store_credit still
 // "unpaid" in balance math: its effect keeps consuming the positive balance that funded it.
 
+// A sale/purchase whose remainder (either way) is within one cent counts as exactly settled. This
+// matches the checkout (PaymentModal: isFullyPaid = remainingUSD <= 0.01) and the invoice lists
+// ("paid" when total - paid <= 0.01), so a rounded local-currency payment (e.g. 530,000 LBP for
+// 530,250) never books a sub-cent residue onto the party's balance.
+export const PAID_TOLERANCE_USD = 0.01;
+
 // The real-money-only unpaid remainder of one transaction (BALANCE MATH — server/paymentMethods.ts).
 export function unpaidRealMoney(txId: number, total: number, paymentsTable: 'payments' | 'archived_payments' = 'payments'): number {
   const row = db.prepare(
     `SELECT IFNULL(SUM(amount / exchange_rate), 0) as paid FROM ${paymentsTable} WHERE transaction_id = ? AND ${REAL_MONEY_SQL}`
   ).get(txId) as any;
-  return (total || 0) - (row?.paid || 0);
+  const unpaid = (total || 0) - (row?.paid || 0);
+  return Math.abs(unpaid) <= PAID_TOLERANCE_USD + 1e-9 ? 0 : unpaid;
 }
 
 // This transaction's effect on its stakeholder's balance (BALANCE MATH sign convention above):

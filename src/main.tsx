@@ -5,8 +5,10 @@ import App from './App.tsx';
 import Dashboard from './Dashboard.tsx';
 import PriceChecker from './PriceChecker.tsx';
 import { disableNumberInputScroll } from './lib/disableNumberInputScroll';
+import { getTerminalId } from './lib/terminal';
 import './index.css';
 
+getTerminalId(); // capture ?terminalId before any in-app navigation drops the query string
 disableNumberInputScroll();
 
 createRoot(document.getElementById('root')!).render(

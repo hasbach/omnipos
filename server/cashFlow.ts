@@ -38,7 +38,7 @@ function tenantUserId(tenantId: number, requested: any): number | null {
     const u = db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ?").get(requested, tenantId) as any;
     if (u) return u.id;
   }
-  const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
+  const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
   return first ? first.id : null;
 }
 

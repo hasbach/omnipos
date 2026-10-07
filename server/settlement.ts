@@ -229,7 +229,7 @@ export interface SettlementInput { counted: CountedLine[]; notes: string }
 
 function currencyRate(tenantId: number, code: string): number | null {
   if (code === "USD") return 1;
-  const row = db.prepare("SELECT rate FROM currencies WHERE tenant_id = ? AND code = ?").get(tenantId, code) as any;
+  const row = db.prepare("SELECT rate FROM currencies WHERE tenant_id = ? AND code = ? AND deleted_at IS NULL").get(tenantId, code) as any;
   return row && Number(row.rate) > 0 ? Number(row.rate) : null;
 }
 
