@@ -1,5 +1,6 @@
 import { db } from './db.js';
 import { isRealMoney } from './paymentMethods.js';
+import { transactionBalanceEffect } from './balance.js';
 
 // Customer / supplier statement. Every row carries an `effect` (its change to the party's balance, in the
 // APP's sign convention: negative = they owe us / we owe the supplier). A reconciling "opening" row makes
@@ -21,6 +22,9 @@ const LOG_LABELS: Record<string, string> = {
   import: 'Import',
   opening: 'Opening balance',
 };
+
+// Event types that carry a REAL-money payment row (on_account rows have effect 0 and never take the residue).
+const PAYMENT_EVENT_TYPES = new Set(['payment', 'refund_payment', 'balance_collection', 'supplier_payment']);
 
 interface Ev {
   date: string;
@@ -66,6 +70,7 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
     // A 0-total item-less "sale" is the system ticket created by /api/stakeholders/settle-balance.
     const isDebtTicket = t.type === 'sale' && !(t.total_amount > 0) && items.length === 0;
 
+    const txStart = events.length; // first event of this transaction
     if (!isDebtTicket) {
       events.push({
         date: t.created_at, seq: seq++, type: t.type, reference: `#${t.id}`,
@@ -105,6 +110,17 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
           description: `Payment (${p.method})`, effect: usd, ...orig, user: t.user_name || null,
         });
       }
+    }
+
+    // server/balance.ts counts an invoice whose real-money remainder is within PAID_TOLERANCE_USD as exactly
+    // settled (effect 0). Mirror that here, otherwise the sub-cent residue piles up in the reconciling opening
+    // line: when the balance math says 0 but the rows add up to a residue, fold it into the LAST real-money
+    // payment row (amount_original / currency stay as paid). Uses the same helper as the balance itself.
+    const rows = events.slice(txStart);
+    const residue = rows.reduce((s, e) => s + e.effect, 0);
+    if (Math.abs(residue) > 1e-9 && transactionBalanceEffect(t.type, t.id, t.total_amount, paymentsTable) === 0) {
+      const last = [...rows].reverse().find((e) => PAYMENT_EVENT_TYPES.has(e.type));
+      if (last) last.effect -= residue;
     }
   }
 

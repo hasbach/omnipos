@@ -25,7 +25,7 @@ export default function CartPanel() {
     calculateItemTotal, calculateItemTotalLBP, handleQuickCash, subtotalUSD, totalUSD, totalLBP,
     priceLevel, allowPriceOverride, enforceMinPrice, unitPriceUSD, setItemPriceOverride,
     creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled, belowCostOf, sellableProducts,
-    selectedStakeholder, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
+    selectedStakeholder, isWalkIn, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
     lastAdded, saleTabs = [], activeTabId, newSaleTab, switchSaleTab, closeSaleTab,
   } = pos as any;
 
@@ -115,7 +115,6 @@ export default function CartPanel() {
       : null;
 
   const USD = { code: 'USD', symbol: '$' };
-  const isWalkIn = selectedStakeholder === 1;
 
   return (
     <>
@@ -354,9 +353,9 @@ export default function CartPanel() {
                           <Plus size={16} />
                         </button>
                       </div>
-                      <div className="w-24 text-end font-mono font-bold num text-text leading-tight">
-                        <div className="text-sm">{formatMoney(calculateItemTotal(item), { code: 'USD', symbol: '$' })}</div>
-                        <div className="text-[10px] text-success">{formatNumber(Math.round(calculateItemTotalLBP(item)), { decimals: 0 })} LL</div>
+                      <div className="w-36 shrink-0 whitespace-nowrap text-end font-mono font-bold num text-text leading-tight">
+                        <div className="text-2xl">{formatMoney(calculateItemTotal(item), { code: 'USD', symbol: '$' })}</div>
+                        <div className="text-xl text-success">{formatNumber(Math.round(calculateItemTotalLBP(item)), { decimals: 0 })} LL</div>
                       </div>
                       <button
                         onClick={() => updateQuantity(item.line_key, -item.quantity)}

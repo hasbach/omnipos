@@ -16,6 +16,11 @@ export interface TierProduct {
   price_super_wholesale?: number | null;
   package_price?: number | null;
   units_per_package?: number | null;
+  // LBP (local currency) columns - only read by the *Lbp functions below.
+  price_lbp?: number | null;
+  package_price_lbp?: number | null;
+  price_wholesale_lbp?: number | null;
+  price_super_wholesale_lbp?: number | null;
 }
 
 // USD unit price for a given price level, USD tier chain (super_wholesale falls back to
@@ -131,6 +136,70 @@ export function saleLineUnitPrice(product: TierProduct, level: PriceLevel, quant
     return total / quantity;
   }
   return product.price;
+}
+
+// ---- Local-currency (LBP) pricing: 1:1 mirror of src/lib/pricing.ts ------------------------------
+// A cart priced in the local currency is charged from the LBP columns (price_lbp, falling back to
+// USD x rate), so the server must price it the same way or total_amount drifts from what was paid.
+
+/** Resolved flat tier price in USD, or null when the level falls through to retail/package pricing. */
+function flatTierUnitPrice(product: TierProduct, level: PriceLevel): number | null {
+  if (level === 'super_wholesale') {
+    return (pos(product.price_super_wholesale) ? product.price_super_wholesale : null) ??
+      (pos(product.price_wholesale) ? product.price_wholesale : null);
+  }
+  if (level === 'wholesale') return pos(product.price_wholesale) ? product.price_wholesale : null;
+  return null;
+}
+
+/** Same resolution against the LBP tier columns, falling back to USD x rate when unset. */
+export function tierUnitPriceLbp(product: TierProduct, level: PriceLevel, rate: number): number | null {
+  if (level === 'super_wholesale') {
+    const flat = (pos(product.price_super_wholesale_lbp) ? product.price_super_wholesale_lbp : null) ??
+      (pos(product.price_wholesale_lbp) ? product.price_wholesale_lbp : null);
+    if (flat != null) return flat;
+    const usd = flatTierUnitPrice(product, level);
+    return usd != null ? usd * rate : null;
+  }
+  if (level === 'wholesale') {
+    const flat = pos(product.price_wholesale_lbp) ? product.price_wholesale_lbp : null;
+    if (flat != null) return flat;
+    const usd = flatTierUnitPrice(product, level);
+    return usd != null ? usd * rate : null;
+  }
+  return null;
+}
+
+function retailBlendedUnitPriceLbp(product: TierProduct, qty: number, rate: number, units?: UomPricing[] | null): number {
+  const unitLbp = product.price_lbp || product.price * rate;
+  let bu: UomPricing[] = (units || []).filter(u => u && Number.isInteger(u.factor) && u.factor > 1 && u.price > 0);
+  if (bu.length > 0) bu = [...bu].sort((x, y) => y.factor - x.factor);
+  else {
+    const upp = product.units_per_package || 1;
+    if (product.package_price && product.package_price > 0 && upp > 1 && Number.isInteger(upp)) {
+      bu = [{ factor: upp, price: product.package_price, price_lbp: product.package_price_lbp }];
+    }
+  }
+  if (bu.length && qty > 0) {
+    let remaining = qty;
+    let total = 0;
+    for (const u of bu) {
+      const n = Math.floor(remaining / u.factor);
+      const uLbp = pos(u.price_lbp) ? u.price_lbp : u.price * rate;
+      total += n * uLbp;
+      remaining -= n * u.factor;
+    }
+    total += remaining * unitLbp;
+    return total / qty;
+  }
+  return unitLbp;
+}
+
+/** Per-piece LBP price for a base-piece sale line at the given qty/level (pack break included for retail). */
+export function saleLineUnitPriceLbp(product: TierProduct, level: PriceLevel, qty: number, rate: number, units?: UomPricing[] | null): number {
+  const flat = tierUnitPriceLbp(product, level, rate);
+  if (flat != null) return flat;
+  return retailBlendedUnitPriceLbp(product, qty, rate, units);
 }
 
 export interface LineAdjustment {

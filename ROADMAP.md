@@ -45,6 +45,18 @@ Other items: _(add fixes and ideas here)_
 ## Shipped
 
 ### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-07)
+- **1.7.9** (2026-10-08) — Fixes the duplicated invoices / wrong balances after 1.7.8: its one-time full
+  re-download brought back day-settled invoices, cash movements and a shift whose cloud delete had failed while the
+  session was dead (archived copies had new global_ids). Settlement now keeps global_ids in the archive and writes
+  local `sync_tombstones`; pulls never re-insert tombstoned rows (or children of unknown parents — deferred, cursor
+  held); failed cloud deletes are retried by the sync engine. One-time startup repair (`server/repair179.ts`, backup
+  first) removes re-downloaded settled rows (exact match vs the archive), merges duplicate Admin / USD / Walk-in
+  (created by a test login on another PC) and recomputes balances. Currencies, users and customers are soft-deleted
+  (deletes now reach the cloud and stick); a new device seeds Admin/USD/Walk-in only after the first pull. POS: a
+  sale priced in LBP is recorded from the LBP prices (no 0.01–0.02 residue on Walk-in), sub-cent remainders count as
+  paid (same 0.01 rule as checkout and invoice status, statement folds them into the payment), LBP amount can exceed
+  the total and change is shown in LBP, cart line prices 2× bigger, Walk-in found by name (not id 1), refunds and
+  purchases carry the terminal name (no more "MAIN" numbering).
 - **1.7.8** (2026-10-07) — Lighter, safer sync (Supabase egress ~9× lower): hot tables pulled every 60 s, cold every
   5 min (was all 16 tables every 10 s); push only when local rows are pending; child tables in one tenant-scoped
   request; keyset paging (pulls were silently truncated at 1000 rows); pulled rows no longer echoed back (fixes the

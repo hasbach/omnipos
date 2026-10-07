@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { getTerminalId } from '../../lib/terminal';
 import { RotateCcw, Undo2 } from 'lucide-react';
 import { Modal, Button, Field, NumberInput, Select, Textarea, Badge, useToast, useConfirm, SkeletonTable } from '../../components/ui';
 import { useI18n } from '../../intl/index';
@@ -160,6 +161,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
       }];
       const res = await postJson<{ id: number }>('/api/transactions', {
         type: 'refund',
+        terminalId: getTerminalId(),
         original_transaction_id: invoiceId,
         stakeholder_id: data.stakeholder?.id ?? null,
         user_id: currentUserId(),

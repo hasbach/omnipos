@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Fuse from 'fuse.js';
 import { Product, CartItem, Stakeholder, Transaction, Payment, Discount, Tenant, cartLineKey } from '../types';
 import { useTheme } from './useTheme';
+import { getTerminalId } from '../lib/terminal';
 import { useI18n } from '../intl/index';
 import { useToast } from '../components/ui/ToastProvider';
 import { useConfirm } from '../components/ui/ConfirmDialog';
@@ -42,7 +43,7 @@ const EMPTY_CUSTOMER_FORM = { name: '', phone: '', email: '', address: '' };
 
 export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrentUser: any, users: any, setUsers: any, handleLogout?: any) {
   // Read terminal identity from URL (?terminalId=POS+1) injected by Electron on launch
-  const terminalId = new URLSearchParams(window.location.search).get('terminalId') || 'MAIN';
+  const terminalId = getTerminalId();
   const { t: t18n, lang, dir, setLang } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
@@ -62,6 +63,16 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const [cart, setCart] = useState<CartItem[]>([]);
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [selectedStakeholder, setSelectedStakeholder] = useState<number>(1); // Default to Walk-in
+  // Stakeholder ids are per-database: the Walk-in Customer is not always id 1, so find it by name.
+  const walkInId: number = (stakeholders.find((s: any) => s.name === 'Walk-in Customer') as any)?.id ?? 1;
+  // Selected party is the walk-in (or an id this tenant doesn't have, which the server maps to walk-in).
+  const isWalkIn = selectedStakeholder === walkInId || !stakeholders.some((s: any) => s.id === selectedStakeholder);
+  // Once the list is loaded, move the default selection (1) onto this tenant's real walk-in row.
+  useEffect(() => {
+    if (stakeholders.length > 0 && selectedStakeholder === 1 && walkInId !== 1 && !stakeholders.some((s: any) => s.id === 1)) {
+      setSelectedStakeholder(walkInId);
+    }
+  }, [stakeholders, selectedStakeholder, walkInId]);
   const [barcodeInput, setBarcodeInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
@@ -142,7 +153,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     id: `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     number,
     cart: [],
-    stakeholderId: 1,
+    stakeholderId: walkInId,
     globalDiscount: { type: 'percentage', value: 0 },
     payments: [],
     priceLevel: priceLevelDefault,
@@ -189,7 +200,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   // Level a fresh walk-in sale starts at (mirrors the stakeholder->price-level effect).
   const defaultLevelForWalkIn = (): PriceLevel => {
     if (!priceLevelsEnabled) return 'retail';
-    const walkIn = stakeholders.find((x: any) => x.id === 1) as any;
+    const walkIn = stakeholders.find((x: any) => x.id === walkInId) as any;
     return normalizeLevel(walkIn?.price_level || settings.default_price_level);
   };
 
@@ -247,7 +258,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     if (tabs.length <= 1) {
       // Never zero tabs: closing the last one just clears it.
       const cleared: SaleTab = {
-        ...tabs[0], cart: [], stakeholderId: 1, globalDiscount: { type: 'percentage', value: 0 },
+        ...tabs[0], cart: [], stakeholderId: walkInId, globalDiscount: { type: 'percentage', value: 0 },
         payments: [], priceLevel: defaultLevelForWalkIn(), priceLevelManual: false,
       };
       commitTabs([cleared], cleared.id);
@@ -645,6 +656,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
           stakeholder_id: selectedHistoryTransaction.stakeholder_id,
           user_id: currentUser?.id || 1,
           type: 'refund',
+          terminalId: getTerminalId(),
           original_transaction_id: selectedHistoryTransaction.id,
           items: itemsToRefund.map(({ unit_refund: _u, ...rest }: any) => rest),
           total_amount: totalRefund,
@@ -1014,7 +1026,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const selectedStakeholderObj = stakeholders.find((s: any) => s.id === selectedStakeholder) as any;
   // The selected customer's own local-currency rate (when set) replaces the global one for payment
   // entry / conversion ONLY — product LBP prices and cart LL totals keep using the global rate.
-  const effectiveLocal = effectiveLocalCurrency(currencies, selectedStakeholder !== 1 ? selectedStakeholderObj : null);
+  const effectiveLocal = effectiveLocalCurrency(currencies, !isWalkIn ? selectedStakeholderObj : null);
   const paymentCurrencies = currencies.map((c: any) => (effectiveLocal && c.code === effectiveLocal.code ? { ...c, rate: effectiveLocal.rate } : c));
   const paymentCurrency = paymentCurrencies.find((c: any) => c.code === paymentCurrencyState?.code) || paymentCurrencyState;
   const creditLimit = selectedStakeholderObj?.credit_limit && selectedStakeholderObj.credit_limit > 0
@@ -1024,7 +1036,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const availableCredit = creditLimit > 0 ? creditLimit + (selectedStakeholderObj?.balance || 0) : null;
   // Positive balance = store credit this customer can use to pay for the sale (POS payment modal's
   // "Use account balance" button); never available for the Walk-in customer.
-  const availableStoreCredit = selectedStakeholder !== 1 && (selectedStakeholderObj?.balance || 0) > 0
+  const availableStoreCredit = !isWalkIn && (selectedStakeholderObj?.balance || 0) > 0
     ? selectedStakeholderObj.balance
     : 0;
 
@@ -1038,16 +1050,22 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const thisSaleEffectUSD = -(totalUSD - realMoneyPaidUSD);
   const newBalanceUSD = prevBalanceUSD + thisSaleEffectUSD;
 
+  const payCode = paymentCurrency?.code;
+  const payRate = paymentCurrency?.rate ?? 1;
   useEffect(() => {
     if (showCheckout && !lastTransaction && cart.length > 0) {
       // Calculate remaining balance
       const paidUSD = payments.reduce((sum, p) => sum + (p.amount / p.exchange_rate), 0);
       const remainingUSD = totalUSD - paidUSD;
       if (remainingUSD > 0) {
-        setPaymentAmount((remainingUSD * paymentCurrency.rate).toFixed(2));
+        // Whole units for LBP-like currencies (rate > 100), cents otherwise.
+        setPaymentAmount((remainingUSD * payRate).toFixed(payRate > 100 ? 0 : 2));
       }
     }
-  }, [showCheckout, totalUSD, lastTransaction, payments, paymentCurrency, cart.length]);
+    // Depend on the primitive code/rate, NOT the paymentCurrency object (a fresh object every render
+    // for the local currency) — otherwise the field is reset on every keystroke while typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCheckout, totalUSD, lastTransaction, payments, payCode, payRate, cart.length]);
 
   const openAddCustomer = () => {
     setEditingCustomerId(null);
@@ -1184,6 +1202,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       total_amount: totalUSD,
       currency: 'USD',
       exchange_rate: 1,
+      price_currency: activeCode, // the currency the cart was priced in; the server mirrors that pricing
       discount: globalDiscount.value > 0 ? globalDiscount : undefined,
       terminalId,
       price_level: priceLevelsEnabled ? priceLevel : 'retail',
@@ -1201,7 +1220,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         finishedTabIdRef.current = activeTabIdRef.current;
         setCart([]);
         setPayments([]); // Reset split payments
-        setSelectedStakeholder(1); // Reset to Walk-in default customer
+        setSelectedStakeholder(walkInId); // Reset to Walk-in default customer
         fetchData();
 
         if (showReceiptDialog) {
@@ -1491,6 +1510,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     selectedStakeholder,
     setSelectedStakeholder,
     selectedStakeholderObj,
+    isWalkIn,
     barcodeInput,
     setBarcodeInput,
     isProcessing,

@@ -4,7 +4,7 @@ import { buildStatement } from "./statement.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
-import { forceInitialSync, forcePushToCloud, getSyncTimes, countPendingPush, getRequestCounts, notifyLocalChange } from "./sync.js";
+import { forceInitialSync, forcePushToCloud, getSyncTimes, countPendingPush, getRequestCounts, notifyLocalChange, addTombstones, markTombstonesPurged } from "./sync.js";
 import {
   setActiveSession,
   getActiveSession,
@@ -23,7 +23,7 @@ import { setupReportRoutes } from "./reports.js";
 import { setupImportRoutes } from "./importer.js";
 import { setupTenantResetRoutes } from "./tenantReset.js";
 import { setupCashFlowRoutes } from "./cashFlow.js";
-import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
+import { normalizeLevel, saleLineUnitPrice, saleLineUnitPriceLbp, lineTotal, computeTotals, uomUnitPrice, uomUnitPriceLbp, type PriceLevel } from "./pricing.js";
 import {
   loadUnitsByProduct, loadUnitsForProduct, loadUnit, normalizeUnitsPayload, assertBarcodesFree, saveProductUnits,
   legacyPackageColumns, refundLineStates, displayFields,
@@ -55,7 +55,7 @@ function tenantUserId(tenantId: number, requested: any): number | null {
     const u = db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ?").get(requested, tenantId) as any;
     if (u) return u.id;
   }
-  const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
+  const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
   return first ? first.id : null;
 }
 
@@ -109,7 +109,7 @@ function tenantStakeholderId(tenantId: number, requested: any): number | null {
     if (s) return s.id;
   }
   const walkIn = db.prepare(
-    "SELECT id FROM stakeholders WHERE tenant_id = ? ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
+    "SELECT id FROM stakeholders WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
   ).get(tenantId) as any;
   return walkIn ? walkIn.id : null;
 }
@@ -288,22 +288,6 @@ async function establishLogin(
     const isSuperAdmin = cloudTenant.email === SUPER_ADMIN_AUTH_EMAIL || cloudTenant.email === SUPER_ADMIN_LOGIN;
     const isSeed = ['demo@example.com', 'admin@example.com'].includes(cloudTenant.email);
 
-    // Seed the minimum a POS needs (Walk-in customer, Admin user, default currency, store name)
-    // the first time a real business appears on this machine — registration now happens in the
-    // cloud (edge function) and no longer seeds these locally. Seeding store_name from the
-    // tenant's own registered name means receipts print the real business from day one instead
-    // of a hardcoded placeholder (getSettingsMap falls back the same way for any tenant that
-    // already existed before this seed was added).
-    if (!isSuperAdmin && !isSeed) {
-      const userCount = db.prepare("SELECT COUNT(*) as c FROM users WHERE tenant_id = ?").get(localId) as any;
-      if (userCount.c === 0) {
-        db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, ?, ?)").run(localId, "Walk-in Customer", "customer");
-        db.prepare("INSERT INTO users (tenant_id, name, role) VALUES (?, ?, ?)").run(localId, "Admin", "admin");
-        db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(localId, "USD", "$", 1, 1);
-        db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'store_name', ?)").run(localId, cloudTenant.name);
-      }
-    }
-
     // Register the authenticated session so sync + admin endpoints can act as this tenant.
     await setActiveSession(localId, cloudTenant.global_id, cloudTenant.email, cloudSession);
     req.session.tenantId = localId;
@@ -315,6 +299,25 @@ async function establishLogin(
 
     // Pull this tenant's cloud data down (no-op for super-admin/seed accounts).
     try { await forceInitialSync(); } catch (e) { console.error('Initial sync error:', e); }
+
+    // Seed the minimum a POS needs (Walk-in customer, Admin user, default currency, store name) -
+    // but only what is STILL missing AFTER the pull. Seeding before it made every second device (or
+    // reinstall) push a duplicate Admin / USD / Walk-in to the cloud next to the business's real ones.
+    // Registration happens in the cloud (edge function) and no longer seeds these locally. Seeding
+    // store_name from the tenant's own registered name means receipts print the real business from
+    // day one (getSettingsMap falls back the same way for tenants that predate this seed). If the
+    // pull failed (offline) we still seed what is missing so the device is usable.
+    if (!isSuperAdmin && !isSeed) {
+      const has = (sql: string) => !!db.prepare(sql).get(localId);
+      if (!has("SELECT 1 FROM users WHERE tenant_id = ? AND deleted_at IS NULL LIMIT 1"))
+        db.prepare("INSERT INTO users (tenant_id, name, role) VALUES (?, ?, ?)").run(localId, "Admin", "admin");
+      if (!has("SELECT 1 FROM currencies WHERE tenant_id = ? AND deleted_at IS NULL LIMIT 1"))
+        db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(localId, "USD", "$", 1, 1);
+      if (!has("SELECT 1 FROM stakeholders WHERE tenant_id = ? AND name = 'Walk-in Customer' AND deleted_at IS NULL LIMIT 1"))
+        db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, ?, ?)").run(localId, "Walk-in Customer", "customer");
+      if (!has("SELECT 1 FROM settings WHERE tenant_id = ? AND key = 'store_name' LIMIT 1"))
+        db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'store_name', ?)").run(localId, cloudTenant.name);
+    }
 
     const tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(localId) as any;
     return { ok: true, status: 200, error: null, tenant };
@@ -572,7 +575,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     const { userId, pin } = req.body;
     const tenantId = req.session.tenantId;
 
-    const user = db.prepare("SELECT * FROM users WHERE id = ? AND tenant_id = ?").get(userId, tenantId) as any;
+    const user = db.prepare("SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(userId, tenantId) as any;
     
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -687,24 +690,37 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       const settlementCtx = beginSettlement(tenantId, settlementUserId, localToday(), settlementInput);
       settlementReportId = settlementCtx.reportId;
 
+      // Tombstone every live row this settlement removes (they keep their global_id in the archive).
+      // If the cloud purge below fails, the next pull must not re-insert them and the cloud delete is
+      // retried by the sync engine (see "Tombstones" in server/sync.ts).
+      const tomb = (table: string, sql: string) => (db.prepare(sql).all(tenantId) as any[])
+        .map((r) => ({ table, globalId: r.global_id as string, parentGlobalId: (r.parent_global_id ?? null) as string | null }));
+      addTombstones(tenantId, [
+        ...tomb('payments', "SELECT p.global_id, t.global_id AS parent_global_id FROM payments p JOIN transactions t ON t.id = p.transaction_id WHERE t.tenant_id = ?"),
+        ...tomb('transaction_items', "SELECT i.global_id, t.global_id AS parent_global_id FROM transaction_items i JOIN transactions t ON t.id = i.transaction_id WHERE t.tenant_id = ?"),
+        ...tomb('transactions', "SELECT global_id FROM transactions WHERE tenant_id = ?"),
+        ...tomb('cash_flow', "SELECT global_id FROM cash_flow WHERE tenant_id = ?"),
+        ...tomb('cashier_shifts', "SELECT global_id FROM cashier_shifts WHERE tenant_id = ?"),
+      ]);
+
       // Move payments
       db.prepare(`
-      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at)
-      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at 
+      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id)
+      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id 
       FROM payments WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
       // Move transaction items
       db.prepare(`
-      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id)
-      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id
+      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, global_id)
+      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, global_id
       FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
       // Move transactions
       db.prepare(`
-      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at)
-      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at
+      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at, global_id)
+      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at, global_id
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
@@ -729,8 +745,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       // used to just delete these with no trace anywhere, which meant every itemized cash-in/out
       // and its reason was permanently unrecoverable after every settlement.
       db.prepare(`
-        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty)
-        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty
+        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id)
+        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id
         FROM cash_flow WHERE tenant_id = ?
       `).run(tenantId);
 
@@ -762,6 +778,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       }
 
       settleData();
+      // The tombstones just written stay "unpurged" even when the purge above succeeded: a row pushed
+      // between that purge and settleData() would otherwise survive in the cloud. The sync engine's
+      // next cycle re-deletes them by global_id (idempotent, one cheap request) and marks them purged.
 
       logAction(
         tenantId,
@@ -1140,12 +1159,12 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   });
 
   app.get("/api/stakeholders", authenticate, (req: any, res) => {
-    const stakeholders = db.prepare("SELECT * FROM stakeholders WHERE tenant_id = ?").all(req.session.tenantId);
+    const stakeholders = db.prepare("SELECT * FROM stakeholders WHERE tenant_id = ? AND deleted_at IS NULL").all(req.session.tenantId);
     res.json(stakeholders);
   });
 
   app.get("/api/currencies", authenticate, (req: any, res) => {
-    const currencies = db.prepare("SELECT * FROM currencies WHERE tenant_id = ?").all(req.session.tenantId);
+    const currencies = db.prepare("SELECT * FROM currencies WHERE tenant_id = ? AND deleted_at IS NULL").all(req.session.tenantId);
     res.json(currencies);
   });
 
@@ -1171,14 +1190,25 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     broadcast({ type: 'SETTINGS_UPDATED' }, tenantId);
   });
 
+  // Soft delete (deleted_at): a hard delete never reached the cloud, so the next pull brought the row back.
   app.delete("/api/currencies/:id", authenticate, (req: any, res) => {
-    db.prepare("DELETE FROM currencies WHERE id = ? AND tenant_id = ?").run(req.params.id, req.session.tenantId);
+    const tenantId = req.session.tenantId;
+    const cur = db.prepare("SELECT id, is_default FROM currencies WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(req.params.id, tenantId) as any;
+    if (!cur) return res.json({ success: true });
+    db.transaction(() => {
+      db.prepare("UPDATE currencies SET deleted_at = CURRENT_TIMESTAMP, is_default = 0 WHERE id = ? AND tenant_id = ?").run(cur.id, tenantId);
+      if (cur.is_default) {
+        const next = (db.prepare("SELECT id FROM currencies WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (UPPER(code) = 'USD') DESC, id LIMIT 1").get(tenantId) as any);
+        if (next) db.prepare("UPDATE currencies SET is_default = 1 WHERE id = ?").run(next.id);
+      }
+    })();
     res.json({ success: true });
+    broadcast({ type: 'SETTINGS_UPDATED' }, tenantId);
   });
 
   // --- USER MANAGEMENT ---
   app.get("/api/users", authenticate, (req: any, res) => {
-    const users = db.prepare("SELECT * FROM users WHERE tenant_id = ?").all(req.session.tenantId);
+    const users = db.prepare("SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL").all(req.session.tenantId);
     res.json(users);
   });
 
@@ -1195,7 +1225,15 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   });
 
   app.delete("/api/users/:id", authenticate, (req: any, res) => {
-    db.prepare("DELETE FROM users WHERE id = ? AND tenant_id = ?").run(req.params.id, req.session.tenantId);
+    const tenantId = req.session.tenantId;
+    const u = db.prepare("SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(req.params.id, tenantId) as any;
+    if (!u) return res.json({ success: true });
+    if (u.role === 'admin') {
+      const others = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE tenant_id = ? AND role = 'admin' AND deleted_at IS NULL AND id <> ?").get(tenantId, u.id) as any).c;
+      if (others === 0) return res.status(400).json({ error: "You can't delete the last admin user." });
+    }
+    // Soft delete: old invoices and reports keep showing this user's name.
+    db.prepare("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?").run(u.id, tenantId);
     res.json({ success: true });
   });
 
@@ -1262,7 +1300,11 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   });
 
   app.delete("/api/stakeholders/:id", authenticate, (req: any, res) => {
-    db.prepare("DELETE FROM stakeholders WHERE id = ? AND tenant_id = ?").run(req.params.id, req.session.tenantId);
+    const st = db.prepare("SELECT id, name FROM stakeholders WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(req.params.id, req.session.tenantId) as any;
+    if (!st) return res.json({ success: true });
+    if (st.name === 'Walk-in Customer') return res.status(400).json({ error: "The Walk-in Customer can't be deleted." });
+    // Soft delete: old invoices and statements keep showing this party's name.
+    db.prepare("UPDATE stakeholders SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?").run(st.id, req.session.tenantId);
     logAction(req.session.tenantId, 1, 'Stakeholder Deleted', `ID: ${req.params.id}`);
     res.json({ success: true });
   });
@@ -1479,7 +1521,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       const getProduct = (id: number) => {
         if (!(id in productCache)) {
           productCache[id] = db.prepare(
-            "SELECT price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock, active FROM products WHERE id = ? AND tenant_id = ?"
+            "SELECT price, price_lbp, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, package_price, package_price_lbp, units_per_package, track_inventory, cost, min_price, stock, active FROM products WHERE id = ? AND tenant_id = ?"
           ).get(id, tenantId) as any;
         }
         return productCache[id];
@@ -1487,6 +1529,12 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
       const unitsCache: Record<number, any[]> = {};
       const getUnits = (id: number) => (unitsCache[id] ||= loadUnitsForProduct(tenantId, id));
+
+      // A cart the client priced in the LOCAL currency was charged from the LBP price columns at the
+      // GLOBAL rate (not the party rate): price it the same way, so total_amount equals what was paid.
+      const globalLocal = localCurrencyFor(tenantId);
+      const pricedInLocal = type === 'sale' && !!globalLocal && isLocalCode(globalLocal, req.body.price_currency);
+      const lbpRate = globalLocal?.rate || 1;
 
       let calculatedTotal = 0;
       const processedItems = items.flatMap((item: any, idx: number) => {
@@ -1523,6 +1571,12 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           let perUnit = uom
             ? uomUnitPrice(product, uom, resolvedPriceLevel)
             : saleLineUnitPrice(product, resolvedPriceLevel, item.quantity, getUnits(item.id));
+          // The same price in LBP (local-priced carts only) - what the client actually charged.
+          let perUnitLbp = pricedInLocal
+            ? (uom
+              ? uomUnitPriceLbp(product, uom, resolvedPriceLevel, lbpRate)
+              : saleLineUnitPriceLbp(product, resolvedPriceLevel, item.quantity, lbpRate, getUnits(item.id)))
+            : 0;
 
           // A manual price override (cashier types a different price on the line) is only
           // honored when the tenant explicitly turned it on, and only for a real, non-negative
@@ -1533,7 +1587,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           const overrideAllowed = settings.allow_price_override === '1' || req.body.source === 'backoffice';
           if (overrideAllowed && Number.isFinite(item.unit_price) && item.unit_price >= 0) {
             perUnit = item.unit_price; // per unit of the line's UoM
+            perUnitLbp = item.unit_price * lbpRate;
           }
+          if (pricedInLocal) perUnit = perUnitLbp / lbpRate; // USD equivalent of the LBP price
           unitPrice = perUnit / factor; // stored per base piece
           if (product.min_price && product.min_price > 0 && unitPrice < product.min_price && settings.enforce_min_price === '1') {
             throw new ValidationError(
@@ -1547,7 +1603,18 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           // when computing what the cashier actually charges — otherwise total_amount ends up
           // higher than the payments actually collected on any discounted line item, which
           // silently overstates recorded revenue in every report and end-of-day reconciliation.
-          itemTotal = lineTotal(perUnit, item.quantity, { type: discountType as any, value: discountValue });
+          if (pricedInLocal) {
+            // Exactly the client's itemTotalIn: the discount is applied in LBP (a fixed one is entered in USD).
+            let lineLbp = perUnitLbp * item.quantity;
+            if (discountValue) {
+              lineLbp = discountType === 'percentage'
+                ? lineLbp * (1 - discountValue / 100)
+                : Math.max(0, lineLbp - discountValue * lbpRate);
+            }
+            itemTotal = lineLbp / lbpRate;
+          } else {
+            itemTotal = lineTotal(perUnit, item.quantity, { type: discountType as any, value: discountValue });
+          }
           // Optional guard: no sale line below cost (after the line's own discount; the invoice-level
           // discount is deliberately not considered).
           if (settings.allow_below_cost === '0' && product.cost > 0 && pieces > 0 && itemTotal / pieces < product.cost - 1e-9) {
@@ -1846,6 +1913,14 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         }
       }
 
+      // Tombstone the transaction and its children so a pull can't bring them back while the cloud
+      // delete is still pending (see "Tombstones" in server/sync.ts).
+      const gone = [
+        ...(db.prepare("SELECT global_id FROM payments WHERE transaction_id = ?").all(id) as any[]).map((r) => ({ table: 'payments', globalId: r.global_id as string, parentGlobalId: tx.global_id as string })),
+        ...(db.prepare("SELECT global_id FROM transaction_items WHERE transaction_id = ?").all(id) as any[]).map((r) => ({ table: 'transaction_items', globalId: r.global_id as string, parentGlobalId: tx.global_id as string })),
+        { table: 'transactions', globalId: tx.global_id as string },
+      ];
+      addTombstones(tenantId, gone);
       db.prepare("DELETE FROM payments WHERE transaction_id = ?").run(id);
       db.prepare("DELETE FROM transaction_items WHERE transaction_id = ?").run(id);
       db.prepare("DELETE FROM transactions WHERE id = ? AND tenant_id = ?").run(id, tenantId);
@@ -1854,6 +1929,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       if (tx.stakeholder_id) {
         recomputeStakeholderBalance(tx.stakeholder_id, tenantId, { source: 'invoice_delete', reference_id: Number(id), user_id: tenantUserId(tenantId, req.body?.user_id), note: `Deleted ${tx.type} #${id}` });
       }
+      return gone;
     });
 
     try {
@@ -1873,7 +1949,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         }
       }
 
-      deleteTx();
+      const goneRows = deleteTx();
+      if (cloudDeleted) markTombstonesPurged(goneRows);
       logAction(tenantId, 1, 'Transaction Deleted', `ID: ${id}, Type: ${tx.type}, Total: ${tx.total_amount}${cloudDeleted ? '' : ' (LOCAL ONLY — cloud delete failed)'}`);
       broadcast({ type: 'TRANSACTIONS_UPDATED' }, tenantId);
       broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
@@ -1887,7 +1964,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
 
   app.get("/api/users", authenticate, (req: any, res) => {
-    const users = db.prepare("SELECT * FROM users WHERE tenant_id = ?").all(req.session.tenantId);
+    const users = db.prepare("SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL").all(req.session.tenantId);
     res.json(users);
   });
 
@@ -2907,7 +2984,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         arabic: printerArabicMode(printer),
         language: settings.language,
         localCurrency: localCurrencyFor(tenantId),
-        currencySymbols: Object.fromEntries((db.prepare("SELECT code, symbol FROM currencies WHERE tenant_id = ?").all(tenantId) as any[])
+        currencySymbols: Object.fromEntries((db.prepare("SELECT code, symbol FROM currencies WHERE tenant_id = ? AND deleted_at IS NULL").all(tenantId) as any[])
           .filter((c) => c.symbol).map((c) => [c.code, c.symbol])),
       });
 

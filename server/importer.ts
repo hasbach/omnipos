@@ -202,7 +202,7 @@ function resolveUserId(tenantId: number, requested: any): number | null {
     const u = db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ?").get(requested, tenantId) as any;
     if (u) return u.id;
   }
-  const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
+  const first = db.prepare("SELECT id FROM users WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (role = 'admin') DESC, id LIMIT 1").get(tenantId) as any;
   return first ? first.id : null;
 }
 
@@ -634,11 +634,11 @@ const RESERVED_CUSTOMER_NAMES = new Set(["walk-in customer"]);
 function findStakeholder(tenantId: number, type: "customer" | "supplier", name: string, phone: string | null): any {
   if (phone) {
     return db
-      .prepare("SELECT * FROM stakeholders WHERE tenant_id = ? AND type = ? AND LOWER(name) = LOWER(?) AND phone = ?")
+      .prepare("SELECT * FROM stakeholders WHERE tenant_id = ? AND deleted_at IS NULL AND type = ? AND LOWER(name) = LOWER(?) AND phone = ?")
       .get(tenantId, type, name, phone);
   }
   return db
-    .prepare("SELECT * FROM stakeholders WHERE tenant_id = ? AND type = ? AND LOWER(name) = LOWER(?)")
+    .prepare("SELECT * FROM stakeholders WHERE tenant_id = ? AND deleted_at IS NULL AND type = ? AND LOWER(name) = LOWER(?)")
     .get(tenantId, type, name);
 }
 

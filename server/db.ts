@@ -588,6 +588,7 @@ db.exec(`
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
 for (const table of allTables) {
+  if (table.name === 'sync_tombstones') continue; // local-only sync bookkeeping (server/sync.ts); its global_id is the TOMBSTONED row's id
   const tableCols = db.prepare(`PRAGMA table_info(${table.name})`).all() as { name: string }[];
   const colNames = tableCols.map(c => c.name);
   

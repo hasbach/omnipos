@@ -25,7 +25,7 @@ export default function PaymentModal() {
     paymentAmount, setPaymentAmount, paymentMethod, setPaymentMethod, paymentCurrency, setPaymentCurrency, paymentCurrencies, effectiveLocal,
     showAddCustomerModal, newCustomerForm, setNewCustomerForm, isPriceChecker, setIsPriceChecker,
     lastTransaction, setLastTransaction, suggestions, setSuggestions, finishSaleTab,
-    stakeholders, selectedStakeholder, selectedStakeholderObj, creditLimit, availableCredit,
+    stakeholders, selectedStakeholder, selectedStakeholderObj, isWalkIn, creditLimit, availableCredit,
     availableStoreCredit,
     historyDate, setHistoryDate, loadingHistory, selectedHistoryTransaction, setSelectedHistoryTransaction,
     showRefundModal, setShowRefundModal, refundQuantities, setRefundQuantities,
@@ -63,7 +63,17 @@ export default function PaymentModal() {
   const remainingUSD = totalUSD - paidUSD;
   const overpaidUSD = paidUSD - totalUSD;
   const isFullyPaid = remainingUSD <= 0.01;
-  const isWalkIn = selectedStakeholder === 1;
+  // Change / remaining are shown in the currency the customer pays in when it is the local one.
+  const lastPay = payments.length > 0 ? payments[payments.length - 1] : null;
+  const lastPayCur: any = lastPay && lastPay.currency !== 'USD'
+    ? ((paymentCurrencies || currencies).find((c: any) => c.code === lastPay.currency) || null)
+    : null;
+  const changeRate = lastPayCur ? (lastPay.exchange_rate || lastPayCur.rate || 1) : 1;
+  const changeLocal = lastPayCur ? Math.round(overpaidUSD * changeRate) : 0;
+  const fmtLocalAmt = (n: number, cur: any) => `${formatNumber(n, { decimals: 0 })} ${cur.symbol || cur.code}`;
+  const changeLabel = lastPayCur ? fmtLocalAmt(changeLocal, lastPayCur) : `$${overpaidUSD.toFixed(2)}`;
+  const payIsLocal = !!paymentCurrency && paymentCurrency.code !== 'USD' && paymentCurrency.rate > 100;
+  const remainingLocal = payIsLocal ? Math.round(remainingUSD * paymentCurrency.rate) : 0;
 
   const buildTrimmedPayments = () => {
     let remaining = totalUSD;
@@ -575,7 +585,14 @@ export default function PaymentModal() {
                 <div className="p-5 bg-surface border-2 border-primary rounded-2xl space-y-4 shadow-lg">
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold uppercase tracking-wide text-text">{t('pos_remaining', 'Remaining')}</span>
-                    <span className="text-xl font-black font-mono num text-danger">${remainingUSD.toFixed(2)}</span>
+                    {payIsLocal ? (
+                      <span className="text-end font-mono num text-danger leading-tight">
+                        <span className="block text-2xl font-black">{fmtLocalAmt(remainingLocal, paymentCurrency)}</span>
+                        <span className="block text-xs font-bold opacity-70">${remainingUSD.toFixed(2)}</span>
+                      </span>
+                    ) : (
+                      <span className="text-xl font-black font-mono num text-danger">${remainingUSD.toFixed(2)}</span>
+                    )}
                   </div>
 
                   <div className={`grid gap-2 ${creditLeft > 0.005 ? 'grid-cols-4' : 'grid-cols-3'}`}>
@@ -687,7 +704,14 @@ export default function PaymentModal() {
                 <div className="p-4 bg-success-soft border-2 border-success/30 rounded-2xl space-y-3">
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold uppercase tracking-wide text-success">{t('pos_change_due', 'Change Due')}</span>
-                    <span className="text-xl font-black font-mono num text-success">+${overpaidUSD.toFixed(2)}</span>
+                    {lastPayCur ? (
+                      <span className="text-end font-mono num text-success leading-tight">
+                        <span className="block text-2xl font-black">+{changeLabel}</span>
+                        <span className="block text-xs font-bold opacity-70">${overpaidUSD.toFixed(2)}</span>
+                      </span>
+                    ) : (
+                      <span className="text-xl font-black font-mono num text-success">+${overpaidUSD.toFixed(2)}</span>
+                    )}
                   </div>
                   {isWalkIn ? (
                     <div className="space-y-2">
@@ -696,7 +720,7 @@ export default function PaymentModal() {
                         <p className="text-xs text-text-2 mt-1">{t('pos_walkin_no_credit_body', 'Select a registered customer to credit their account.')}</p>
                       </div>
                       <Button variant="success" className="w-full" onClick={() => handleCheckout(buildTrimmedPayments())} disabled={isProcessing} loading={isProcessing}>
-                        {t('pos_complete_and_change', 'Complete & Give Change {amount}', { amount: `$${overpaidUSD.toFixed(2)}` })}
+                        {t('pos_complete_and_change', 'Complete & Give Change {amount}', { amount: changeLabel })}
                       </Button>
                     </div>
                   ) : (
@@ -705,11 +729,11 @@ export default function PaymentModal() {
                       <div className="grid grid-cols-2 gap-2">
                         <Button variant="success" className="flex-col gap-1 h-auto py-3" onClick={() => handleCheckout(payments)} disabled={isProcessing}>
                           <span>{t('pos_credit_balance', 'Credit Balance')}</span>
-                          <span className="opacity-80 text-[9px]">{t('pos_credit_to_account', '+{amount} to account', { amount: `$${overpaidUSD.toFixed(2)}` })}</span>
+                          <span className="opacity-80 text-[9px]">{t('pos_credit_to_account', '+{amount} to account', { amount: changeLabel })}</span>
                         </Button>
                         <Button variant="secondary" className="flex-col gap-1 h-auto py-3" onClick={() => handleCheckout(buildTrimmedPayments())} disabled={isProcessing}>
                           <span>{t('pos_give_as_change', 'Give as Change')}</span>
-                          <span className="opacity-80 text-[9px]">{t('pos_return_amount', 'Return {amount}', { amount: `$${overpaidUSD.toFixed(2)}` })}</span>
+                          <span className="opacity-80 text-[9px]">{t('pos_return_amount', 'Return {amount}', { amount: changeLabel })}</span>
                         </Button>
                       </div>
                     </div>

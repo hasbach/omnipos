@@ -8,7 +8,7 @@ import fs from "fs";
 import path from "path";
 import { db, dbDir, logAction } from "./db.js";
 import { getActiveSession } from "./session.js";
-import { pauseSync, resumeSync, clearSyncCursors } from "./sync.js";
+import { pauseSync, resumeSync, clearSyncCursors, clearTombstones } from "./sync.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
 
 export const RESET_SCOPES = ["transactions", "stock", "products", "parties"] as const;
@@ -26,7 +26,7 @@ const chunk = <T,>(arr: T[], size: number): T[][] => {
 export function findAdminByPin(tenantId: number, rawPin: unknown): { id: number; pin: string } | null {
   const pin = typeof rawPin === "string" || typeof rawPin === "number" ? String(rawPin) : "";
   if (!pin) return null;
-  const adminRows = db.prepare("SELECT id, pin FROM users WHERE tenant_id = ? AND role = 'admin'").all(tenantId) as any[];
+  const adminRows = db.prepare("SELECT id, pin FROM users WHERE tenant_id = ? AND role = 'admin' AND deleted_at IS NULL").all(tenantId) as any[];
   return adminRows.find((u) => u.pin === pin) || null;
 }
 
@@ -35,7 +35,7 @@ export function findAdminByPin(tenantId: number, rawPin: unknown): { id: number;
 // is only translated for DISPLAY, the stored name never changes), else the first customer.
 export function findWalkInId(tenantId: number): number | null {
   const row = db.prepare(
-    "SELECT id FROM stakeholders WHERE tenant_id = ? ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
+    "SELECT id FROM stakeholders WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY (name = 'Walk-in Customer') DESC, (type = 'customer') DESC, id LIMIT 1"
   ).get(tenantId) as any;
   return row ? row.id : null;
 }
@@ -160,6 +160,7 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
     db.prepare("DELETE FROM stock_adjustments WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stakeholder_balance_log WHERE tenant_id = ?").run(t);
     clearSyncCursors(t); // the local rows are gone: pull everything again from scratch
+    clearTombstones(t); // the cloud copy was purged too: nothing left to retry or guard against
     // Balances derive from baseline + transactions; with no transactions left, zero both.
     db.prepare("UPDATE stakeholders SET balance = 0, balance_baseline = 0 WHERE tenant_id = ? AND (IFNULL(balance, 0) <> 0 OR IFNULL(balance_baseline, 0) <> 0)").run(t);
   }
