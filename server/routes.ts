@@ -1,6 +1,8 @@
 import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
 import { buildStatement } from "./statement.js";
+import { buildStatementDocument, parseStatementOpts, type StatementBusiness } from "./statementDocument.js";
+import { renderStatementHtml } from "./statementHtml.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
@@ -174,6 +176,13 @@ function getSettingsMap(tenantId: number): Record<string, string> {
   }
 
   return map;
+}
+
+// Business header + printed language for statements (server/statementDocument.ts).
+function statementBusiness(tenantId: number): StatementBusiness {
+  const s = getSettingsMap(tenantId);
+  const language = s.language === 'ar' || s.language === 'fr' ? s.language : 'en';
+  return { name: s.store_name || '', address: s.business_address || '', phone: s.business_phone || '', language };
 }
 
 // After an End-of-Day settlement clears the tenant's transactional data locally, the same rows
@@ -2425,6 +2434,23 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     // Events + reconciling opening line so the last running balance equals stakeholders.balance
     // (server/statement.ts). Includes archived (settled) invoices.
     res.json(buildStatement(req.session.tenantId, req.params.id));
+  });
+
+  // Printable statement: mode=open (unpaid orders, FIFO) or mode=activity&from&to (local days).
+  app.get("/api/reports/statement/:id", authenticate, (req: any, res) => {
+    const opts = parseStatementOpts(req.query);
+    if (!opts) return res.status(400).json({ error: "from and to (YYYY-MM-DD, from <= to) are required for activity" });
+    const doc = buildStatementDocument(req.session.tenantId, req.params.id, opts, statementBusiness(req.session.tenantId));
+    if (!doc) return res.status(404).json({ error: "Customer/supplier not found" });
+    res.json(doc);
+  });
+
+  app.get("/api/reports/statement/:id/html", authenticate, (req: any, res) => {
+    const opts = parseStatementOpts(req.query);
+    if (!opts) return res.status(400).json({ error: "from and to (YYYY-MM-DD, from <= to) are required for activity" });
+    const doc = buildStatementDocument(req.session.tenantId, req.params.id, opts, statementBusiness(req.session.tenantId));
+    if (!doc) return res.status(404).json({ error: "Customer/supplier not found" });
+    res.type("html").send(renderStatementHtml(doc, req.query.format === "receipt" ? "receipt" : "a4"));
   });
 
   // Cash Flow & Reports
