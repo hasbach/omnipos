@@ -372,3 +372,62 @@ export function buildOpenStatement(tenantId: number, stakeholderId: number | str
   }
   return { previous_balance: previous, orders, total_due: round2(due), credit: 0 };
 }
+
+export interface ActivityRow {
+  date: string;
+  date_label: string;
+  type: string;
+  reference: string;
+  method: string | null;
+  debit: number;
+  credit: number;
+  effect: number;
+  balance: number;          // running balance after this row (app sign convention)
+  currency?: string;
+  amount_original?: number;
+  tx_id?: number;
+  items?: StatementItem[];  // invoice / purchase / refund rows only
+}
+
+export interface ActivityStatement {
+  from: string;
+  to: string;
+  opening: number;          // balance at the start of `from` (local midnight)
+  rows: ActivityRow[];
+  closing: number;          // balance at the end of `to`
+  total_debit: number;
+  total_credit: number;
+}
+
+const INVOICE_TYPES = new Set(['sale', 'purchase', 'refund']);
+
+// "Account activity" between two LOCAL calendar days (inclusive), cut out of the full ledger so the
+// opening and closing balances are exactly the running balance at those points.
+export function buildActivityStatement(tenantId: number, stakeholderId: number | string, from: string, to: string): ActivityStatement {
+  let opening = 0;
+  const rows: ActivityRow[] = [];
+  for (const r of buildStatement(tenantId, stakeholderId)) {
+    const day = localDateOf(r.date);
+    if (day < from) { opening = r.balance; continue; }
+    if (day > to) continue;
+    const row: ActivityRow = {
+      date: r.date, date_label: localStampLabel(r.date), type: r.type, reference: r.reference,
+      method: r.method ?? null, debit: r.debit, credit: r.credit, effect: r.effect, balance: r.balance,
+    };
+    if (r.currency !== undefined) { row.currency = r.currency; row.amount_original = r.amount_original; }
+    if (r.tx_id != null && INVOICE_TYPES.has(r.type)) {
+      row.tx_id = r.tx_id;
+      row.items = loadStatementItems(r.tx_id, !!r.archived);
+    }
+    rows.push(row);
+  }
+  const closing = rows.length ? rows[rows.length - 1].balance : opening;
+  return {
+    from, to,
+    opening: round2(opening),
+    rows,
+    closing: round2(closing),
+    total_debit: round2(rows.reduce((s, r) => s + r.debit, 0)),
+    total_credit: round2(rows.reduce((s, r) => s + r.credit, 0)),
+  };
+}
