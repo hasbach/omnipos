@@ -328,6 +328,18 @@ export function buildOpenStatement(tenantId: number, stakeholderId: number | str
     if (!s) { s = { tx_id: r.tx_id, archived: !!r.archived, type: r.type, date: r.date, effect: 0 }; byTx.set(r.tx_id, s); slots.push(s); }
     s.effect += r.effect;
   }
+  // A refund reverses a specific order: net it against that order first, so only the remaining
+  // payments are allocated oldest-first. Leftover refund effect stays (already part of the balance).
+  for (const refund of slots) {
+    if (refund.type !== 'refund' || refund.tx_id == null || refund.effect <= 0.005) continue;
+    const row = db.prepare(`SELECT original_transaction_id FROM ${refund.archived ? 'archived_transactions' : 'transactions'} WHERE id = ?`).get(refund.tx_id) as any;
+    const original = row?.original_transaction_id != null ? byTx.get(row.original_transaction_id) : undefined;
+    if (!original || original === refund || original.effect >= -0.005) continue;
+    const amt = round2(Math.min(refund.effect, -original.effect));
+    original.effect = round2(original.effect + amt);
+    refund.effect = round2(refund.effect - amt);
+  }
+
   const debts = slots.filter((s) => s.effect < -0.005 && (s.tx_id == null || s.type === 'sale' || s.type === 'purchase'));
 
   let left = round2(due);

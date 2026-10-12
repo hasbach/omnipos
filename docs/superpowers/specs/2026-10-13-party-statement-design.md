@@ -44,6 +44,9 @@ Sign convention is the app's: negative balance = party owes us (customer) / we o
      at-sale real-money payments* (`total − real-money payments on that transaction`, PAID_TOLERANCE_USD
      respected); fully paid at sale → not a debt item;
    - negative opening / import / manual-edit amounts, merged into one **"Previous balance"** item.
+   - a refund is first netted against the order it reverses (`original_transaction_id`, live or archived):
+     that order's outstanding amount shrinks by the refunded amount; only the remaining payments are then
+     allocated oldest-first (step 3).
 2. Let `due = −balance` (current `stakeholders.balance`). If `due ≤ 0.005`: no unpaid orders; return the
    credit amount (if any).
 3. FIFO allocation ⇒ outstanding debt is always the **newest** debt items. Walk debt items newest → oldest,

@@ -104,6 +104,28 @@ test("a refund reduces what is owed (newest orders stay)", async () => {
   assert.deepEqual(o.orders.map((x) => x.id), [s2]);
 });
 
+test("a refund nets against the order it reverses, not the oldest", async () => {
+  const c = await party("Refund Nets Original");
+  const s1 = await sale(c, 1);
+  const s2 = await sale(c, 1);
+  await post({ type: "refund", original_transaction_id: s2, stakeholder_id: c, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1, payments: [] });
+  const o = stmt.buildOpenStatement(tenantId, c)!;
+  totalsMatch(o, c);
+  assert.deepEqual(o.orders.map((x) => x.id), [s1]);
+});
+
+test("a partial refund leaves the rest of the reversed order owed", async () => {
+  const c = await party("Partial Refund Nets");
+  const s1 = await sale(c, 1);
+  const s2 = await sale(c, 2); // 50
+  await post({ type: "refund", original_transaction_id: s2, stakeholder_id: c, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1, payments: [] }); // 25 back
+  const o = stmt.buildOpenStatement(tenantId, c)!;
+  totalsMatch(o, c);
+  assert.deepEqual(o.orders.map((x) => x.id), [s1, s2]);
+  near(o.orders[0].remaining, 25);
+  near(o.orders[1].remaining, 25);
+});
+
 test("supplier: purchases, partial payment, total equals what we owe", async () => {
   const s = await party("Open Supplier", "supplier");
   const p1 = await post({ type: "purchase", stakeholder_id: s, items: [{ id: productId, quantity: 4, price: 25 }], currency: "USD", exchange_rate: 1, payments: [] }); // 100
