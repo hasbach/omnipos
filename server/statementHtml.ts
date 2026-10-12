@@ -118,7 +118,7 @@ export function renderStatementHtml(doc: StatementDocument, format: 'a4' | 'rece
       }
     } else {
       const rows = a.rows.map((r) => {
-        const items = (r.items || []).map((it) => `<tr class="items"><td colspan="3">${esc(itemName(it))} — ${num(qtyText(it.qty))} × ${num(usd(it.unit_price))}</td><td class="end" colspan="2">${num(usd(it.line_total))}</td><td></td></tr>`).join('');
+        const items = (r.items || []).map((it) => `<tr class="items"><td></td><td></td><td>${esc(itemName(it))} — ${num(qtyText(it.qty))} × ${num(usd(it.unit_price))} = ${num(usd(it.line_total))}</td><td></td><td></td><td></td></tr>`).join('');
         return `<tr><td>${num(r.date_label)}</td><td>${num(r.reference)}</td><td>${esc(r.label)}${r.original_label ? ` <span class="muted">(${num(r.original_label)})</span>` : ''}</td>
           <td class="end">${r.debit ? num(usd(r.debit)) : ''}</td><td class="end">${r.credit ? num(usd(r.credit)) : ''}</td><td class="end">${num(balanceText(r.balance, doc.party.type, L))}</td></tr>${items}`;
       }).join('');

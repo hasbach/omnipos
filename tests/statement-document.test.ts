@@ -44,7 +44,7 @@ test("JSON document: activity mode needs a valid range", async () => {
   const ok = await app.api("GET", `/api/reports/statement/${cust}?mode=activity&from=2000-01-01&to=2100-01-01`, { tenantId });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   const pay = ok.body.activity.rows.find((x: any) => x.type === "payment");
-  assert.equal(pay.label, "Payment (CASH)");
+  assert.equal(pay.label, "Payment (Cash)");
 });
 
 test("unknown party is 404", async () => {
@@ -72,4 +72,19 @@ test("HTML: receipt format and escaping", async () => {
   assert.ok(html.includes('class="receipt"'));
   assert.ok(html.includes("&lt;b&gt;X&lt;/b&gt;"));
   assert.ok(!html.includes("<b>X</b>"));
+});
+
+test("HTML: activity A4 keeps product line totals in the description cell, not under Debit/Credit", async () => {
+  setLanguage("en");
+  const r = await app.api("GET", `/api/reports/statement/${cust}/html?mode=activity&from=2000-01-01&to=2100-01-01`, { tenantId });
+  assert.equal(r.status, 200);
+  const html = String(r.body);
+  const row = html.match(/<tr class="items">([\s\S]*?)<\/tr>/);
+  assert.ok(row, "an item row is rendered");
+  const cells = [...row![1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim());
+  assert.equal(cells.length, 6, "one cell per column");
+  const filled = cells.filter((c) => c !== "");
+  assert.equal(filled.length, 1, "exactly one non-empty cell");
+  assert.equal(cells.indexOf(filled[0]), 2, "the description column");
+  assert.ok(filled[0].includes("مياه") && filled[0].includes("50.00"), filled[0]);
 });

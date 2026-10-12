@@ -63,7 +63,7 @@ export function buildStatementDocument(tenantId: number, stakeholderId: number |
       const kind = labels.kinds[r.type] ?? r.type;
       return {
         ...r,
-        label: r.method ? `${kind} (${paymentMethodLabel(business.language, r.method)})` : kind,
+        label: r.method ? `${kind} (${labels.methods[r.method] ?? paymentMethodLabel(business.language, r.method)})` : kind,
         original_label: r.currency && r.currency !== 'USD' && r.amount_original != null
           ? `${Math.round(r.amount_original).toLocaleString('en-US')} ${symbols[r.currency] || r.currency}` : null,
       };

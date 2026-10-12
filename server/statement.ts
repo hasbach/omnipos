@@ -414,12 +414,25 @@ const INVOICE_TYPES = new Set(['sale', 'purchase', 'refund']);
 export function buildActivityStatement(tenantId: number, stakeholderId: number | string, from: string, to: string): ActivityStatement {
   let opening = 0;
   const rows: ActivityRow[] = [];
+  // Same receipt number as "Unpaid orders" (MAIN-0013 / #13), on the invoice row and its payments alike.
+  const refs = new Map<string, string>();
+  const refOf = (r: any): string => {
+    if (r.tx_id == null) return r.reference;
+    const key = `${r.archived ? 'a' : 'l'}${r.tx_id}`;
+    let ref = refs.get(key);
+    if (ref === undefined) {
+      const tx = db.prepare(`SELECT id, terminal_id, terminal_sequence FROM ${r.archived ? 'archived_transactions' : 'transactions'} WHERE id = ?`).get(r.tx_id) as any;
+      ref = tx ? receiptRef(tx) : r.reference;
+      refs.set(key, ref!);
+    }
+    return ref!;
+  };
   for (const r of buildStatement(tenantId, stakeholderId)) {
     const day = localDateOf(r.date);
     if (day < from) { opening = r.balance; continue; }
     if (day > to) continue;
     const row: ActivityRow = {
-      date: r.date, date_label: localStampLabel(r.date), type: r.type, reference: r.reference,
+      date: r.date, date_label: localStampLabel(r.date), type: r.type, reference: refOf(r),
       method: r.method ?? null, debit: r.debit, credit: r.credit, effect: r.effect, balance: r.balance,
     };
     if (r.currency !== undefined) { row.currency = r.currency; row.amount_original = r.amount_original; }

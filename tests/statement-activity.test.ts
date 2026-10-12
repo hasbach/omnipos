@@ -85,3 +85,17 @@ test("activity: an empty range keeps opening == closing", async () => {
   assert.equal(a.rows.filter((r) => r.type === "sale").length, 0);
   near(a.opening, -25); near(a.closing, -25);
 });
+
+test("activity references use the receipt number, on the sale and its payments alike", async () => {
+  const cust = (await app.api("POST", "/api/stakeholders", { tenantId, body: { name: "Ref Customer", type: "customer" } })).body.id;
+  const s = await post({ type: "sale", stakeholder_id: cust, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1,
+    payments: [{ amount: 5, method: "cash", currency: "USD", exchange_rate: 1 }] });
+  const refs = () => {
+    const a = stmt.buildActivityStatement(tenantId, cust, "2000-01-01", "2100-01-01");
+    return [a.rows.find((r) => r.type === "sale")!.reference, a.rows.find((r) => r.type === "payment")!.reference];
+  };
+  app.db.prepare("UPDATE transactions SET terminal_id = NULL, terminal_sequence = NULL WHERE id = ?").run(s);
+  assert.deepEqual(refs(), [`#${s}`, `#${s}`]);
+  app.db.prepare("UPDATE transactions SET terminal_id = 'MAIN', terminal_sequence = 7 WHERE id = ?").run(s);
+  assert.deepEqual(refs(), ["MAIN-0007", "MAIN-0007"]);
+});

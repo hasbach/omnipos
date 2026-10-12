@@ -14,6 +14,7 @@ export interface StatementLabels {
   balanceDue: string; balanceWeOwe: string; balanceCredit: string; balanceSettled: string;
   signature: string;
   kinds: Record<string, string>;
+  methods: Record<string, string>; // payment methods in sentence case (receipts print them in capitals)
 }
 
 const en: StatementLabels = {
@@ -32,6 +33,7 @@ const en: StatementLabels = {
     refund_payment: 'Refund paid out', on_account: 'On account', balance_collection: 'Balance collection',
     supplier_payment: 'Supplier payment', manual_edit: 'Manual edit', import: 'Import',
   },
+  methods: { cash: 'Cash', card: 'Card', credit: 'On account', store_credit: 'From balance' },
 };
 
 const ar: StatementLabels = {
@@ -50,6 +52,7 @@ const ar: StatementLabels = {
     refund_payment: 'رد مبلغ مرتجع', on_account: 'على الحساب', balance_collection: 'تحصيل رصيد',
     supplier_payment: 'دفعة للمورد', manual_edit: 'تعديل يدوي', import: 'استيراد',
   },
+  methods: { cash: 'نقداً', card: 'بطاقة', credit: 'على الحساب', store_credit: 'من الرصيد' },
 };
 
 const fr: StatementLabels = {
@@ -68,6 +71,7 @@ const fr: StatementLabels = {
     refund_payment: 'Remboursement versé', on_account: 'Sur compte', balance_collection: 'Encaissement de solde',
     supplier_payment: 'Paiement fournisseur', manual_edit: 'Modification manuelle', import: 'Import',
   },
+  methods: { cash: 'Espèces', card: 'Carte', credit: 'Sur compte', store_credit: 'Depuis le solde' },
 };
 
 export function statementLabels(lang?: string | null): StatementLabels {
