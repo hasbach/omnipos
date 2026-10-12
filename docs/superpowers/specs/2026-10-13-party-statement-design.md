@@ -120,8 +120,8 @@ customer/supplier picker and still opens from the Aging report).
 
 Controls:
 - Mode: `Unpaid orders` | `Account activity` — defaults to Unpaid orders when the party owes, else Activity.
-- From / To (activity only), default first day of current month → today; quick ranges: This month,
-  Last 3 months, This year, All.
+- From / To (activity only), default first day of current month → today; quick ranges from the existing
+  DateRangePicker presets (Today … This year, Custom) plus an "All" button.
 - Format: `A4` | `Receipt` — switches the on-screen preview.
 - Buttons: **Print**, **Save PDF**, **Export Excel** (activity mode).
 
@@ -139,8 +139,8 @@ Print flow:
 Electron: add `print:html` and `print:pdf` IPC handlers in `electron-main.js` and expose them in
 `electron-preload.cjs` alongside `printSilent`.
 
-The HTML statement embeds the app's bundled fonts (Inter + IBM Plex Sans Arabic) so the off-screen print
-window shapes Arabic correctly.
+The HTML statement is rendered on the server and uses system fonts ("Segoe UI", Tahoma, Arial); Chromium
+shapes Arabic, and the off-screen print window cannot load the app's bundled web fonts.
 
 ## 4. Testing
 
