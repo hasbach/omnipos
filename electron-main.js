@@ -254,6 +254,59 @@ function launchMain(config) {
     });
   });
 
+  // Back-office statement printing: render the HTML off-screen (from a temp file — data: URLs get too
+  // long for big statements), then show the system print dialog (user picks the A4 / receipt printer)
+  // or save an A4 PDF.
+  const renderHtmlOffscreen = async (html) => {
+    const file = path.join(app.getPath('temp'), `omnipos-print-${crypto.randomUUID()}.html`);
+    fs.writeFileSync(file, html, 'utf8');
+    const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+    try {
+      await win.loadFile(file);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+    return win;
+  };
+
+  ipcMain.removeHandler('print:html');
+  ipcMain.handle('print:html', async (_event, { html }) => {
+    let win;
+    try {
+      win = await renderHtmlOffscreen(html);
+      return await new Promise((resolve) => {
+        win.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
+          resolve({ success, error: success ? null : (failureReason || 'cancelled') });
+        });
+      });
+    } catch (e) {
+      return { success: false, error: e?.message || String(e) };
+    } finally {
+      if (win && !win.isDestroyed()) win.destroy();
+    }
+  });
+
+  ipcMain.removeHandler('print:pdf');
+  ipcMain.handle('print:pdf', async (event, { html, fileName }) => {
+    let win;
+    try {
+      const safeName = String(fileName || 'statement.pdf').replace(/[\/:*?"<>|]/g, '_');
+      const { canceled, filePath } = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+        defaultPath: path.join(app.getPath('documents'), safeName),
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { success: false, error: 'cancelled' };
+      win = await renderHtmlOffscreen(html);
+      const pdf = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, preferCSSPageSize: true });
+      fs.writeFileSync(filePath, pdf);
+      return { success: true, error: null, path: filePath };
+    } catch (e) {
+      return { success: false, error: e?.message || String(e) };
+    } finally {
+      if (win && !win.isDestroyed()) win.destroy();
+    }
+  });
+
   if (config.mode === 'host') {
     // HOST MODE: start local server, then load it
     startLocalServer(config, () => {

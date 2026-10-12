@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // configured (or direct printing to one failed) — see server/printing/transport.ts for the
   // normal, already-silent path via network/USB.
   printSilent: (html) => ipcRenderer.invoke('print:silent-html', { html }),
+  // Back-office statements: system print dialog, and Save as PDF (A4) — see electron-main.js.
+  printHtml: (html) => ipcRenderer.invoke('print:html', { html }),
+  savePdf: (html, fileName) => ipcRenderer.invoke('print:pdf', { html, fileName }),
 
   // Store connections (second window for another store). Main only honours these from this
   // register's own pages; every call resolves to { ok, ... } and never rejects.
