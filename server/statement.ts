@@ -281,3 +281,82 @@ export function loadStatementItems(txId: number, archived: boolean): StatementIt
     };
   });
 }
+
+export interface OpenOrder {
+  id: number;
+  reference: string;   // "MAIN-0042" or "#42"
+  date: string;
+  date_label: string;
+  type: 'sale' | 'purchase';
+  items: StatementItem[];
+  discount: { type: string; value: number } | null;
+  total: number;
+  paid: number;        // total − remaining (at-sale payments + the FIFO share of later payments)
+  remaining: number;
+  status: 'unpaid' | 'partial';
+}
+
+export interface OpenStatement {
+  previous_balance: number; // debt not tied to a listed order (opening, imports, manual edits)
+  orders: OpenOrder[];      // oldest first
+  total_due: number;        // = previous_balance + Σ remaining = −balance
+  credit: number;           // > 0 when the balance is in the party's favour
+}
+
+function receiptRef(tx: any): string {
+  return tx.terminal_id && tx.terminal_sequence ? `${tx.terminal_id}-${String(tx.terminal_sequence).padStart(4, '0')}` : `#${tx.id}`;
+}
+
+// "Unpaid orders": payments are applied to the OLDEST debts first, so the amount still owed is made of
+// the NEWEST debts. Walk the debts newest -> oldest until they add up to what is owed; the debt where
+// the sum crosses the balance is partially paid, older ones are fully paid. The total equals the
+// balance by construction (any gap the history can't explain goes to previous_balance).
+export function buildOpenStatement(tenantId: number, stakeholderId: number | string): OpenStatement | null {
+  const st = db.prepare("SELECT balance FROM stakeholders WHERE id = ? AND tenant_id = ?").get(stakeholderId, tenantId) as any;
+  if (!st) return null;
+  const balance = round2(st.balance || 0);
+  const due = -balance;
+  if (due <= 0.005) return { previous_balance: 0, orders: [], total_due: 0, credit: balance > 0.005 ? balance : 0 };
+
+  // One slot per transaction (its rows summed) or per non-transaction row, in ledger order.
+  type Slot = { tx_id?: number; archived?: boolean; type: string; date: string; effect: number };
+  const slots: Slot[] = [];
+  const byTx = new Map<number, Slot>();
+  for (const r of buildStatement(tenantId, stakeholderId)) {
+    if (r.tx_id == null) { slots.push({ type: r.type, date: r.date, effect: r.effect }); continue; }
+    let s = byTx.get(r.tx_id);
+    if (!s) { s = { tx_id: r.tx_id, archived: !!r.archived, type: r.type, date: r.date, effect: 0 }; byTx.set(r.tx_id, s); slots.push(s); }
+    s.effect += r.effect;
+  }
+  const debts = slots.filter((s) => s.effect < -0.005 && (s.tx_id == null || s.type === 'sale' || s.type === 'purchase'));
+
+  let left = round2(due);
+  const taken: { slot: Slot; remaining: number }[] = [];
+  for (let i = debts.length - 1; i >= 0 && left > 0.005; i--) {
+    const take = Math.min(round2(-debts[i].effect), left);
+    taken.unshift({ slot: debts[i], remaining: round2(take) });
+    left = round2(left - take);
+  }
+
+  let previous = left > 0.005 ? left : 0;
+  const orders: OpenOrder[] = [];
+  for (const { slot, remaining } of taken) {
+    if (slot.tx_id == null) { previous = round2(previous + remaining); continue; }
+    const tx = db.prepare(`SELECT * FROM ${slot.archived ? 'archived_transactions' : 'transactions'} WHERE id = ?`).get(slot.tx_id) as any || { id: slot.tx_id, total_amount: remaining };
+    const total = round2(tx.total_amount || 0);
+    orders.push({
+      id: slot.tx_id,
+      reference: receiptRef(tx),
+      date: slot.date,
+      date_label: localStampLabel(slot.date),
+      type: slot.type as 'sale' | 'purchase',
+      items: loadStatementItems(slot.tx_id, !!slot.archived),
+      discount: tx.discount_type && tx.discount_value > 0 ? { type: tx.discount_type, value: tx.discount_value } : null,
+      total,
+      paid: round2(total - remaining),
+      remaining,
+      status: remaining < total - 0.005 ? 'partial' : 'unpaid',
+    });
+  }
+  return { previous_balance: previous, orders, total_due: round2(due), credit: 0 };
+}
