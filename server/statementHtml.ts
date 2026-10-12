@@ -9,7 +9,7 @@ const num = (s: string) => `<span class="n" dir="ltr">${esc(s)}</span>`;
 
 function css(receipt: boolean): string {
   return `
-@page { ${receipt ? 'size: 80mm auto; margin: 0;' : 'size: A4; margin: 12mm;'} }
+@page { ${receipt ? 'size: 80mm 297mm; margin: 0;' : 'size: A4; margin: 12mm;'} }
 * { box-sizing: border-box; }
 html, body { background: #fff; color: #000; }
 body { font-family: "Segoe UI", Tahoma, Arial, sans-serif; margin: 0; font-size: 12px; line-height: 1.35; }

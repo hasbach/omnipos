@@ -70,6 +70,8 @@ test("HTML: receipt format and escaping", async () => {
   const r = await app.api("GET", `/api/reports/statement/${name}/html?mode=open&format=receipt`, { tenantId });
   const html = String(r.body);
   assert.ok(html.includes('class="receipt"'));
+  assert.ok(html.includes('size: 80mm 297mm'), 'valid @page size for the receipt layout');
+  assert.ok(!html.includes('80mm auto'));
   assert.ok(html.includes("&lt;b&gt;X&lt;/b&gt;"));
   assert.ok(!html.includes("<b>X</b>"));
 });

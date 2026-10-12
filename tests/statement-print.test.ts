@@ -90,3 +90,20 @@ test("French activity statement stays latin1-safe: no em dash / curly apostrophe
   for (const bad of [0x14, 0x19, 0x13]) assert.ok(!text.includes(String.fromCharCode(bad)), `control byte 0x${bad.toString(16)}`);
   assert.ok(text.includes("Solde d'ouverture"));
 });
+
+test("latinSafe: control bytes and line breaks never reach the printer; look-alikes mapped; Arabic kept", async () => {
+  const { latinSafe } = await import("../server/printing/statement.js");
+  assert.equal(latinSafe("a\nb\r\nc"), "a b c");
+  assert.equal(latinSafe("a\tb"), "a b");
+  assert.equal(latinSafe("x\x1b@y\x1dVz"), "x?@y?Vz");
+  assert.equal(latinSafe("\x00\x7f\x9b"), "???");
+  assert.equal(latinSafe("a \u2014 b"), "a - b");
+  assert.equal(latinSafe("l\u2019eau"), "l'eau");
+  assert.equal(latinSafe("caf\u00e9"), "caf\u00e9");
+  assert.equal(latinSafe("\u4e2d"), "?");
+  assert.equal(latinSafe("a   b"), "a   b", "padding spaces are kept for column layout");
+  const ar = "\u0645\u062d\u0645\u062f \u0627\u0644\u062d\u0633\u0646";
+  assert.equal(latinSafe(ar), ar);
+  assert.equal(latinSafe(ar.replace(" ", "\n")), ar);
+  assert.equal(latinSafe(ar + "\x1b"), ar + "?");
+});
