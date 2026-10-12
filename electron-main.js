@@ -259,10 +259,14 @@ function launchMain(config) {
   // or save an A4 PDF.
   const renderHtmlOffscreen = async (html) => {
     const file = path.join(app.getPath('temp'), `omnipos-print-${crypto.randomUUID()}.html`);
-    fs.writeFileSync(file, html, 'utf8');
-    const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+    let win;
     try {
+      fs.writeFileSync(file, html, 'utf8');
+      win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
       await win.loadFile(file);
+    } catch (e) {
+      if (win && !win.isDestroyed()) win.destroy();
+      throw e;
     } finally {
       fs.rmSync(file, { force: true });
     }
@@ -270,13 +274,16 @@ function launchMain(config) {
   };
 
   ipcMain.removeHandler('print:html');
-  ipcMain.handle('print:html', async (_event, { html }) => {
+  ipcMain.handle('print:html', async (_event, payload) => {
     let win;
     try {
+      const { html } = payload || {};
+      if (typeof html !== 'string') return { success: false, error: 'No content to print' };
       win = await renderHtmlOffscreen(html);
       return await new Promise((resolve) => {
         win.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
-          resolve({ success, error: success ? null : (failureReason || 'cancelled') });
+          const cancelled = !success && (!failureReason || /cancel/i.test(failureReason));
+          resolve({ success, error: success ? null : (cancelled ? 'cancelled' : failureReason) });
         });
       });
     } catch (e) {
@@ -287,10 +294,12 @@ function launchMain(config) {
   });
 
   ipcMain.removeHandler('print:pdf');
-  ipcMain.handle('print:pdf', async (event, { html, fileName }) => {
+  ipcMain.handle('print:pdf', async (event, payload) => {
     let win;
     try {
-      const safeName = String(fileName || 'statement.pdf').replace(/[\/:*?"<>|]/g, '_');
+      const { html, fileName } = payload || {};
+      if (typeof html !== 'string') return { success: false, error: 'No content to print' };
+      const safeName = String(fileName || 'statement.pdf').replace(/[\\/:*?"<>|]/g, '_');
       const { canceled, filePath } = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
         defaultPath: path.join(app.getPath('documents'), safeName),
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
