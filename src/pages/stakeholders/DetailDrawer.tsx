@@ -1,15 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Drawer, Tabs, Badge, Button, DataTable, Skeleton } from '../../components/ui';
 import type { DataTableColumn } from '../../components/ui';
-import { Mail, Phone, MapPin, CreditCard, Layers, Printer, FileDown, Edit2, HandCoins } from 'lucide-react';
+import { Mail, Phone, MapPin, CreditCard, Layers, Edit2, HandCoins } from 'lucide-react';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
-import { formatDate, formatDateTime, formatMoney, formatBalance, transactionTypeLabel, partyDisplayName } from '../../lib/format';
+import { formatDate, formatMoney, transactionTypeLabel, partyDisplayName } from '../../lib/format';
 import { useSettings } from '../../lib/useSettings';
 import type { Currency, Stakeholder } from '../../types';
-import { originalAmountLabel, statementKindLabel, statementDescription, balanceText, balanceColorClass } from '../reports/statementUtils';
 import { effectiveLocalCurrency, formatRate } from '../../lib/orderTotals';
 import { BalanceLogTable } from './BalanceLogTable';
+import { StatementView } from '../statement/StatementView';
 
 export interface DetailDrawerProps {
   open: boolean;
@@ -21,21 +21,6 @@ export interface DetailDrawerProps {
   /** Hide the Edit / Collect-Pay actions the signed-in role may not use (default: shown). */
   canEdit?: boolean;
   canPay?: boolean;
-}
-
-interface StatementRow {
-  date: string;
-  type: string;
-  reference: string;
-  description: string;
-  debit: number;
-  credit: number;
-  currency?: string;
-  amount_original?: number;
-  exchange_rate?: number;
-  balance: number;
-  user?: string;
-  _idx?: number;
 }
 
 interface InvoiceRow {
@@ -70,7 +55,6 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
   const { t, lang } = useI18n();
   const { priceLevelsEnabled } = useSettings();
   const [tab, setTab] = useState('summary');
-  const [statement, setStatement] = useState<StatementRow[] | null>(null);
   const [invoices, setInvoices] = useState<InvoiceRow[] | null>(null);
   const [aging, setAging] = useState<AgingRow | null>(null);
   const [loading, setLoading] = useState(false);
@@ -81,21 +65,12 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
   useEffect(() => {
     if (!open || !stakeholder) return;
     setTab('summary');
-    setStatement(null);
     setInvoices(null);
     setAging(null);
   }, [open, stakeholder?.id]);
 
   useEffect(() => {
     if (!open || !stakeholder) return;
-    if (tab === 'statement' && statement === null) {
-      setLoading(true);
-      api
-        .get<StatementRow[]>(`/api/reports/customer-statement/${stakeholder.id}`)
-        .then((rows) => setStatement(rows.map((r, i) => ({ ...r, _idx: i }))))
-        .catch(() => setStatement([]))
-        .finally(() => setLoading(false));
-    }
     if (tab === 'invoices' && invoices === null) {
       setLoading(true);
       api
@@ -116,30 +91,6 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
 
   const overLimit = !!stakeholder.credit_limit && stakeholder.credit_limit > 0 && -stakeholder.balance > stakeholder.credit_limit;
 
-  const moneyCell = (r: StatementRow, amount: number) => {
-    if (!amount) return '—';
-    const orig = originalAmountLabel(r, currencies);
-    return orig ? (
-      <div>
-        <div>{formatMoney(amount, usd)}</div>
-        <div className="text-[11px] text-text-3">{orig}</div>
-      </div>
-    ) : formatMoney(amount, usd);
-  };
-
-  const statementColumns: DataTableColumn<StatementRow>[] = [
-    { key: 'date', header: t('stk_statement_col_date'), render: (r) => formatDateTime(r.date, lang), sortable: true },
-    { key: 'reference', header: t('stk_statement_col_ref') },
-    { key: 'type', header: t('rep_col_type', 'Type'), render: (r) => statementKindLabel(r.type, t) },
-    { key: 'description', header: t('stk_statement_col_desc'), render: (r) => statementDescription(r, t) },
-    { key: 'debit', header: t('stk_statement_col_debit'), align: 'end', render: (r) => moneyCell(r, r.debit) },
-    { key: 'credit', header: t('stk_statement_col_credit'), align: 'end', render: (r) => moneyCell(r, r.credit) },
-    { key: 'balance', header: t('stk_statement_col_balance'), align: 'end', render: (r) => {
-        const b = formatBalance(r.balance, usd, t);
-        return <span className={balanceColorClass(r.balance)}>{b.amount} <span className="text-[11px] opacity-80">{b.label}</span></span>;
-      } },
-  ];
-
   const invoiceColumns: DataTableColumn<InvoiceRow>[] = [
     { key: 'id', header: t('stk_invoices_col_id'), sortable: true, render: (r) => `#${r.id}` },
     { key: 'created_at', header: t('stk_invoices_col_date'), sortable: true, render: (r) => formatDate(r.created_at, lang) },
@@ -157,30 +108,6 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
       },
     },
   ];
-
-  const handlePrintStatement = () => window.print();
-
-  const handleExportStatement = () => {
-    if (!statement) return;
-    import('jspdf').then(({ jsPDF }) => {
-      import('jspdf-autotable').then(({ autoTable }) => {
-        const doc = new jsPDF();
-        doc.text(`${partyDisplayName(stakeholder.name, t)} — ${t('stk_detail_tab_statement')}`, 14, 14);
-        autoTable(doc, {
-          startY: 20,
-          head: [[t('stk_statement_col_date'), t('stk_statement_col_desc'), t('stk_statement_col_debit'), t('stk_statement_col_credit'), t('stk_statement_col_balance')]],
-          body: statement.map((r) => [
-            formatDate(r.date, lang),
-            (() => { const d = statementDescription(r, t); const orig = originalAmountLabel(r, currencies); return orig ? `${d} — ${orig}` : d; })(),
-            r.debit ? formatMoney(r.debit, usd, { hideCurrency: false }) : '',
-            r.credit ? formatMoney(r.credit, usd) : '',
-            balanceText(r.balance, t),
-          ]),
-        });
-        doc.save(`statement-${stakeholder.name}.pdf`);
-      });
-    });
-  };
 
   return (
     <Drawer
@@ -310,39 +237,7 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
           </div>
         )}
 
-        {tab === 'statement' && (
-          <div className="flex flex-col gap-3">
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={handlePrintStatement}>
-                <Printer size={14} /> {t('stk_statement_print')}
-              </Button>
-              <Button variant="secondary" size="sm" onClick={handleExportStatement} disabled={!statement?.length}>
-                <FileDown size={14} /> {t('stk_statement_export')}
-              </Button>
-            </div>
-            {loading || statement === null ? (
-              <Skeleton className="h-64 w-full" />
-            ) : (
-              <DataTable
-                columns={statementColumns}
-                data={statement}
-                rowKey={(r) => r._idx ?? `${r.date}-${r.reference}`}
-                emptyTitle={t('stk_statement_empty')}
-                defaultPageSize={25}
-              />
-            )}
-            {statement && statement.length > 0 && (() => {
-              const closing = statement[statement.length - 1].balance;
-              const b = formatBalance(closing, usd, t);
-              return (
-                <p className="text-sm font-semibold text-text">
-                  {t('rep_stmt_closing', 'Closing balance')}:{' '}
-                  <span className={balanceColorClass(closing)}>{b.amount} {b.label}</span>
-                </p>
-              );
-            })()}
-          </div>
-        )}
+        {tab === 'statement' && <StatementView stakeholder={stakeholder} />}
 
         {tab === 'balance_log' && <BalanceLogTable stakeholderId={stakeholder.id} />}
 
