@@ -36,6 +36,9 @@ interface Ev {
   currency?: string;
   amount_original?: number;
   exchange_rate?: number;
+  method?: string;    // payment rows: the payment method
+  tx_id?: number;     // every row that comes from a transaction
+  archived?: boolean; // that transaction lives in the archived_* tables (settled)
   user: string | null;
 }
 
@@ -89,7 +92,7 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
         events.push({
           date, seq: seq++, type: 'on_account', reference: `Pay for #${t.id}`,
           description: `${p.method === 'store_credit' ? 'Paid from balance' : 'On account (credit)'} — ${usd.toFixed(2)} USD`,
-          effect: 0, ...orig, user: t.user_name || null,
+          effect: 0, ...orig, method: p.method, user: t.user_name || null,
         });
         continue;
       }
@@ -97,17 +100,17 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
         events.push({
           date, seq: seq++, type: isSupplier ? 'supplier_payment' : 'balance_collection', reference: `#${t.id}`,
           description: `${isSupplier ? 'Supplier payment' : 'Balance collection'} (${p.method})`,
-          effect: usd, ...orig, user: t.user_name || null,
+          effect: usd, ...orig, method: p.method, user: t.user_name || null,
         });
       } else if (t.type === 'refund') {
         events.push({
           date, seq: seq++, type: 'refund_payment', reference: `Pay for #${t.id}`,
-          description: `Refund paid out (${p.method})`, effect: -usd, ...orig, user: t.user_name || null,
+          description: `Refund paid out (${p.method})`, effect: -usd, ...orig, method: p.method, user: t.user_name || null,
         });
       } else {
         events.push({
           date, seq: seq++, type: 'payment', reference: `Pay for #${t.id}`,
-          description: `Payment (${p.method})`, effect: usd, ...orig, user: t.user_name || null,
+          description: `Payment (${p.method})`, effect: usd, ...orig, method: p.method, user: t.user_name || null,
         });
       }
     }
@@ -122,6 +125,7 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
       const last = [...rows].reverse().find((e) => PAYMENT_EVENT_TYPES.has(e.type));
       if (last) last.effect -= residue;
     }
+    for (const e of events.slice(txStart)) { e.tx_id = t.id; e.archived = !!t.archived; }
   }
 
   // 2. Non-transaction adjustments from the balance log
@@ -217,6 +221,63 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
       row.amount_original = e.amount_original;
       row.exchange_rate = e.exchange_rate;
     }
+    if (e.tx_id !== undefined) { row.tx_id = e.tx_id; row.archived = e.archived ? 1 : 0; }
+    if (e.method !== undefined) row.method = e.method;
     return row;
+  });
+}
+
+export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const pad = (n: number) => String(n).padStart(2, '0');
+
+// Stored stamps are UTC: SQLite 'YYYY-MM-DD HH:MM:SS' (no zone) or cloud ISO with Z / +00:00.
+function parseStamp(stamp: string): Date | null {
+  const s = String(stamp || '').trim().replace(' ', 'T');
+  if (!s) return null;
+  const d = new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(s) ? s : `${s}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Local calendar day (YYYY-MM-DD) of a stored UTC stamp. */
+export function localDateOf(stamp: string): string {
+  const d = parseStamp(stamp);
+  return d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : String(stamp || '').slice(0, 10);
+}
+
+/** "DD/MM/YYYY HH:mm" in local time, for printed statements. */
+export function localStampLabel(stamp: string): string {
+  const d = parseStamp(stamp);
+  return d ? `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}` : String(stamp || '');
+}
+
+export interface StatementItem {
+  name: string;
+  unit: string | null;     // unit of measure name ("Carton") when sold in a unit
+  factor: number | null;   // pieces per unit
+  qty: number;             // in the unit when there is one, else pieces
+  unit_price: number;      // per unit (per piece without a unit)
+  line_total: number;      // before line discount, same as the sale receipt
+  discount: { type: string; value: number } | null;
+}
+
+/** Product lines of one transaction (live or archived), shaped for printing. */
+export function loadStatementItems(txId: number, archived: boolean): StatementItem[] {
+  const table = archived ? 'archived_transaction_items' : 'transaction_items';
+  const rows = db.prepare(`
+    SELECT ti.*, COALESCE(p.name, 'Item') AS name FROM ${table} ti LEFT JOIN products p ON ti.product_id = p.id
+    WHERE ti.transaction_id = ? ORDER BY ti.id ASC
+  `).all(txId) as any[];
+  return rows.map((r) => {
+    const factor = r.uom_id && r.uom_name ? Number(r.uom_factor) || 1 : null;
+    const qty = factor ? (r.uom_qty ?? r.quantity / factor) : r.quantity;
+    return {
+      name: r.name,
+      unit: factor ? r.uom_name : null,
+      factor,
+      qty: Math.round(qty * 1000) / 1000,
+      unit_price: round2(factor ? r.unit_price * factor : r.unit_price),
+      line_total: round2(r.unit_price * r.quantity),
+      discount: r.discount_type && r.discount_value > 0 ? { type: r.discount_type, value: r.discount_value } : null,
+    };
   });
 }
