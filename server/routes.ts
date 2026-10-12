@@ -19,6 +19,7 @@ import {
 } from "./session.js";
 import { EscPos } from "./printing/escpos.js";
 import { localCurrencyFor, effectiveLocalRate, isLocalCode, parsePartyRate } from "./localCurrency.js";
+import { buildStatementBuffer } from "./printing/statement.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
@@ -3019,6 +3020,25 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     } catch (err: any) {
       console.error('Print receipt error:', err.message);
       res.status(500).json({ error: err.message || 'Failed to print receipt' });
+    }
+  });
+
+  // Customer / supplier statement on the receipt printer (back office "Print -> Receipt").
+  app.post("/api/print/statement", authenticate, async (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const { stakeholderId, printerId } = req.body || {};
+    try {
+      const printer = resolveReceiptPrinter(tenantId, printerId);
+      if (!printer) return res.status(404).json({ error: "No enabled receipt printer configured" });
+      const opts = parseStatementOpts(req.body);
+      if (!opts) return res.status(400).json({ error: "from and to (YYYY-MM-DD, from <= to) are required for activity" });
+      const doc = buildStatementDocument(tenantId, stakeholderId, opts, statementBusiness(tenantId));
+      if (!doc) return res.status(404).json({ error: "Customer/supplier not found" });
+      await sendToPrinter(printer, buildStatementBuffer({ doc, paperWidth: printer.paper_width, arabic: printerArabicMode(printer) }));
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Print statement error:', err.message);
+      res.status(500).json({ error: err.message || 'Failed to print statement' });
     }
   });
 
