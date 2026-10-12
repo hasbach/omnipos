@@ -25,10 +25,10 @@ before(async () => {
 });
 after(async () => { fakePrinter.close(); await app.close(); });
 
-const docFor = async (mode: "open" | "activity") => {
+const docFor = async (mode: "open" | "activity", language: "en" | "fr" = "en") => {
   const { buildStatementDocument } = await import("../server/statementDocument.js");
   return buildStatementDocument(tenantId, cust, mode === "open" ? { mode } : { mode, from: "2000-01-01", to: "2100-01-01" },
-    { name: "Acme", address: "", phone: "", language: "en" })!;
+    { name: "Acme", address: "", phone: "", language })!;
 };
 
 test("ESC/POS open statement: Latin text plain, Arabic name as an image, total printed", async () => {
@@ -66,8 +66,27 @@ test("POST /api/print/statement: 404 without a printer, then sends bytes to the 
   const bad = await app.api("POST", "/api/print/statement", { tenantId, body: { stakeholderId: cust, mode: "activity" } });
   assert.equal(bad.status, 400);
 
+  received = [];
   const ok = await app.api("POST", "/api/print/statement", { tenantId, body: { stakeholderId: cust, mode: "open" } });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   await new Promise((r) => setTimeout(r, 100));
   assert.ok(Buffer.concat(received).toString("latin1").includes("Paper Roll"));
+});
+
+// The receipt's text bytes with raster image data cut out (bitmap bytes can look like control codes).
+function textOnly(buf: Buffer) {
+  const RASTER_HDR = Buffer.from([0x1d, 0x76, 0x30, 0x00]);
+  let out = "", from = 0;
+  for (let i = buf.indexOf(RASTER_HDR); i !== -1; i = buf.indexOf(RASTER_HDR, from)) {
+    out += buf.subarray(from, i).toString("latin1");
+    from = i + 8 + (buf[i + 4] | (buf[i + 5] << 8)) * (buf[i + 6] | (buf[i + 7] << 8));
+  }
+  return out + buf.subarray(from).toString("latin1");
+}
+
+test("French activity statement stays latin1-safe: no em dash / curly apostrophe control bytes", async () => {
+  const { buildStatementBuffer } = await import("../server/printing/statement.js");
+  const text = textOnly(buildStatementBuffer({ doc: await docFor("activity", "fr"), paperWidth: 80 }));
+  for (const bad of [0x14, 0x19, 0x13]) assert.ok(!text.includes(String.fromCharCode(bad)), `control byte 0x${bad.toString(16)}`);
+  assert.ok(text.includes("Solde d'ouverture"));
 });
