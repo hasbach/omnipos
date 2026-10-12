@@ -90,3 +90,22 @@ test("HTML: activity A4 keeps product line totals in the description cell, not u
   assert.equal(cells.indexOf(filled[0]), 2, "the description column");
   assert.ok(filled[0].includes("مياه") && filled[0].includes("50.00"), filled[0]);
 });
+
+test("local-currency equivalent uses the party's own rate", async () => {
+  setLanguage("en");
+  if (!app.db.prepare("SELECT 1 FROM currencies WHERE tenant_id = ? AND code = 'LBP'").get(tenantId)) {
+    app.db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, 'LBP', 'LL', 89500, 0)").run(tenantId);
+  }
+  app.db.prepare("UPDATE stakeholders SET local_rate = 100000 WHERE id = ?").run(cust);
+  try {
+    const { buildStatementDocument } = await import("../server/statementDocument.js");
+    const doc = buildStatementDocument(tenantId, cust, { mode: "open" }, { name: "Doc Co", address: "", phone: "", language: "en" })!;
+    assert.equal(doc.local_currency?.rate, 100000);
+    assert.equal(doc.local_currency?.code, "LBP");
+    assert.deepEqual(Object.keys(doc.local_currency!).sort(), ["code", "rate", "symbol"]);
+    const r = await app.api("GET", `/api/reports/statement/${cust}/html?mode=open&format=a4`, { tenantId });
+    assert.ok(String(r.body).includes("4,000,000 LL"), "total 40 x party rate 100000");
+  } finally {
+    app.db.prepare("UPDATE stakeholders SET local_rate = NULL WHERE id = ?").run(cust);
+  }
+});

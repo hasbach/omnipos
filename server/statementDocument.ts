@@ -3,7 +3,7 @@
 // POST /api/print/statement so every output prints exactly the same content.
 import { db } from './db.js';
 import { buildOpenStatement, buildActivityStatement, localStampLabel, type OpenStatement, type ActivityStatement, type ActivityRow } from './statement.js';
-import { localCurrencyFor } from './localCurrency.js';
+import { effectiveLocalRate } from './localCurrency.js';
 import { statementLabels, type StatementLabels, type StatementLanguage } from './printing/statementLabels.js';
 import { paymentMethodLabel } from './printing/receiptLabels.js';
 
@@ -31,6 +31,12 @@ export function parseStatementOpts(src: any): StatementOpts | null {
   return { mode: 'activity', from, to };
 }
 
+// The party's own local rate when it has one (walk-in and parties without one use the global rate).
+function localCurrencyOf(tenantId: number, stakeholderId: number): StatementDocument['local_currency'] {
+  const cur = effectiveLocalRate(tenantId, stakeholderId);
+  return cur ? { code: cur.code, symbol: cur.symbol, rate: cur.rate } : null;
+}
+
 const dmy = (day: string) => `${day.slice(8, 10)}/${day.slice(5, 7)}/${day.slice(0, 4)}`;
 
 export function buildStatementDocument(tenantId: number, stakeholderId: number | string, opts: StatementOpts, business: StatementBusiness): StatementDocument | null {
@@ -45,7 +51,7 @@ export function buildStatementDocument(tenantId: number, stakeholderId: number |
     },
     business, labels,
     printed_at: localStampLabel(new Date().toISOString()),
-    local_currency: localCurrencyFor(tenantId),
+    local_currency: localCurrencyOf(tenantId, st.id),
   };
   if (opts.mode === 'open') {
     doc.open = buildOpenStatement(tenantId, stakeholderId) ?? undefined;
