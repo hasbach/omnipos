@@ -152,3 +152,15 @@ test("settled (archived) orders still appear while unpaid", async () => {
 test("unknown party returns null", () => {
   assert.equal(stmt.buildOpenStatement(tenantId, 999999), null);
 });
+
+test("LBP-paid orders leave no fake cent residue in the previous balance", async () => {
+  // 1,000,500 LBP @ 89500 = $11.17877 paid, so each order owes $13.82123 (rounds DOWN to 13.82);
+  // six of them owe $82.927 -> 82.93, but 6 x 13.82 = 82.92: the old cent-rounded allocation left $0.01.
+  const c = await party("LBP Residue Customer");
+  for (let i = 0; i < 6; i++) {
+    await sale(c, 1, [{ amount: 1000500, method: "cash", currency: "LBP", exchange_rate: 89500 }]);
+  }
+  const o = stmt.buildOpenStatement(tenantId, c)!;
+  totalsMatch(o, c);
+  assert.equal(o.previous_balance, 0, "no opening / import / manual-edit debt exists");
+});

@@ -342,15 +342,23 @@ export function buildOpenStatement(tenantId: number, stakeholderId: number | str
 
   const debts = slots.filter((s) => s.effect < -0.005 && (s.tx_id == null || s.type === 'sale' || s.type === 'purchase'));
 
-  let left = round2(due);
+  // Allocate with UNROUNDED amounts: rounding each debt to cents first can leave a few cents of
+  // shortfall (e.g. many LBP-paid orders) that would show up as a fake "previous balance".
+  let left = due;
   const taken: { slot: Slot; remaining: number }[] = [];
   for (let i = debts.length - 1; i >= 0 && left > 0.005; i--) {
-    const take = Math.min(round2(-debts[i].effect), left);
-    taken.unshift({ slot: debts[i], remaining: round2(take) });
-    left = round2(left - take);
+    const take = Math.min(-debts[i].effect, left);
+    taken.unshift({ slot: debts[i], remaining: take });
+    left -= take;
   }
 
-  let previous = left > 0.005 ? left : 0;
+  let previous = left > 0.005 ? round2(left) : 0;
+  for (const t of taken) t.remaining = round2(t.remaining);
+  // Put the cent rounding difference on the NEWEST taken item so previous + Σ remaining = round2(due).
+  if (taken.length) {
+    const diff = round2(round2(due) - (taken.reduce((s, t) => s + t.remaining, 0) + previous));
+    if (diff !== 0) { const newest = taken[taken.length - 1]; newest.remaining = round2(newest.remaining + diff); }
+  }
   const orders: OpenOrder[] = [];
   for (const { slot, remaining } of taken) {
     if (slot.tx_id == null) { previous = round2(previous + remaining); continue; }
