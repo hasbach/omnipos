@@ -124,3 +124,16 @@ test("activity: the synthetic reconciling line folds into the opening too", asyn
   const early = stmt.buildActivityStatement(tenantId, cust, "2000-01-01", "2000-01-02");
   near(early.opening, 0); near(early.closing, 0);
 });
+
+test("activity labels: on-account rows name the method once; a creation opening row reads 'Opening balance'", async () => {
+  const { buildStatementDocument } = await import("../server/statementDocument.js");
+  const cust = (await app.api("POST", "/api/stakeholders", { tenantId, body: { name: "Label Customer", type: "customer", balance: -20 } })).body.id;
+  const s = await post({ type: "sale", stakeholder_id: cust, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1,
+    payments: [{ amount: 25, method: "credit", currency: "USD", exchange_rate: 1 }] });
+  backdate(s, new Date(2020, 0, 10, 12, 0)); // before the party's creation, so the opening row is not the first ledger row
+  const doc = buildStatementDocument(tenantId, cust, { mode: "activity", from: "2000-01-01", to: "2100-01-01" }, { name: "X", address: "", phone: "", language: "en" })!;
+  const onAcc = doc.activity!.rows.find((r) => r.type === "on_account")!;
+  assert.equal(onAcc.label, "On account");
+  const open = doc.activity!.rows.find((r) => r.type === "opening")!;
+  assert.equal(open.label, "Opening balance");
+});

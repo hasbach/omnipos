@@ -419,6 +419,7 @@ export interface ActivityRow {
   amount_original?: number;
   tx_id?: number;
   items?: StatementItem[];  // invoice / purchase / refund rows only
+  reconciling?: boolean;    // the synthetic "Opening balance & earlier adjustments" line
 }
 
 export interface ActivityStatement {
@@ -467,6 +468,7 @@ export function buildActivityStatement(tenantId: number, stakeholderId: number |
       method: r.method ?? null, debit: r.debit, credit: r.credit, effect: r.effect, balance: r.balance,
     };
     if (r.currency !== undefined) { row.currency = r.currency; row.amount_original = r.amount_original; }
+    if (r.reconciling) row.reconciling = true;
     if (r.tx_id != null && INVOICE_TYPES.has(r.type)) {
       row.tx_id = r.tx_id;
       row.items = loadStatementItems(r.tx_id, !!r.archived);

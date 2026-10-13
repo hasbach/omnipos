@@ -23,11 +23,19 @@ export interface StatementDocument {
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
+/** A real calendar day in YYYY-MM-DD form (rejects 2026-13-45, 2026-02-30, ...). */
+function isCalendarDay(day: string): boolean {
+  if (!ISO_DAY.test(day)) return false;
+  const [y, m, d] = day.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
 /** mode/from/to from a query string or JSON body; null when activity mode lacks a valid range. */
 export function parseStatementOpts(src: any): StatementOpts | null {
   if (src?.mode !== 'activity') return { mode: 'open' };
   const from = String(src?.from ?? ''), to = String(src?.to ?? '');
-  if (!ISO_DAY.test(from) || !ISO_DAY.test(to) || from > to) return null;
+  if (!isCalendarDay(from) || !isCalendarDay(to) || from > to) return null;
   return { mode: 'activity', from, to };
 }
 
@@ -58,7 +66,7 @@ export function buildStatementDocument(tenantId: number, stakeholderId: number |
     return doc;
   }
   const symbols: Record<string, string> = Object.fromEntries(
-    (db.prepare("SELECT code, symbol FROM currencies WHERE tenant_id = ?").all(tenantId) as any[]).map((c) => [c.code, c.symbol || c.code]),
+    (db.prepare("SELECT code, symbol FROM currencies WHERE tenant_id = ? AND deleted_at IS NULL").all(tenantId) as any[]).map((c) => [c.code, c.symbol || c.code]),
   );
   const a = buildActivityStatement(tenantId, stakeholderId, opts.from!, opts.to!);
   doc.activity = {
@@ -67,9 +75,15 @@ export function buildStatementDocument(tenantId: number, stakeholderId: number |
     to_label: dmy(a.to),
     rows: a.rows.map((r) => {
       const kind = labels.kinds[r.type] ?? r.type;
+      const method = r.method ? labels.methods[r.method] ?? paymentMethodLabel(business.language, r.method) : null;
+      // On-account rows ARE the method ("From balance" / "On account"): name it once. A listed opening row is
+      // a balance-log opening (party creation); only the synthetic reconciling line keeps the long label.
+      const label = r.type === 'on_account' ? method ?? kind
+        : r.type === 'opening' && !r.reconciling ? labels.openingBalance
+        : method ? `${kind} (${method})` : kind;
       return {
         ...r,
-        label: r.method ? `${kind} (${labels.methods[r.method] ?? paymentMethodLabel(business.language, r.method)})` : kind,
+        label,
         original_label: r.currency && r.currency !== 'USD' && r.amount_original != null
           ? `${Math.round(r.amount_original).toLocaleString('en-US')} ${symbols[r.currency] || r.currency}` : null,
       };

@@ -16,8 +16,11 @@ export interface StatementViewProps {
 
 const RECEIPT_ROW_WARNING = 200;
 // POST /api/print/statement answers 404 both for "no receipt printer" and "unknown party"; only the
-// former falls back to printing the 80 mm HTML page through the system print dialog.
-const NO_RECEIPT_PRINTER = 'No enabled receipt printer configured';
+// former (stable code, not the English message) falls back to the 80 mm HTML page via the print dialog.
+const NO_RECEIPT_PRINTER = 'no_receipt_printer';
+const money2 = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const localDay = (d = new Date()) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
 async function fetchText(url: string): Promise<string> {
   const r = await fetch(url);
@@ -82,7 +85,7 @@ export function StatementView({ stakeholder }: StatementViewProps) {
       const body = { stakeholderId: stakeholder.id, mode, ...(mode === 'activity' ? { from: range.from, to: range.to } : {}) };
       const res = await fetch('/api/print/statement', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const err = res.ok ? null : await res.json().catch(() => null);
-      if (res.status === 404 && err?.error === NO_RECEIPT_PRINTER) {
+      if (res.status === 404 && err?.code === NO_RECEIPT_PRINTER) {
         // No ESC/POS receipt printer configured: print the 80 mm HTML layout through Windows.
         await printStatementHtml(html || (await fetchText(htmlUrl('receipt'))));
       } else if (!res.ok) {
@@ -100,6 +103,8 @@ export function StatementView({ stakeholder }: StatementViewProps) {
 
   // Activity mode only: the movements as a spreadsheet (same columns as the printed table).
   const handleExcel = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       const doc = await api.get<any>(`/api/reports/statement/${stakeholder.id}?${query('activity', range)}`);
       const rows = doc.activity.rows as any[];
@@ -108,9 +113,9 @@ export function StatementView({ stakeholder }: StatementViewProps) {
         { key: 'date', header: L.date, value: (r) => r.date_label },
         { key: 'ref', header: L.ref, value: (r) => r.reference },
         { key: 'desc', header: L.description, value: (r) => (r.original_label ? `${r.label} (${r.original_label})` : r.label) },
-        { key: 'debit', header: L.debit, value: (r) => r.debit || '', align: 'right' },
-        { key: 'credit', header: L.credit, value: (r) => r.credit || '', align: 'right' },
-        { key: 'balance', header: L.balance, value: (r) => r.balance, align: 'right' },
+        { key: 'debit', header: L.debit, value: (r) => (r.debit ? money2(r.debit) : ''), align: 'right' },
+        { key: 'credit', header: L.credit, value: (r) => (r.credit ? money2(r.credit) : ''), align: 'right' },
+        { key: 'balance', header: L.balance, value: (r) => money2(r.balance), align: 'right' },
       ], {
         fileName: `statement-${partyDisplayName(stakeholder.name, t)}-${range.from}-${range.to}`,
         title: `${L.title} — ${L.accountActivity}`,
@@ -119,13 +124,15 @@ export function StatementView({ stakeholder }: StatementViewProps) {
       });
     } catch (e: any) {
       toast.error(`${t('stm_load_failed', 'Could not load the statement')}: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
     }
   };
 
   const handlePdf = async () => {
     setBusy(true);
     try {
-      const day = new Date().toISOString().slice(0, 10);
+      const day = localDay();
       const saved = await saveStatementPdf(await a4Html(), `statement-${partyDisplayName(stakeholder.name, t)}-${day}.pdf`);
       if (saved) toast.success(`${t('stm_pdf_saved', 'PDF saved')}: ${saved}`);
     } catch (e: any) {

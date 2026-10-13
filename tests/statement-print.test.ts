@@ -59,6 +59,7 @@ test("ESC/POS activity statement prints opening and closing balances", async () 
 test("POST /api/print/statement: 404 without a printer, then sends bytes to the configured printer", async () => {
   const none = await app.api("POST", "/api/print/statement", { tenantId, body: { stakeholderId: cust, mode: "open" } });
   assert.equal(none.status, 404);
+  assert.equal(none.body.code, "no_receipt_printer");
 
   app.db.prepare(`INSERT INTO printers (tenant_id, name, type, connection, address, paper_width, is_default, enabled)
     VALUES (?, 'Counter', 'receipt', 'network', ?, 80, 1, 1)`).run(tenantId, `127.0.0.1:${(fakePrinter.address() as any).port}`);

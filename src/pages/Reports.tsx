@@ -111,7 +111,6 @@ export default function Reports() {
         {tab === 'custom-builder' && <CustomBuilderTab businessName={businessName} />}
         {tab === 'statement' && (
           <CustomerStatementTab
-            businessName={businessName}
             selectedId={statementStakeholderId}
             onSelectedIdChange={setStatementStakeholderId}
           />

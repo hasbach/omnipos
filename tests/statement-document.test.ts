@@ -47,6 +47,15 @@ test("JSON document: activity mode needs a valid range", async () => {
   assert.equal(pay.label, "Payment (Cash)");
 });
 
+test("JSON document: impossible calendar dates are rejected with 400", async () => {
+  for (const [from, to] of [["2026-13-45", "2026-12-31"], ["2026-02-01", "2026-02-30"], ["2026-00-10", "2026-01-10"], ["2025-02-29", "2025-03-01"]]) {
+    const r = await app.api("GET", `/api/reports/statement/${cust}?mode=activity&from=${from}&to=${to}`, { tenantId });
+    assert.equal(r.status, 400, `${from}..${to}`);
+  }
+  const leap = await app.api("GET", `/api/reports/statement/${cust}?mode=activity&from=2024-02-29&to=2024-03-01`, { tenantId });
+  assert.equal(leap.status, 200, "29 Feb in a leap year is valid");
+});
+
 test("unknown party is 404", async () => {
   const r = await app.api("GET", `/api/reports/statement/999999?mode=open`, { tenantId });
   assert.equal(r.status, 404);

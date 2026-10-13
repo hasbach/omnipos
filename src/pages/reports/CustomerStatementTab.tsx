@@ -8,7 +8,6 @@ import { BalanceLogTable } from '../stakeholders/BalanceLogTable';
 import { StatementView } from '../statement/StatementView';
 
 export interface CustomerStatementTabProps {
-  businessName: string;
   selectedId?: string;
   onSelectedIdChange?: (id: string) => void;
 }

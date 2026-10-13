@@ -3029,7 +3029,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     const { stakeholderId, printerId } = req.body || {};
     try {
       const printer = resolveReceiptPrinter(tenantId, printerId);
-      if (!printer) return res.status(404).json({ error: "No enabled receipt printer configured" });
+      if (!printer) return res.status(404).json({ error: "No enabled receipt printer configured", code: "no_receipt_printer" });
       const opts = parseStatementOpts(req.body);
       if (!opts) return res.status(400).json({ error: "from and to (YYYY-MM-DD, from <= to) are required for activity" });
       const doc = buildStatementDocument(tenantId, stakeholderId, opts, statementBusiness(tenantId));
