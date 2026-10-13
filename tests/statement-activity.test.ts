@@ -99,3 +99,28 @@ test("activity references use the receipt number, on the sale and its payments a
   app.db.prepare("UPDATE transactions SET terminal_id = 'MAIN', terminal_sequence = 7 WHERE id = ?").run(s);
   assert.deepEqual(refs(), ["MAIN-0007", "MAIN-0007"]);
 });
+
+test("activity: a creation opening balance on the first day folds into the opening, not a row", async () => {
+  const cust = (await app.api("POST", "/api/stakeholders", { tenantId, body: { name: "Created Owing", type: "customer", balance: -20 } })).body.id;
+  await post({ type: "sale", stakeholder_id: cust, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1, payments: [] });
+  const a = stmt.buildActivityStatement(tenantId, cust, "2000-01-01", "2100-01-01");
+  assert.equal(a.rows.filter((r) => r.type === "opening").length, 0, "no opening-type row");
+  near(a.opening, -20, "opening");
+  near(a.closing, -45, "closing");
+  near(a.opening + a.rows.reduce((s, r) => s + r.effect, 0), a.closing, "opening + movements == closing");
+});
+
+test("activity: the synthetic reconciling line folds into the opening too", async () => {
+  const cust = (await app.api("POST", "/api/stakeholders", { tenantId, body: { name: "Unexplained Debt", type: "customer" } })).body.id;
+  await post({ type: "sale", stakeholder_id: cust, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1, payments: [] });
+  app.db.prepare("UPDATE stakeholders SET balance = balance - 7 WHERE id = ?").run(cust); // no log row: history can't explain it
+  assert.ok(stmt.buildStatement(tenantId, cust)[0].reconciling, "ledger starts with the reconciling line");
+  const a = stmt.buildActivityStatement(tenantId, cust, "2000-01-01", "2100-01-01");
+  assert.equal(a.rows.filter((r) => r.type === "opening").length, 0);
+  near(a.opening, -7, "opening");
+  near(a.closing, -32, "closing");
+  near(a.opening + a.rows.reduce((s, r) => s + r.effect, 0), a.closing, "opening + movements == closing");
+  // A range that ends before the ledger starts shows nothing owed yet.
+  const early = stmt.buildActivityStatement(tenantId, cust, "2000-01-01", "2000-01-02");
+  near(early.opening, 0); near(early.closing, 0);
+});

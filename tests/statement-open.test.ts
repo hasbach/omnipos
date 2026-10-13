@@ -124,6 +124,35 @@ test("a partial refund leaves the rest of the reversed order owed", async () => 
   assert.deepEqual(o.orders.map((x) => x.id), [s1, s2]);
   near(o.orders[0].remaining, 25);
   near(o.orders[1].remaining, 25);
+  near(o.orders[0].returned, 0, "S1 returned");
+  near(o.orders[1].returned, 25, "S2 returned");
+  near(o.orders[1].paid, 0, "refund credit is not shown as paid");
+  assert.equal(o.orders[1].status, "unpaid");
+});
+
+test("cent fix never pushes an order below one cent or above its debt", () => {
+  // Newest item owes $0.006 -> rounds to 0.01; a -0.01 cent fix must go to the next item instead.
+  const a = [{ remaining: 10.004, debt: 20 }, { remaining: 0.006, debt: 0.006 }];
+  const r1 = a.map((x) => ({ ...x, remaining: Math.round(x.remaining * 100) / 100 }));
+  const prev1 = stmt.applyCentFix(r1, 0, 10);
+  near(prev1 + r1[0].remaining + r1[1].remaining, 10, "invariant");
+  assert.equal(r1[1].remaining, 0.01);
+  assert.equal(r1[0].remaining, 9.99);
+  // +0.01 that would lift the newest above its own debt goes to the next item.
+  const r2 = [{ remaining: 5, debt: 20 }, { remaining: 10, debt: 10 }];
+  const prev2 = stmt.applyCentFix(r2, 0, 15.01);
+  near(prev2 + r2[0].remaining + r2[1].remaining, 15.01, "invariant");
+  assert.equal(r2[1].remaining, 10);
+  assert.equal(r2[0].remaining, 5.01);
+  // Nowhere to put it on the items: previous balance takes it.
+  const r3 = [{ remaining: 10, debt: 10 }];
+  const prev3 = stmt.applyCentFix(r3, 0, 10.01);
+  assert.equal(r3[0].remaining, 10);
+  near(prev3, 0.01);
+  // Normal case: the newest item takes it.
+  const r4 = [{ remaining: 5, debt: 20 }, { remaining: 9.99, debt: 10 }];
+  assert.equal(stmt.applyCentFix(r4, 0, 15), 0);
+  assert.equal(r4[1].remaining, 10);
 });
 
 test("supplier: purchases, partial payment, total equals what we owe", async () => {

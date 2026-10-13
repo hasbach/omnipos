@@ -92,6 +92,7 @@ export function renderStatementHtml(doc: StatementDocument, format: 'a4' | 'rece
           <table class="sums">
             <tr><td>${esc(L.orderTotal)}</td><td class="end">${num(usd(ord.total))}</td></tr>
             ${ord.discount ? `<tr><td>${esc(L.discount)}</td><td class="end">${num(ord.discount.type === 'percentage' ? `${ord.discount.value}%` : usd(ord.discount.value))}</td></tr>` : ''}
+            ${ord.returned > 0.005 ? `<tr><td>${esc(L.returned)}</td><td class="end">${num(usd(ord.returned))}</td></tr>` : ''}
             ${ord.paid > 0.005 ? `<tr><td>${esc(L.paid)}</td><td class="end">${num(usd(ord.paid))}</td></tr>` : ''}
             <tr><td><b>${esc(L.remaining)}</b></td><td class="end"><b>${num(usd(ord.remaining))}</b></td></tr>
           </table>

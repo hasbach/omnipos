@@ -107,3 +107,19 @@ test("latinSafe: control bytes and line breaks never reach the printer; look-ali
   assert.equal(latinSafe(ar.replace(" ", "\n")), ar);
   assert.equal(latinSafe(ar + "\x1b"), ar + "?");
 });
+
+test("a partially refunded order shows a Returned line in ESC/POS and HTML", async () => {
+  const c = (await app.api("POST", "/api/stakeholders", { tenantId, body: { name: "Returner", type: "customer" } })).body.id;
+  const s = await app.api("POST", "/api/transactions", { tenantId, body: { type: "sale", stakeholder_id: c, items: [{ id: productId, quantity: 2 }], currency: "USD", exchange_rate: 1, payments: [] } });
+  const rf = await app.api("POST", "/api/transactions", { tenantId, body: { type: "refund", original_transaction_id: s.body.id, stakeholder_id: c, items: [{ id: productId, quantity: 1 }], currency: "USD", exchange_rate: 1, payments: [] } });
+  assert.equal(rf.status, 200, JSON.stringify(rf.body));
+  const { buildStatementDocument } = await import("../server/statementDocument.js");
+  const { buildStatementBuffer } = await import("../server/printing/statement.js");
+  const { renderStatementHtml } = await import("../server/statementHtml.js");
+  const doc = buildStatementDocument(tenantId, c, { mode: "open" }, { name: "Acme", address: "", phone: "", language: "en" })!;
+  assert.equal(doc.open!.orders[0].returned, 25);
+  const text = buildStatementBuffer({ doc, paperWidth: 80 }).toString("latin1");
+  assert.ok(/Returned\s+\$25\.00/.test(text), "ESC/POS Returned line");
+  assert.ok(!/Paid\s+\$/.test(text), "refund credit is not printed as paid");
+  for (const f of ["a4", "receipt"] as const) assert.ok(/Returned<\/td><td class="end"><span class="n" dir="ltr">\$25\.00/.test(renderStatementHtml(doc, f)), f);
+});

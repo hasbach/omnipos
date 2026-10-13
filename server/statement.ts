@@ -39,6 +39,7 @@ interface Ev {
   method?: string;    // payment rows: the payment method
   tx_id?: number;     // every row that comes from a transaction
   archived?: boolean; // that transaction lives in the archived_* tables (settled)
+  reconciling?: boolean; // the synthetic "Opening balance & earlier adjustments" line (step 5)
   user: string | null;
 }
 
@@ -200,7 +201,7 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
     events.unshift({
       date: events.length ? events[0].date : new Date().toISOString().replace('T', ' ').slice(0, 19),
       seq: -1, type: 'opening', reference: '—',
-      description: 'Opening balance & earlier adjustments', effect: opening, user: null,
+      description: 'Opening balance & earlier adjustments', effect: opening, user: null, reconciling: true,
     });
   }
 
@@ -223,6 +224,7 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
     }
     if (e.tx_id !== undefined) { row.tx_id = e.tx_id; row.archived = e.archived ? 1 : 0; }
     if (e.method !== undefined) row.method = e.method;
+    if (e.reconciling) row.reconciling = true;
     return row;
   });
 }
@@ -291,7 +293,8 @@ export interface OpenOrder {
   items: StatementItem[];
   discount: { type: string; value: number } | null;
   total: number;
-  paid: number;        // total − remaining (at-sale payments + the FIFO share of later payments)
+  paid: number;        // total − remaining − returned (at-sale payments + the FIFO share of later payments), ≥ 0
+  returned: number;    // refund credit netted against this order (0 when none)
   remaining: number;
   status: 'unpaid' | 'partial';
 }
@@ -305,6 +308,26 @@ export interface OpenStatement {
 
 function receiptRef(tx: any): string {
   return tx.terminal_id && tx.terminal_sequence ? `${tx.terminal_id}-${String(tx.terminal_sequence).padStart(4, '0')}` : `#${tx.id}`;
+}
+
+/**
+ * Cent rounding fix so previous + Σ remaining = target exactly (items already rounded to cents, oldest
+ * first). The difference goes to the NEWEST item that can take it without dropping below one cent or
+ * rising above its own debt (rounded up to the cent), else to the previous balance (never below 0). Mutates `items`; returns the
+ * new previous balance.
+ */
+export function applyCentFix(items: { remaining: number; debt: number }[], previous: number, target: number): number {
+  const diff = round2(target - (items.reduce((s, t) => s + t.remaining, 0) + previous));
+  if (diff === 0) return previous;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const next = round2(items[i].remaining + diff);
+    if (next >= 0.01 && next <= Math.ceil(items[i].debt * 100 - 1e-6) / 100 + 1e-9) { items[i].remaining = next; return previous; }
+  }
+  if (previous + diff >= -1e-9) return round2(previous + diff);
+  // Last resort (keeps the invariant): the newest item takes it anyway.
+  const newest = items[items.length - 1];
+  newest.remaining = round2(newest.remaining + diff);
+  return previous;
 }
 
 // "Unpaid orders": payments are applied to the OLDEST debts first, so the amount still owed is made of
@@ -330,6 +353,7 @@ export function buildOpenStatement(tenantId: number, stakeholderId: number | str
   }
   // A refund reverses a specific order: net it against that order first, so only the remaining
   // payments are allocated oldest-first. Leftover refund effect stays (already part of the balance).
+  const returnedOf = new Map<Slot, number>(); // refund credit netted into each original order
   for (const refund of slots) {
     if (refund.type !== 'refund' || refund.tx_id == null || refund.effect <= 0.005) continue;
     const row = db.prepare(`SELECT original_transaction_id FROM ${refund.archived ? 'archived_transactions' : 'transactions'} WHERE id = ?`).get(refund.tx_id) as any;
@@ -338,6 +362,7 @@ export function buildOpenStatement(tenantId: number, stakeholderId: number | str
     const amt = round2(Math.min(refund.effect, -original.effect));
     original.effect = round2(original.effect + amt);
     refund.effect = round2(refund.effect - amt);
+    returnedOf.set(original, round2((returnedOf.get(original) || 0) + amt));
   }
 
   const debts = slots.filter((s) => s.effect < -0.005 && (s.tx_id == null || s.type === 'sale' || s.type === 'purchase'));
@@ -345,25 +370,23 @@ export function buildOpenStatement(tenantId: number, stakeholderId: number | str
   // Allocate with UNROUNDED amounts: rounding each debt to cents first can leave a few cents of
   // shortfall (e.g. many LBP-paid orders) that would show up as a fake "previous balance".
   let left = due;
-  const taken: { slot: Slot; remaining: number }[] = [];
+  const taken: { slot: Slot; remaining: number; debt: number }[] = [];
   for (let i = debts.length - 1; i >= 0 && left > 0.005; i--) {
     const take = Math.min(-debts[i].effect, left);
-    taken.unshift({ slot: debts[i], remaining: take });
+    taken.unshift({ slot: debts[i], remaining: take, debt: -debts[i].effect });
     left -= take;
   }
 
-  let previous = left > 0.005 ? round2(left) : 0;
   for (const t of taken) t.remaining = round2(t.remaining);
-  // Put the cent rounding difference on the NEWEST taken item so previous + Σ remaining = round2(due).
-  if (taken.length) {
-    const diff = round2(round2(due) - (taken.reduce((s, t) => s + t.remaining, 0) + previous));
-    if (diff !== 0) { const newest = taken[taken.length - 1]; newest.remaining = round2(newest.remaining + diff); }
-  }
+  const previousBefore = left > 0.005 ? round2(left) : 0;
+  let previous = taken.length ? applyCentFix(taken, previousBefore, round2(due)) : previousBefore;
   const orders: OpenOrder[] = [];
   for (const { slot, remaining } of taken) {
     if (slot.tx_id == null) { previous = round2(previous + remaining); continue; }
     const tx = db.prepare(`SELECT * FROM ${slot.archived ? 'archived_transactions' : 'transactions'} WHERE id = ?`).get(slot.tx_id) as any || { id: slot.tx_id, total_amount: remaining };
     const total = round2(tx.total_amount || 0);
+    const returned = returnedOf.get(slot) || 0;
+    const paid = Math.max(0, round2(total - remaining - returned));
     orders.push({
       id: slot.tx_id,
       reference: receiptRef(tx),
@@ -373,9 +396,10 @@ export function buildOpenStatement(tenantId: number, stakeholderId: number | str
       items: loadStatementItems(slot.tx_id, !!slot.archived),
       discount: tx.discount_type && tx.discount_value > 0 ? { type: tx.discount_type, value: tx.discount_value } : null,
       total,
-      paid: round2(total - remaining),
+      paid,
+      returned,
       remaining,
-      status: remaining < total - 0.005 ? 'partial' : 'unpaid',
+      status: paid > 0.005 ? 'partial' : 'unpaid',
     });
   }
   return { previous_balance: previous, orders, total_due: round2(due), credit: 0 };
@@ -427,10 +451,17 @@ export function buildActivityStatement(tenantId: number, stakeholderId: number |
     }
     return ref!;
   };
+  // Opening lines that START the ledger (the party's creation balance, or the synthetic reconciling line)
+  // are folded into the opening balance instead of listed, so the first day never reads
+  // "Opening balance $0" followed by an "Opening balance" row.
+  let leading = true;
   for (const r of buildStatement(tenantId, stakeholderId)) {
     const day = localDateOf(r.date);
-    if (day < from) { opening = r.balance; continue; }
+    const isOpening = r.type === 'opening' && r.tx_id == null;
+    if (day < from) { opening = r.balance; if (!isOpening) leading = false; continue; }
     if (day > to) continue;
+    if (leading && isOpening) { opening = r.balance; continue; }
+    leading = false;
     const row: ActivityRow = {
       date: r.date, date_label: localStampLabel(r.date), type: r.type, reference: refOf(r),
       method: r.method ?? null, debit: r.debit, credit: r.credit, effect: r.effect, balance: r.balance,

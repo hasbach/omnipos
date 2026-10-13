@@ -64,6 +64,7 @@ export function buildStatementBuffer(opts: { doc: StatementDocument; paperWidth?
         p.bold(false);
         for (const it of ord.items) p.itemLine(itemName(it), it.qty, usd(it.line_total));
         p.kv(`  ${L.orderTotal}`, usd(ord.total));
+        if (ord.returned > 0.005) p.kv(`  ${L.returned}`, usd(ord.returned));
         if (ord.paid > 0.005) p.kv(`  ${L.paid}`, usd(ord.paid));
         p.kv(`  ${L.remaining}`, usd(ord.remaining));
         p.hr();
