@@ -194,6 +194,9 @@ declare global {
       }) => void) => (() => void);
       // Silent printing (no OS print dialog) — see electron-main.js's 'print:silent-html' handler.
       printSilent: (html: string) => Promise<{ success: boolean; error: string | null }>;
+      // Statement printing — see electron-main.js's 'print:html' / 'print:pdf' handlers.
+      printHtml?: (html: string) => Promise<{ success: boolean; error: string | null }>;
+      savePdf?: (html: string, fileName: string) => Promise<{ success: boolean; error: string | null; path?: string }>;
       // Second window for another store — see electron-main.js "STORE CONNECTIONS".
       connections?: {
         list: () => Promise<{ ok: boolean; connections?: StoreConnection[]; error?: string }>;

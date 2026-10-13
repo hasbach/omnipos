@@ -182,24 +182,6 @@ export interface CustomBuilderRow {
   processed_by: string | null;
 }
 
-export interface CustomerStatementRow {
-  date: string;
-  type: 'opening' | 'sale' | 'refund' | 'purchase' | 'payment' | 'refund_payment' | 'on_account' | 'balance_collection' | 'supplier_payment' | 'manual_edit' | 'import';
-  reference: string;
-  description: string;
-  debit: number;
-  credit: number;
-  /** Change to the balance in the app's sign convention (negative = Due). */
-  effect?: number;
-  /** Payment rows: the payment's own currency + original amount (credit is always USD). */
-  currency?: string;
-  amount_original?: number;
-  exchange_rate?: number;
-  /** Running balance, app convention (negative = Due, positive = Credit). */
-  balance: number;
-  user: string | null;
-}
-
 export interface DailyReportRow {
   id: number;
   date: string;

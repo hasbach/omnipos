@@ -1,6 +1,8 @@
 import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
 import { buildStatement } from "./statement.js";
+import { buildStatementDocument, parseStatementOpts, type StatementBusiness } from "./statementDocument.js";
+import { renderStatementHtml } from "./statementHtml.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
@@ -17,6 +19,7 @@ import {
 } from "./session.js";
 import { EscPos } from "./printing/escpos.js";
 import { localCurrencyFor, effectiveLocalRate, isLocalCode, parsePartyRate } from "./localCurrency.js";
+import { buildStatementBuffer } from "./printing/statement.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
@@ -174,6 +177,13 @@ function getSettingsMap(tenantId: number): Record<string, string> {
   }
 
   return map;
+}
+
+// Business header + printed language for statements (server/statementDocument.ts).
+function statementBusiness(tenantId: number): StatementBusiness {
+  const s = getSettingsMap(tenantId);
+  const language = s.language === 'ar' || s.language === 'fr' ? s.language : 'en';
+  return { name: s.store_name || '', address: s.business_address || '', phone: s.business_phone || '', language };
 }
 
 // After an End-of-Day settlement clears the tenant's transactional data locally, the same rows
@@ -2427,6 +2437,23 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     res.json(buildStatement(req.session.tenantId, req.params.id));
   });
 
+  // Printable statement: mode=open (unpaid orders, FIFO) or mode=activity&from&to (local days).
+  app.get("/api/reports/statement/:id", authenticate, (req: any, res) => {
+    const opts = parseStatementOpts(req.query);
+    if (!opts) return res.status(400).json({ error: "from and to (YYYY-MM-DD, from <= to) are required for activity" });
+    const doc = buildStatementDocument(req.session.tenantId, req.params.id, opts, statementBusiness(req.session.tenantId));
+    if (!doc) return res.status(404).json({ error: "Customer/supplier not found" });
+    res.json(doc);
+  });
+
+  app.get("/api/reports/statement/:id/html", authenticate, (req: any, res) => {
+    const opts = parseStatementOpts(req.query);
+    if (!opts) return res.status(400).json({ error: "from and to (YYYY-MM-DD, from <= to) are required for activity" });
+    const doc = buildStatementDocument(req.session.tenantId, req.params.id, opts, statementBusiness(req.session.tenantId));
+    if (!doc) return res.status(404).json({ error: "Customer/supplier not found" });
+    res.type("html").send(renderStatementHtml(doc, req.query.format === "receipt" ? "receipt" : "a4"));
+  });
+
   // Cash Flow & Reports
   app.get("/api/cash-flow/summary", authenticate, (req: any, res) => {
     // The register spans from the last close (Cash Out or Settlement) through now — see
@@ -2993,6 +3020,25 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     } catch (err: any) {
       console.error('Print receipt error:', err.message);
       res.status(500).json({ error: err.message || 'Failed to print receipt' });
+    }
+  });
+
+  // Customer / supplier statement on the receipt printer (back office "Print -> Receipt").
+  app.post("/api/print/statement", authenticate, async (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const { stakeholderId, printerId } = req.body || {};
+    try {
+      const printer = resolveReceiptPrinter(tenantId, printerId);
+      if (!printer) return res.status(404).json({ error: "No enabled receipt printer configured", code: "no_receipt_printer" });
+      const opts = parseStatementOpts(req.body);
+      if (!opts) return res.status(400).json({ error: "from and to (YYYY-MM-DD, from <= to) are required for activity" });
+      const doc = buildStatementDocument(tenantId, stakeholderId, opts, statementBusiness(tenantId));
+      if (!doc) return res.status(404).json({ error: "Customer/supplier not found" });
+      await sendToPrinter(printer, buildStatementBuffer({ doc, paperWidth: printer.paper_width, arabic: printerArabicMode(printer) }));
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Print statement error:', err.message);
+      res.status(500).json({ error: err.message || 'Failed to print statement' });
     }
   });
 
