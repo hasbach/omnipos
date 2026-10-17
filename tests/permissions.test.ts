@@ -478,3 +478,46 @@ test("a PIN user's actions are always recorded under that user, whatever user_id
   const row = app.db.prepare("SELECT user_id FROM cash_flow WHERE tenant_id = ? ORDER BY id DESC LIMIT 1").get(s.tenantId) as any;
   assert.equal(row.user_id, s.accountant);
 });
+
+test("online-store permissions (store.*): admin only by default; existing stored maps gain nothing", async () => {
+  const keys = ["store.view", "store.manage", "store.publish"];
+  for (const k of keys) {
+    assert.ok(ALL_PERMISSIONS.includes(k), k);
+    assert.ok(DEFAULT_ROLE_PERMISSIONS.admin.includes(k), `admin ${k}`);
+    for (const role of ["manager", "accountant", "staff", "cashier"]) {
+      assert.ok(!DEFAULT_ROLE_PERMISSIONS[role].includes(k), `${role} must not get ${k} by default`);
+    }
+  }
+
+  const s = setup();
+  const status = (userId: number) => app.api("GET", "/api/commerce/status", { tenantId: s.tenantId, userId });
+  assert.equal((await status(s.admin)).status, 200);
+  for (const u of [s.manager, s.accountant, s.staff, s.cashier]) assert.equal((await status(u)).status, 403);
+
+  // A tenant that saved its matrix before 1.8 (manager = everything that existed then) gains no store.* key.
+  const preCommerce = ALL_PERMISSIONS.filter((k) => !keys.includes(k));
+  app.db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)")
+    .run(s.tenantId, JSON.stringify({ manager: preCommerce }));
+  assert.equal((await status(s.manager)).status, 403);
+  assert.equal((await app.api("PUT", "/api/commerce/status", { tenantId: s.tenantId, userId: s.manager, body: { enabled: true } })).status, 403);
+
+  // Granting it explicitly works.
+  app.db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)")
+    .run(s.tenantId, JSON.stringify({ manager: [...preCommerce, "store.view"] }));
+  assert.equal((await status(s.manager)).status, 200);
+  assert.equal((await app.api("PUT", "/api/commerce/status", { tenantId: s.tenantId, userId: s.manager, body: { enabled: true } })).status, 403);
+});
+
+test("every /api/commerce route has a permission rule", () => {
+  for (const [m, u] of [["GET", "/api/commerce/status"], ["PUT", "/api/commerce/status"]] as const) {
+    const rule = findRule(m, u);
+    assert.ok(rule, `${m} ${u} has no ROUTE_RULES entry`);
+  }
+});
+
+test("client mirror (src/lib/permissions.ts) matches the server catalogue and defaults", async () => {
+  const server = await import("../server/permissions.js");
+  const client = await import("../src/lib/permissions.js");
+  assert.deepEqual(client.PERMISSION_GROUPS, server.PERMISSION_GROUPS);
+  assert.deepEqual(client.DEFAULT_ROLE_PERMISSIONS, server.DEFAULT_ROLE_PERMISSIONS);
+});

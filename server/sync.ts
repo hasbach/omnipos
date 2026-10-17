@@ -26,6 +26,9 @@ const fkMap: Record<string, Record<string, string>> = {
   cashier_shifts: { tenant_id: 'tenants', user_id: 'users' },
   settlement_corrections: { tenant_id: 'tenants', report_id: 'daily_reports', user_id: 'users' },
   cash_flow_categories: { tenant_id: 'tenants' },
+  // Commerce (specs/001-commerce-domain-foundation): a tenant's online store and its product listings.
+  stores: { tenant_id: 'tenants' },
+  store_listings: { tenant_id: 'tenants', store_id: 'stores', product_id: 'products' },
 };
 
 function getGlobalId(tableName: string, localId: number) {
@@ -255,7 +258,7 @@ export function cleanQuantity(v: any) {
 // super-admin) — the desktop only ever PULLS it, never pushes, so it can't stomp a freshly
 // activated license with a stale local copy.
 const PUSH_TABLES = [
-  'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
 ];
@@ -267,11 +270,12 @@ export const HOT_PULL_TABLES = [
 export const COLD_PULL_TABLES = [
   'tenants', 'currencies', 'settings', 'cash_flow_categories',
   'daily_reports', 'cashier_shifts', 'settlement_corrections',
+  'stores', 'store_listings',
 ];
 // Pull order: parents before children (FK translation needs the parent row locally).
 const PULL_TABLES = [
   'tenants',
-  'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
 ];

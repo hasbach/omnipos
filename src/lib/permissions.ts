@@ -10,7 +10,11 @@ export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
   { area: 'finance', keys: ['cash_flow.view', 'cash_flow.add', 'cash_flow.edit', 'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct', 'reports.view'] },
   { area: 'admin', keys: ['users.manage', 'logs.view', 'import.run', 'settings.manage', 'data.reset'] },
   { area: 'pos', keys: ['pos.discount', 'pos.price_override', 'pos.refund', 'pos.open_dashboard'] },
+  { area: 'commerce', keys: ['store.view', 'store.manage', 'store.publish'] },
 ];
+
+// Online-store keys: admin only until granted (mirror of server/permissions.ts).
+const COMMERCE_PERMISSIONS = ['store.view', 'store.manage', 'store.publish'];
 
 export const ALL_PERMISSIONS: string[] = PERMISSION_GROUPS.flatMap((g) => g.keys);
 
@@ -22,7 +26,7 @@ export const EDITABLE_ROLES = ROLES.filter((r) => r !== 'admin');
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: [...ALL_PERMISSIONS],
   // Live Monitor is admin + accountant only by default (owner's request).
-  manager: ALL_PERMISSIONS.filter((k) => !['users.manage', 'settings.manage', 'data.reset', 'live_monitor.view'].includes(k)),
+  manager: ALL_PERMISSIONS.filter((k) => !['users.manage', 'settings.manage', 'data.reset', 'live_monitor.view', ...COMMERCE_PERMISSIONS].includes(k)),
   accountant: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'live_monitor.view', 'purchases.view', 'parties.view',
     'cash_flow.view', 'cash_flow.add', 'cash_flow.edit',

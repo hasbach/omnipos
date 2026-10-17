@@ -26,6 +26,7 @@ import { setupReportRoutes } from "./reports.js";
 import { setupImportRoutes } from "./importer.js";
 import { setupTenantResetRoutes } from "./tenantReset.js";
 import { setupCashFlowRoutes } from "./cashFlow.js";
+import { setupCommerceRoutes } from "./commerce.js";
 import { normalizeLevel, saleLineUnitPrice, saleLineUnitPriceLbp, lineTotal, computeTotals, uomUnitPrice, uomUnitPriceLbp, type PriceLevel } from "./pricing.js";
 import {
   loadUnitsByProduct, loadUnitsForProduct, loadUnit, normalizeUnitsPayload, assertBarcodesFree, saveProductUnits,
@@ -354,6 +355,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   setupTenantResetRoutes(app, authenticate, broadcast, { purgeCloudTransactionalData });
   setupSettlementRoutes(app, authenticate, broadcast);
   setupCashFlowRoutes(app, authenticate, broadcast);
+  setupCommerceRoutes(app, authenticate);
   // API Routes
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {

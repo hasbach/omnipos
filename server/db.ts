@@ -585,6 +585,54 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_scorr_report ON settlement_corrections(report_id);
 `);
 
+// Commerce (specs/001-commerce-domain-foundation, Slice A): a tenant's online store and the products
+// it publishes. Created before the sync-metadata block below so both get global_id/updated_at/
+// deleted_at + triggers and sync like products. A listing references a product and never copies its
+// price, stock or units. Empty until an admin turns commerce on; nothing is created automatically.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    slug TEXT,
+    mode TEXT NOT NULL DEFAULT 'retail',
+    status TEXT NOT NULL DEFAULT 'draft',
+    description TEXT,
+    logo_path TEXT,
+    cover_path TEXT,
+    primary_color TEXT,
+    contact_phone TEXT,
+    contact_whatsapp TEXT,
+    contact_email TEXT,
+    address TEXT,
+    default_language TEXT DEFAULT 'en',
+    settings TEXT DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_stores_tenant ON stores(tenant_id);
+  CREATE TABLE IF NOT EXISTS store_listings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    store_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    published INTEGER NOT NULL DEFAULT 0,
+    title TEXT,
+    description TEXT,
+    images TEXT DEFAULT '[]',
+    store_category TEXT,
+    sort_order INTEGER DEFAULT 0,
+    min_quantity REAL,
+    orderable_unit_ids TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    -- No FK on store_id / product_id (same as product_units): products are hard-deleted locally and a
+    -- pull may bring a listing before its parent. A listing whose product is gone is just unavailable.
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_store_listings_tenant ON store_listings(tenant_id);
+  CREATE INDEX IF NOT EXISTS idx_store_listings_product ON store_listings(product_id);
+`);
+
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
 for (const table of allTables) {
@@ -642,6 +690,10 @@ for (const table of allTables) {
     console.error(`Trigger error on ${table.name}:`, e);
   }
 }
+
+// One live listing per (store, product); soft-deleted listings don't count. Needs deleted_at, which
+// the sync-metadata block above adds.
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_store_listings_live ON store_listings(store_id, product_id) WHERE deleted_at IS NULL");
 
 // Derived-balance migration: stakeholder.balance becomes balance_baseline + Σ(transaction effects)
 // (see server/balance.ts). This column is intentionally NOT synced to the cloud (see

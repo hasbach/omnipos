@@ -30,8 +30,20 @@ Expected: all existing tests pass unchanged, plus the new ones:
 
 ## 2. Backward compatibility (US1, SC-001 slice)
 
-1. Copy a real tenant DB, start the app on the copy, compare product count, stock sum, invoice totals and every
-   balance before/after upgrade → identical.
+1. Copy a real tenant DB and run the dry run on the copy (never the original):
+
+   ```bash
+   npm rebuild better-sqlite3
+   ```
+   ```bash
+   npx tsx scripts/commerce-dryrun.ts "C:\path\to\copy-of-pos.db"
+   ```
+   ```bash
+   npm run rebuild
+   ```
+
+   Expected: "OK: no differences in counts, stock, invoice totals, payments or balances." and no commerce rows
+   created (`stores: 0, store_listings: 0, commerce_enabled: 0`). Exit code 1 on any difference.
 2. Settings shows "Online store: off"; `stores` and `store_listings` are empty.
 
 ## 3. Back-office walk-through (preview server)
