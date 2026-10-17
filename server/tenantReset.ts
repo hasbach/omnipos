@@ -74,6 +74,7 @@ function hasSyncedData(tenantId: number, scopes: ResetScope[]): boolean {
   if (scopes.includes("products")) {
     add("SELECT 1 FROM products WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
     add("SELECT 1 FROM product_units WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
+    add("SELECT 1 FROM store_listings WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
     add("SELECT 1 FROM product_barcodes WHERE last_synced_at IS NOT NULL AND product_id IN (SELECT id FROM products WHERE tenant_id = ?)", tenantId);
   }
   if (scopes.includes("parties")) {
@@ -122,6 +123,9 @@ async function purgeCloudScopes(
     if (pe) throw pe;
     const productIds = (prodRows || []).map((r: any) => r.global_id).filter(Boolean);
 
+    // Online-store listings reference products (cloud FK), so they go first. The store itself stays.
+    const { error: le } = await client.from("store_listings").delete().eq("tenant_id", tg);
+    if (le && !isMissingTable(le)) throw le;
     const { error: ue } = await client.from("product_units").delete().eq("tenant_id", tg);
     if (ue && !isMissingTable(ue)) throw ue;
     for (const ids of chunk(productIds, 100)) {
@@ -170,6 +174,8 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
   }
 
   if (scopes.includes("products")) {
+    // The tenant's online-store listings point at these products; the store itself is kept (empty).
+    db.prepare("DELETE FROM store_listings WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM product_barcodes WHERE product_id IN (SELECT id FROM products WHERE tenant_id = ?)").run(t);
     db.prepare("DELETE FROM product_units WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM products WHERE tenant_id = ?").run(t);

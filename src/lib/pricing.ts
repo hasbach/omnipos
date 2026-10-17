@@ -31,6 +31,9 @@ const positive = (v: number | null | undefined): number | null =>
   typeof v === 'number' && v > 0 ? v : null;
 
 /** Resolved flat tier price in USD, or null if the level falls through to retail/package pricing. */
+// Retail-tier parity: the online store's public price (cloud function store_public_listings in
+// supabase/migrations/2026-10-18_commerce_store_foundation.sql) mirrors the RETAIL branch of this and
+// uomUnitPrice — product.price / product_units.price. Change one, change the other.
 export function tierUnitPrice(product: PricingProduct, level: PriceLevel): number | null {
   if (level === 'super_wholesale') {
     return (

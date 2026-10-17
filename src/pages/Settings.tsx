@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle, Network, KeyRound, Tags } from 'lucide-react';
+import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle, Network, KeyRound, Tags, ShoppingBag } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
 import { useI18n } from '../intl/index';
@@ -15,9 +15,10 @@ import { DataResetSection } from './settings/DataResetSection';
 import { ConnectionsSection } from './settings/ConnectionsSection';
 import { RolesSection } from './settings/RolesSection';
 import { CashFlowCategoriesSection } from './settings/CashFlowCategoriesSection';
+import { OnlineStoreSection } from './settings/OnlineStoreSection';
 import { usePermissions } from '../lib/usePermissions';
 
-type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates' | 'connections' | 'cfcategories' | 'roles' | 'reset';
+type SectionKey = 'general' | 'pricing' | 'currencies' | 'printers' | 'appearance' | 'updates' | 'connections' | 'cfcategories' | 'onlinestore' | 'roles' | 'reset';
 
 export default function Settings({ onShowUpdate }: { onShowUpdate: () => void }) {
   const { t } = useI18n();
@@ -25,6 +26,7 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
   const { isAdmin, can } = usePermissions();
   const canManage = can('settings.manage');
   const canReset = can('data.reset');
+  const canViewStore = can('store.view');
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [tenant, setTenant] = useState<Tenant | null>(null);
   // Ctrl+Shift+O (Electron) deep-links here with ?section=connections.
@@ -55,6 +57,7 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
       { key: 'printers' as SectionKey, label: t('set_nav_printers'), icon: Printer },
       { key: 'cfcategories' as SectionKey, label: t('set_nav_cf_categories', 'Cash flow categories'), icon: Tags },
     ] : []),
+    ...(canViewStore ? [{ key: 'onlinestore' as SectionKey, label: t('set_nav_online_store', 'Online store'), icon: ShoppingBag }] : []),
     { key: 'appearance', label: t('set_nav_appearance'), icon: Globe },
     ...(canManage ? [{ key: 'updates' as SectionKey, label: t('set_nav_updates'), icon: Shield }] : []),
     ...(canManage && window.electronAPI?.connections ? [{ key: 'connections' as SectionKey, label: t('set_nav_connections'), icon: Network }] : []),
@@ -101,6 +104,7 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
           {section === 'updates' && <UpdatesSection tenant={tenant} onShowUpdate={onShowUpdate} />}
           {section === 'connections' && <ConnectionsSection />}
           {section === 'cfcategories' && canManage && <CashFlowCategoriesSection />}
+          {section === 'onlinestore' && canViewStore && <OnlineStoreSection />}
           {section === 'roles' && isAdmin && <RolesSection />}
           {section === 'reset' && <DataResetSection />}
         </div>

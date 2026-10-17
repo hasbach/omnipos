@@ -1,0 +1,131 @@
+// Product editor -> "Online store" tab (specs/001-commerce-domain-foundation, Slice A): publish this
+// product in the store and edit its online title, description, category and order. Price, units and
+// stock always come from the product itself, so there is nothing to keep in sync here.
+import React, { useEffect, useState } from 'react';
+import { Badge, Button, Field, Input, NumberInput, Switch, Textarea, useToast } from '../../components/ui';
+import { useI18n } from '../../intl/index';
+import { commerceApi, type CommerceStatus, type ListingView } from '../../lib/commerceApi';
+import { translateServerError } from '../../lib/serverErrors';
+import { usePermissions } from '../../lib/usePermissions';
+
+const STOCK_VARIANT = { in_stock: 'success', low_stock: 'warning', out_of_stock: 'danger' } as const;
+
+interface Draft { published: boolean; title: string; description: string; store_category: string; sort_order: number }
+
+const toDraft = (l: ListingView | null): Draft => ({
+  published: l?.published ?? false,
+  title: l?.title ?? '',
+  description: l?.description ?? '',
+  store_category: l?.store_category ?? '',
+  sort_order: l?.sort_order ?? 0,
+});
+
+export function OnlineStoreCard({ productId, productName, productCategory }: { productId: number; productName: string; productCategory: string }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const { can } = usePermissions();
+  const canPublish = can('store.publish');
+
+  const [status, setStatus] = useState<CommerceStatus | null>(null);
+  const [listing, setListing] = useState<ListingView | null>(null);
+  const [draft, setDraft] = useState<Draft>(toDraft(null));
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const st = await commerceApi.status();
+        if (!alive) return;
+        setStatus(st);
+        if (st.store) {
+          const ls = await commerceApi.productListings(productId);
+          if (!alive) return;
+          const l = ls.find((x) => x.store_id === st.store!.id) || null;
+          setListing(l);
+          setDraft(toDraft(l));
+        }
+      } catch (err: any) {
+        toast.error(translateServerError(err, t) || err?.message || String(err));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [productId]);
+
+  if (loading) return <p className="text-sm text-text-3">{t('commerce_loading')}</p>;
+  if (!status?.enabled) return <p className="text-sm text-text-3">{t('commerce_product_off')}</p>;
+  if (!status.store) return <p className="text-sm text-text-3">{t('commerce_product_no_store')}</p>;
+
+  const editable = canPublish && !saving;
+  const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
+
+  const save = async () => {
+    setSaving(true);
+    setErrors({});
+    try {
+      const l = await commerceApi.upsertListing(status.store!.id, productId, {
+        published: draft.published,
+        title: draft.title,
+        description: draft.description,
+        store_category: draft.store_category,
+        sort_order: Math.trunc(draft.sort_order || 0),
+      });
+      setListing(l);
+      setDraft(toDraft(l));
+      toast.success(t('commerce_listing_saved'));
+    } catch (err: any) {
+      const msg = translateServerError(err, t) || err?.message || String(err);
+      if (err?.field) setErrors({ [err.field]: msg });
+      else toast.error(msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-text">{status.store.name}</span>
+        {listing ? (
+          <>
+            <Badge variant={listing.visible ? 'success' : 'neutral'}>
+              {listing.visible ? t('commerce_listing_visible') : t(`commerce_reason_${listing.unavailable_reason}`)}
+            </Badge>
+            <Badge variant={STOCK_VARIANT[listing.stock_state]}>{t(`commerce_stock_${listing.stock_state}`)}</Badge>
+          </>
+        ) : (
+          <Badge variant="neutral">{t('commerce_listing_none')}</Badge>
+        )}
+      </div>
+
+      <Switch checked={draft.published} disabled={!editable} onChange={(v) => set({ published: v })} label={t('commerce_listing_published')} />
+
+      <Field label={t('commerce_listing_title')} helper={t('commerce_listing_title_helper')} error={errors.title}>
+        <Input value={draft.title} placeholder={productName} onChange={(e) => set({ title: e.target.value })} maxLength={120} invalid={!!errors.title} disabled={!editable} />
+      </Field>
+      <Field label={t('commerce_listing_description')} error={errors.description}>
+        <Textarea value={draft.description} onChange={(e) => set({ description: e.target.value })} maxLength={4000} rows={4} disabled={!editable} />
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t('commerce_listing_category')} helper={t('commerce_listing_category_helper')} error={errors.store_category}>
+          <Input value={draft.store_category} placeholder={productCategory} onChange={(e) => set({ store_category: e.target.value })} maxLength={60} disabled={!editable} />
+        </Field>
+        <Field label={t('commerce_listing_sort')} error={errors.sort_order}>
+          <NumberInput value={draft.sort_order} onChange={(v) => set({ sort_order: v })} disabled={!editable} />
+        </Field>
+      </div>
+      <p className="text-xs text-text-3">{t('commerce_listing_derived_note')}</p>
+      {canPublish && (
+        <div className="flex justify-end">
+          <Button onClick={save} disabled={saving}>{t('commerce_listing_save')}</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default OnlineStoreCard;

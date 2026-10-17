@@ -21,6 +21,8 @@ import { putJson, postJson, ApiFieldError } from '../invoices/types';
 import { UnitsOfMeasureCard, unitToDraft, draftToPayload, validateUnits, type UnitDraft } from './UnitsOfMeasureCard';
 import { marginPct, markupPct, priceFromMarkup } from '../../lib/pricing';
 import { AdjustStockModal, AdjustStockTarget } from '../stock/AdjustStockModal';
+import { OnlineStoreCard } from './OnlineStoreCard';
+import { usePermissions } from '../../lib/usePermissions';
 
 export interface ProductEditorDrawerProps {
   open: boolean;
@@ -122,7 +124,9 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
   const confirm = useConfirm();
   const rate = localCurrency?.rate || 89500;
 
-  const [tab, setTab] = useState<'general' | 'pricing' | 'inventory'>('general');
+  const [tab, setTab] = useState<'general' | 'pricing' | 'inventory' | 'online'>('general');
+  const { can } = usePermissions();
+  const canViewStore = can('store.view');
   const [form, setForm] = useState<FormState>(blankForm());
   const [initialSnapshot, setInitialSnapshot] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -286,6 +290,8 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
               { value: 'general', label: t('prod_tab_general', 'General') },
               { value: 'pricing', label: t('prod_tab_pricing', 'Pricing') },
               { value: 'inventory', label: t('prod_tab_inventory', 'Inventory') },
+              // Online store: only for saved products (a listing references the product row).
+              ...(form.id && canViewStore ? [{ value: 'online', label: t('prod_tab_online', 'Online store') }] : []),
             ]}
           />
 
@@ -473,6 +479,10 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 <MoneyInput currencySymbol="$" value={form.min_price} onChange={(v) => update({ min_price: v })} />
               </Field>
             </div>
+          )}
+
+          {tab === 'online' && form.id && canViewStore && (
+            <OnlineStoreCard productId={form.id} productName={form.name} productCategory={form.category} />
           )}
 
           {tab === 'inventory' && (

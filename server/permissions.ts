@@ -280,6 +280,17 @@ export const ROUTE_RULES: RouteRule[] = [
   // --- online store (specs/001-commerce-domain-foundation/contracts/backoffice-api.md) ---
   { method: 'GET', pattern: '/api/commerce/status', need: 'store.view' },
   { method: 'PUT', pattern: '/api/commerce/status', need: 'store.manage' },
+  { method: 'GET', pattern: '/api/commerce/stores', need: 'store.view' },
+  { method: 'POST', pattern: '/api/commerce/stores', need: 'store.manage' },
+  { method: 'POST', pattern: '/api/commerce/stores/:id/slug', need: 'store.manage' },
+  { method: 'POST', pattern: '/api/commerce/stores/:id/status', need: 'store.manage' },
+  { method: 'POST', pattern: '/api/commerce/stores/:id/listings/bulk', need: 'store.publish' },
+  { method: 'GET', pattern: '/api/commerce/stores/:id/listings', need: 'store.view' },
+  { method: 'PUT', pattern: '/api/commerce/stores/:id/listings/:productId', need: 'store.publish' },
+  { method: 'DELETE', pattern: '/api/commerce/stores/:id/listings/:productId', need: 'store.publish' },
+  { method: 'PUT', pattern: '/api/commerce/stores/:id', need: 'store.manage' },
+  { method: 'DELETE', pattern: '/api/commerce/stores/:id', need: 'store.manage' },
+  { method: 'GET', pattern: '/api/commerce/products/:productId/listings', need: 'store.view' },
 ];
 
 function compile(pattern: string): RegExp {

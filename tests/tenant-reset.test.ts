@@ -331,3 +331,25 @@ test("synced parties/products in scope also require the cloud; the Walk-in's own
   assert.equal(res.status, 409);
   assert.equal(res.body.code, "RESET_NEEDS_CLOUD");
 });
+
+test("online store: a products reset removes A's listings, keeps A's store, leaves B's store and listings alone", async () => {
+  const A = await seedBusiness();
+  const B = await seedBusiness();
+  const storeAndListing = (t: number, pid: number) => {
+    const store = Number(app.db.prepare("INSERT INTO stores (tenant_id, name) VALUES (?, 'Shop')").run(t).lastInsertRowid);
+    app.db.prepare("INSERT INTO store_listings (tenant_id, store_id, product_id, published) VALUES (?, ?, ?, 1)").run(t, store, pid);
+    return store;
+  };
+  const storeA = storeAndListing(A.t, A.p1);
+  const storeB = storeAndListing(B.t, B.p1);
+
+  // A stock-only reset doesn't touch listings.
+  assert.equal((await reset(A.t, ["stock"])).status, 200);
+  assert.equal((app.db.prepare("SELECT COUNT(*) c FROM store_listings WHERE tenant_id = ?").get(A.t) as any).c, 1);
+
+  const res = await reset(A.t, ["transactions", "products"]);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal((app.db.prepare("SELECT COUNT(*) c FROM store_listings WHERE tenant_id = ?").get(A.t) as any).c, 0);
+  assert.ok(app.db.prepare("SELECT 1 FROM stores WHERE id = ? AND deleted_at IS NULL").get(storeA), "A's store is kept");
+  assert.equal((app.db.prepare("SELECT COUNT(*) c FROM store_listings WHERE tenant_id = ? AND store_id = ?").get(B.t, storeB) as any).c, 1);
+});

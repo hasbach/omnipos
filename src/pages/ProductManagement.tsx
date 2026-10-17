@@ -4,7 +4,7 @@ import { AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
-import { Download, Plus, Printer, Tag, Trash2, Upload, Edit2 } from 'lucide-react';
+import { Download, Plus, Printer, Tag, Trash2, Upload, Edit2, Globe, EyeOff } from 'lucide-react';
 
 import {
   PageHeader,
@@ -30,6 +30,8 @@ import { Product, Currency } from '../types';
 import LabelPrinter from '../components/LabelPrinter';
 import { ProductEditorDrawer } from './products/ProductEditorDrawer';
 import { BulkPriceModal } from './products/BulkPriceModal';
+import { commerceApi, type CommerceStatus } from '../lib/commerceApi';
+import { translateServerError } from '../lib/serverErrors';
 
 type StockFilter = 'all' | 'low' | 'out' | 'service';
 type StatusFilter = 'all' | 'active' | 'disabled';
@@ -49,6 +51,9 @@ export default function ProductManagement() {
   const { can } = usePermissions();
   const canEdit = can('products.edit');
   const canImport = can('import.run');
+  // Online store bulk publish: only when commerce is on, a store exists and the role may publish.
+  const canPublish = can('store.publish');
+  const [commerce, setCommerce] = useState<CommerceStatus | null>(null);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -80,6 +85,7 @@ export default function ProductManagement() {
   useEffect(() => {
     fetchProducts();
     api.get<Currency[]>('/api/currencies').then(setCurrencies).catch(() => {});
+    commerceApi.status().then(setCommerce).catch(() => setCommerce(null));
 
     const handleSync = (e: any) => {
       if (e.detail?.type === 'PRODUCTS_UPDATED') fetchProducts();
@@ -154,6 +160,19 @@ export default function ProductManagement() {
       fetchProducts();
     } catch (err: any) {
       toast.error(err.message || t('prod_delete_error_toast'));
+    }
+  };
+
+  const handleBulkPublish = async (selected: Product[], published: boolean, clear: () => void) => {
+    const store = commerce?.store;
+    if (!store) return;
+    try {
+      await commerceApi.bulkPublish(store.id, selected.map((p) => p.id), published);
+      toast.success(tf(published ? t('commerce_bulk_published', '{count} products published online.') : t('commerce_bulk_unpublished', '{count} products removed from the online store.'), { count: selected.length }));
+      clear();
+      setSelectedKeys(new Set());
+    } catch (err: any) {
+      toast.error(translateServerError(err, t) || err.message);
     }
   };
 
@@ -471,6 +490,16 @@ export default function ProductManagement() {
               <Button size="sm" variant="secondary" onClick={() => setBulkPriceOpen(true)}>
                 <Tag size={14} /> {t('prod_bulk_price_update_selected', 'Bulk price update')}
               </Button>
+              {commerce?.enabled && commerce.store && canPublish && (
+                <>
+                  <Button size="sm" variant="secondary" onClick={() => handleBulkPublish(selected, true, clear)} disabled={selected.length > 1000}>
+                    <Globe size={14} /> {t('commerce_bulk_publish', 'Publish online')}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => handleBulkPublish(selected, false, clear)} disabled={selected.length > 1000}>
+                    <EyeOff size={14} /> {t('commerce_bulk_unpublish', 'Remove from online store')}
+                  </Button>
+                </>
+              )}
               <Button size="sm" variant="danger" onClick={() => handleBulkDelete(selected, clear)}>
                 <Trash2 size={14} /> {t('prod_bulk_delete', 'Delete selected')}
               </Button>

@@ -1,0 +1,87 @@
+// Online store (commerce) API client — specs/001-commerce-domain-foundation/contracts/backoffice-api.md.
+// Errors carry `code` / `field` (src/lib/api.ts); translate them with translateServerError.
+import { api } from './api';
+
+export type StoreMode = 'retail' | 'wholesale' | 'hybrid';
+export type StoreStatus = 'draft' | 'active' | 'paused';
+export type StockState = 'in_stock' | 'low_stock' | 'out_of_stock';
+export type UnavailableReason = 'not_published' | 'product_disabled' | 'product_deleted' | 'store_not_active' | 'commerce_off';
+
+export interface StoreSettings {
+  show_exact_stock: 0 | 1;
+  hide_out_of_stock: 0 | 1;
+  show_local_price: 0 | 1;
+  category_order: string[];
+}
+
+export interface Store {
+  id: number;
+  global_id: string;
+  name: string;
+  slug: string | null;
+  mode: StoreMode;
+  status: StoreStatus;
+  description: string | null;
+  logo_path: string | null;
+  cover_path: string | null;
+  primary_color: string | null;
+  contact_phone: string | null;
+  contact_whatsapp: string | null;
+  contact_email: string | null;
+  address: string | null;
+  default_language: 'en' | 'ar' | 'fr';
+  settings: StoreSettings;
+  public_url: string | null;
+}
+
+export interface CommerceStatus {
+  enabled: boolean;
+  online_license_valid: boolean;
+  store: Pick<Store, 'id' | 'global_id' | 'name' | 'slug' | 'mode' | 'status'> | null;
+}
+
+export interface ListingView {
+  id: number;
+  global_id: string;
+  store_id: number;
+  product_id: number;
+  published: boolean;
+  title: string | null;
+  description: string | null;
+  images: string[];
+  store_category: string | null;
+  sort_order: number;
+  min_quantity: number | null;
+  orderable_unit_ids: number[] | null;
+  display_title: string;
+  category: string | null;
+  visible: boolean;
+  unavailable_reason: UnavailableReason | null;
+  stock_state: StockState;
+  price: number | null;
+  price_lbp: number | null;
+  unit: string;
+  units: { id: number; name: string; factor: number; price: number; price_lbp: number | null }[];
+  product: { id: number; name: string; barcode: string | null; active: number; stock: number } | null;
+}
+
+export type StoreInput = Partial<Omit<Store, 'id' | 'global_id' | 'slug' | 'status' | 'public_url' | 'settings'>> & { settings?: Partial<StoreSettings> };
+export type ListingInput = Partial<Pick<ListingView, 'published' | 'title' | 'description' | 'images' | 'store_category' | 'sort_order' | 'min_quantity' | 'orderable_unit_ids'>>;
+
+export const commerceApi = {
+  status: () => api.get<CommerceStatus>('/api/commerce/status'),
+  setEnabled: (enabled: boolean) => api.put<CommerceStatus>('/api/commerce/status', { enabled }),
+  stores: () => api.get<Store[]>('/api/commerce/stores'),
+  createStore: (body: StoreInput) => api.post<Store>('/api/commerce/stores', body),
+  updateStore: (id: number, body: StoreInput) => api.put<Store>(`/api/commerce/stores/${id}`, body),
+  claimSlug: (id: number, slug: string) => api.post<Store>(`/api/commerce/stores/${id}/slug`, { slug }),
+  setStatus: (id: number, status: 'active' | 'paused') => api.post<Store>(`/api/commerce/stores/${id}/status`, { status }),
+  deleteStore: (id: number) => api.del<{ ok: true }>(`/api/commerce/stores/${id}`),
+  listings: (storeId: number, q?: { published?: '0' | '1'; category?: string; search?: string; limit?: number; offset?: number }) =>
+    api.get<{ rows: ListingView[]; total: number }>(`/api/commerce/stores/${storeId}/listings`, q),
+  productListings: (productId: number) => api.get<ListingView[]>(`/api/commerce/products/${productId}/listings`),
+  upsertListing: (storeId: number, productId: number, body: ListingInput) => api.put<ListingView>(`/api/commerce/stores/${storeId}/listings/${productId}`, body),
+  deleteListing: (storeId: number, productId: number) => api.del<{ ok: true }>(`/api/commerce/stores/${storeId}/listings/${productId}`),
+  bulkPublish: (storeId: number, productIds: number[], published: boolean) =>
+    api.post<{ created: number; updated: number }>(`/api/commerce/stores/${storeId}/listings/bulk`, { product_ids: productIds, published }),
+};

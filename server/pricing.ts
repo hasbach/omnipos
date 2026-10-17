@@ -26,6 +26,9 @@ export interface TierProduct {
 // USD unit price for a given price level, USD tier chain (super_wholesale falls back to
 // wholesale, then to retail). A tier value only counts when actually set — NULL/0 means "not
 // configured for this product", not "free".
+// Retail-tier parity: the online store's public price (cloud function store_public_listings in
+// supabase/migrations/2026-10-18_commerce_store_foundation.sql) mirrors the RETAIL branch of this and
+// uomUnitPrice — product.price / product_units.price. Change one, change the other.
 export function tierUnitPrice(product: TierProduct, level: PriceLevel): number {
   if (level === 'super_wholesale') {
     if (product.price_super_wholesale && product.price_super_wholesale > 0) return product.price_super_wholesale;

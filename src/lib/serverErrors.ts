@@ -205,6 +205,12 @@ export function translateServerError(err: unknown, t: Translate): string {
       return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
   }
 
+  // Online store (server/commerce.ts): every code has a commerce_err_<code> string in
+  // src/intl/locales/commerce.ts; the server's English message is the fallback.
+  if (e.code && (/^(COMMERCE|STORE|LISTING)_/.test(e.code) || e.code === 'PRODUCT_NOT_FOUND')) {
+    return t(`commerce_err_${e.code.toLowerCase()}`, rawMessage);
+  }
+
   if (e.code === 'CREDIT_LIMIT') {
     // The credit-limit amount isn't carried as a separate field — it's embedded in the server's
     // own message text, so fall through to the text-pattern match below to extract and reformat it.
