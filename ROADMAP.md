@@ -16,7 +16,7 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 
 | # | Item | Spec | Status |
 |---|------|------|--------|
-| 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) | Spec done, clarified — next: plan |
+| 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | Slice A (store & listings, what 002 needs) planned — next: tasks. Slice B (relationships, orders, posting) not planned |
 | 002 | Tenant online store (activation, slug, branding, product publishing) | | Not started |
 | 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | | Not started |
 | 004 | Business-to-business relationships (request, approve, terms) | | Not started |
@@ -33,8 +33,6 @@ Other items: _(add fixes and ideas here)_
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
 - [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.
 - [ ] Sync: product deletes are hard deletes locally, so they never reach the cloud.
-- [ ] **Cloud migration pending:** apply `supabase/migrations/2026-10-07_synced_at.sql` (safe while registers run
-      >= 1.7.6). Until then 1.7.8 uses the overlapped updated_at cursor.
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —
