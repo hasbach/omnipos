@@ -41,6 +41,10 @@ the shop never maintains a second catalogue.
   002 ships only the OmniPOS subdomain and path addresses.
 - Q: What limits apply to product photos? → A: Up to 4 photos per product; JPEG, PNG or WebP up to 5 MB each,
   automatically resized to web size before upload.
+- Q: Can a Wholesale-mode store open a public storefront? → A: No. In 002 only Retail and Hybrid stores can be opened
+  publicly; a Wholesale store stays closed until private B2B stores arrive with business relationships (004–005).
+  Business types are descriptive labels, never permissions; wholesale catalogs and prices are visible only through
+  approved business relationships.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -137,8 +141,8 @@ address and check the page; inspect every storefront page and its underlying dat
 
 **Acceptance Scenarios**:
 
-1. **Given** a store that is paused, still a draft, deleted, belongs to a business with commerce off or with an expired
-   online license, **When** anyone opens its address, **Then** they see a polite "store unavailable" page that does not
+1. **Given** a store that is paused, still a draft, deleted, in Wholesale mode, belongs to a business with commerce off
+   or with an expired online license, **When** anyone opens its address, **Then** they see a polite "store unavailable" page that does not
    reveal which of these is the reason or show any product.
 2. **Given** an address that was never claimed, **When** it is opened, **Then** the visitor sees a "store not found" page
    with a link to the OmniPOS website.
@@ -269,9 +273,12 @@ reaching the cloud database.
 
 **Availability and privacy**
 
-- **FR-016**: A storefront MUST be public only while the store is open, the business has commerce on, the business's
-  online license is valid, and neither the store nor the business is deleted. Otherwise the address MUST show the same
+- **FR-016**: A storefront MUST be public only while the store is open, its mode is Retail or Hybrid, the business has
+  commerce on, the business's online license is valid, and neither the store nor the business is deleted. Otherwise the address MUST show the same
   neutral "store unavailable" page for every reason.
+- **FR-016a**: In the back office, a store in Wholesale mode MUST NOT be openable to the public; Settings → Online store
+  MUST explain that private B2B stores come with business relationships. Switching an open store to Wholesale mode
+  MUST take it off the public storefront (within the refresh period, FR-022).
 - **FR-017**: An address that was never claimed MUST show a "store not found" page.
 - **FR-018**: The storefront MUST read store data only through the public catalog's allow-listed fields; it MUST NOT
   expose costs, non-retail prices, reorder levels, internal identifiers, other customers, suppliers, invoices, staff
@@ -356,8 +363,10 @@ reaching the cloud database.
 - The storefront is hosted alongside the Live Monitor on the same hosting provider, on a plan that allows commercial
   use, wildcard subdomains, custom domains and caching. Hosting cost is accepted as part of offering stores.
 - Store data reaches the cloud through the tills' existing sync; the storefront never writes to store data.
-- Only the retail price tier is public; Wholesale and Hybrid store modes keep showing retail prices until business
-  relationships exist (Feature 004/005).
+- Only the retail price tier is public. Hybrid stores show retail prices publicly; Wholesale stores are not public at
+  all in this feature. Business types (Wholesaler, Retailer, …) are descriptive only; who may see a wholesaler's
+  catalog and prices is decided by approved business relationships (Features 004–006), and whether a business can be
+  found by others by its discovery settings (Feature 011).
 - Contacting the shop (WhatsApp, phone, email) is the only visitor action; it opens the visitor's own apps and records
   nothing in OmniPOS.
 - Old addresses are not redirected after a shop changes its address.
