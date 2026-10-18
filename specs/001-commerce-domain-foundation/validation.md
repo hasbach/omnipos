@@ -46,5 +46,11 @@ prices, ids, barcode or tenant data); retail prices and units; stock states, hid
 settings; category order; search as plain text; paging; privileges (anon may call only the two public functions;
 helpers closed to API roles); every `claim_store_slug` outcome including the placeholder row and slug freeing.
 
-**Still to do:** apply the migration to the live project in the Supabase SQL editor, run the check script there,
-let a register push a store, then repeat the "Open the store" step and the two sample `store_public_*` queries.
+**Live project (2026-10-18):** migration applied by the user and verified read-only: both tables with RLS and only
+the owner policy (no anon policy on `stores`, `store_listings`, `products`); `idx_stores_slug_live`; sync triggers;
+the six functions exist with the intended grants (anon: the two public functions only; authenticated: also
+`claim_store_slug`; helpers closed; nothing granted to PUBLIC — the read-only role itself is refused); allow-list
+check returns 0 rows. No store has been pushed yet.
+
+**Still to do:** once a register running this branch pushes a store, repeat the "Open the store" step and the two
+sample `store_public_*` queries (check script, section 6).

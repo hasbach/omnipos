@@ -29,9 +29,8 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | 011 | OmniPOS marketplace (business/product discovery) | | Not started |
 
 Other items: _(add fixes and ideas here)_
-- [ ] **Cloud migration pending (commerce):** apply `supabase/migrations/2026-10-18_commerce_store_foundation.sql`, then run
-      `supabase/checks/2026-10-18_commerce_store_checks.sql`. Safe before the release: the app skips the tables until
-      they exist. Needed before any store can be opened.
+- [x] Cloud migration (commerce) `2026-10-18_commerce_store_foundation.sql` applied 2026-10-18 and verified read-only
+      (tables, RLS with no anon policy, slug index, sync triggers, 6 functions with the intended grants, allow-list clean).
 - [ ] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`) on a copy of a real customer database with
       settled days.
 - [ ] 002 storefront: stock online lags the registers (≈ 60 s online, longer offline) — label it as indicative and
