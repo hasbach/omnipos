@@ -85,6 +85,14 @@ const { installPermissions } = await import("../server/permissions.js");
 installPermissions(app, authenticate, () => {});
 setupRoutes(app, wss, () => {}, authenticate);
 
+// Online store: there is no cloud here, so claim store web addresses against this throwaway DB instead
+// of the cloud claim_store_slug RPC (same "one live store per address" rule), and the store can be opened.
+const { __setSlugClaimer } = await import("../server/commerce.js");
+__setSlugClaimer(async (_tenantId, storeGlobalId, slug) => {
+  const clash = db.prepare("SELECT 1 FROM stores WHERE lower(slug) = ? AND deleted_at IS NULL AND global_id <> ?").get(slug, storeGlobalId);
+  return clash ? { ok: false, code: "taken" } : { ok: true, code: "ok" };
+});
+
 // Transactions through the REAL API so every total/stock/balance/cost rule applies, then backdated.
 await new Promise<void>((r) => server.listen(PORT, r));
 const call = async (method: string, url: string, body?: any) => {
