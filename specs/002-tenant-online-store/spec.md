@@ -29,6 +29,19 @@ The storefront is a window, not a till: it shows published products and lets vis
 can be ordered or paid online yet (that is Feature 003). Everything it shows comes from the shop's own products, so
 the shop never maintains a second catalogue.
 
+## Clarifications
+
+### Session 2026-10-18
+
+- Q: Which domain should host every store's default address? → A: Buy a short, dedicated new domain for storefronts
+  (e.g. `omnipos.shop` / `omnipos.store`); exact name picked after an availability check, before deployment.
+- Q: How can visitors contact a shop from the storefront? → A: WhatsApp, phone and email — one button per contact
+  detail the shop filled in, on the store page and every product page.
+- Q: Are custom domains part of this feature? → A: No — they become a separate feature after storefronts are live;
+  002 ships only the OmniPOS subdomain and path addresses.
+- Q: What limits apply to product photos? → A: Up to 4 photos per product; JPEG, PNG or WebP up to 5 MB each,
+  automatically resized to web size before upload.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - A visitor opens a shop's address and browses its products (Priority: P1)
@@ -76,8 +89,9 @@ product in the back office, and use each contact button.
    sold in with that unit's price, and its stock indicator.
 2. **Given** a product page, **When** the shop has a WhatsApp number, **Then** an "Ask on WhatsApp" button opens a
    conversation with the shop, pre-filled with the product name and page link, in the store's language.
-3. **Given** a product page, **When** the shop has a phone number, **Then** a "Call" button starts a call; when the shop
-   has neither, no contact button is shown.
+3. **Given** a product page, **When** the shop has a phone number or an email address, **Then** a "Call" button starts a
+   call and an "Email" button opens a new email naming the product; when the shop has no contact detail at all, no
+   contact button is shown.
 4. **Given** a product page link, **When** it is shared on WhatsApp or social media, **Then** the preview shows the
    product name, price and first photo.
 5. **Given** a product that is unpublished, disabled or deleted after the link was shared, **When** someone opens the
@@ -149,7 +163,7 @@ order; copy the address from Settings and open it.
 
 **Acceptance Scenarios**:
 
-1. **Given** a saved product, **When** the owner adds photos, **Then** up to 8 photos can be attached, the first is the
+1. **Given** a saved product, **When** the owner adds photos, **Then** up to 4 photos can be attached, the first is the
    main photo, the order can be changed and any photo removed, and the storefront reflects the change within the
    refresh time (FR-022).
 2. **Given** a photo that is too large or not an image, **When** the owner tries to add it, **Then** it is refused with
@@ -186,31 +200,6 @@ reaching the cloud database.
 
 ---
 
-### User Story 7 - A shop uses its own domain name (Priority: P3)
-
-ABC Market owns `shop.abcmarket.com`. In Settings → Online store the owner enters it, follows the on-screen
-instruction to add one record at their domain provider, and after the check succeeds the storefront opens at their own
-domain with a secure connection. The OmniPOS address keeps working and points to the same store.
-
-**Why this priority**: valuable for established shops and a possible paid add-on, but every shop can sell with the
-default address. It can ship separately after the P1/P2 stories.
-
-**Independent Test**: Connect a test domain, verify it, open the storefront at that domain, then disconnect it.
-
-**Acceptance Scenarios**:
-
-1. **Given** an open store, **When** the owner enters a domain name, **Then** they see exactly which record to add and the
-   domain is shown as "Waiting for setup".
-2. **Given** the record has been added, **When** the check runs, **Then** the domain becomes "Connected", secure
-   access is set up automatically, and the storefront opens at that domain.
-3. **Given** a domain already connected to another store, **When** an owner tries to add it, **Then** it is refused.
-4. **Given** a connected domain, **When** the owner removes it or the record disappears, **Then** that domain stops
-   showing the store and the default address keeps working.
-5. **Given** a user without permission to manage the store, **When** they open the domain setting, **Then** they cannot
-   add or remove domains.
-
----
-
 ### Edge Cases
 
 - A product's price changes while a visitor has the page open: the next page load shows the new price; nothing is
@@ -240,7 +229,8 @@ default address. It can ship separately after the P1/P2 stories.
 **Store address**
 
 - **FR-001**: Every open store MUST be reachable at `<address>.<storefront domain>`, where `<address>` is the web address
-  the shop claimed in the back office and the storefront domain is a single domain owned by OmniPOS.
+  the shop claimed in the back office and the storefront domain is a single short domain bought by OmniPOS only for
+  storefronts (nothing else is hosted on it).
 - **FR-002**: Every open store MUST also be reachable at `<storefront domain>/s/<address>` (path form), for places
   where a subdomain is impractical; both forms show the same store.
 - **FR-003**: Addresses MUST be matched case-insensitively.
@@ -264,6 +254,8 @@ default address. It can ship separately after the P1/P2 stories.
 - **FR-010**: Each product MUST have its own page and shareable link showing: photos (main first, swipeable), online
   title, description, category, retail price in USD, local price when shown, each unit sold (name, contents, price), stock
   indicator, and contact buttons.
+- **FR-010a**: Contact buttons (WhatsApp, Call, Email) MUST appear on the store page and every product page, one per
+  contact detail the shop filled in, and none when the shop filled in none.
 - **FR-011**: The WhatsApp button MUST open a conversation with the shop's WhatsApp number, pre-filled in the store
   language with the product name and its link (product page) or the store link (store page).
 - **FR-012**: Store and product pages MUST provide link previews for messaging and social apps (title, short
@@ -304,10 +296,11 @@ default address. It can ship separately after the P1/P2 stories.
 
 **Photos (back office)**
 
-- **FR-024**: Users allowed to publish products MUST be able to add up to 8 photos per listing from the product editor's
+- **FR-024**: Users allowed to publish products MUST be able to add up to 4 photos per listing from the product editor's
   "Online store" tab, choose the main photo, reorder and remove photos.
-- **FR-025**: Photos MUST be JPEG, PNG or WebP, at most 5 MB each; larger images MUST be reduced to a storefront-friendly
-  size before they are stored. Other files MUST be refused with a clear message.
+- **FR-025**: Photos MUST be JPEG, PNG or WebP, at most 5 MB each, and MUST be resized before they are stored so their
+  longest side is at most 1600 pixels. Other files, and a 5th photo, MUST be refused with a clear message. The listing
+  photo limit set in 001 (8) is lowered to 4 everywhere it is checked.
 - **FR-026**: Adding or removing photos MUST require an internet connection and say so when offline; all other product
   and store edits MUST keep working offline.
 - **FR-027**: Photos MUST be stored per business so that one business can never add, replace or remove another
@@ -318,29 +311,20 @@ default address. It can ship separately after the P1/P2 stories.
 - **FR-028**: The owner MUST be able to preview the storefront of a draft or paused store from the back office; the
   preview MUST not be reachable by the public.
 
-**Custom domains (separately shippable)**
-
-- **FR-029**: A user allowed to manage the store MUST be able to connect one custom domain (or subdomain) per store,
-  see the exact DNS record to add, see its status (waiting for setup, connected, failed), and remove it.
-- **FR-030**: A custom domain MUST be connected only after the system verifies the DNS record; secure access MUST be set
-  up automatically; one domain MUST belong to at most one store.
-- **FR-031**: The default OmniPOS address MUST keep working when a custom domain is connected or removed.
-
 **Scope boundary**
 
 - **FR-032**: This feature MUST NOT include a cart, checkout, orders, payments, visitor accounts, wholesale or
-  customer-specific pricing, or cross-store discovery.
+  customer-specific pricing, cross-store discovery, or shop-owned custom domains (a separate later feature).
 
 ### Key Entities
 
-- **Store (existing, 001)**: name, address, mode, status, branding, contact details, language, display settings. Gains
-  nothing new except possibly a cover image path and a custom domain link.
+- **Store (existing, 001)**: name, address, mode, status, branding, contact details, language, display settings. Its
+  existing cover-image field becomes usable (upload in the back office).
 - **Store Listing (existing, 001)**: references a product; its photo list now holds real uploaded photos in display
   order (first = main).
 - **Listing Photo**: an uploaded image belonging to one business and one listing, stored in cloud storage, with its
   display order.
 - **Storefront Domain**: the single OmniPOS-owned domain that hosts every store's default subdomain and the path form.
-- **Custom Domain**: a domain connected to one store, with verification status, the DNS record required, and dates.
 - **Public Catalog (existing, 001)**: the allow-listed read model the storefront uses (store identity, categories,
   listings, units, prices, stock indicator).
 
@@ -364,13 +348,11 @@ default address. It can ship separately after the P1/P2 stories.
   scans, and Arabic pages lay out right to left without horizontal scrolling at 360 pixels wide.
 - **SC-008**: Back-office changes appear on the storefront within 5 minutes in 95% of measurements once the tills have
   synced.
-- **SC-009** (custom domains): a test domain goes from entered to connected with secure access in under 30 minutes after
-  the DNS record is added, without OmniPOS staff involvement.
 
 ## Assumptions
 
-- The storefront domain will be bought and configured by OmniPOS (for example `omnipos.shop`). The exact name is a
-  business decision that does not change this specification; it is needed before deployment.
+- The storefront domain is a new, dedicated short domain bought by OmniPOS (for example `omnipos.shop`); the exact
+  name is chosen after an availability check and is needed before deployment, not before planning.
 - The storefront is hosted alongside the Live Monitor on the same hosting provider, on a plan that allows commercial
   use, wildcard subdomains, custom domains and caching. Hosting cost is accepted as part of offering stores.
 - Store data reaches the cloud through the tills' existing sync; the storefront never writes to store data.
@@ -382,5 +364,6 @@ default address. It can ship separately after the P1/P2 stories.
 - Visitor language choice is remembered locally on the visitor's device only.
 - The unit-restriction setting of listings (orderable units) stays unenforced on the storefront until ordering (003);
   all live units are shown.
-- Custom domains may later become a paid add-on; pricing and billing are out of scope here.
+- Shop-owned custom domains (customer DNS record, verification, automatic secure access) are a separate later
+  feature, possibly a paid add-on; the address model here (one store ⇔ one claimed address) must not block it.
 - Analytics on storefront visits are out of scope for this feature.

@@ -17,7 +17,7 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | # | Item | Spec | Status |
 |---|------|------|--------|
 | 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | **Slice A implemented** on branch `001-commerce-domain-foundation` (not merged; [validation](specs/001-commerce-domain-foundation/validation.md)): commerce on/off, store + web address, listings, store.* permissions, sync, public catalog functions. Slice B (relationships, orders, posting) not planned |
-| 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) | Spec done (branch `002-tenant-online-store`, on top of 001) — next: clarify / plan. Public storefront on the 001 public catalog: subdomain + path address, product pages, WhatsApp contact, photos, caching; custom domains as a separate P3 story |
+| 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) | Spec done + clarified (branch `002-tenant-online-store`, on top of 001) — next: plan. Public storefront on the 001 public catalog: subdomain of a new storefront domain + path address, product pages, WhatsApp/phone/email contact, up to 4 photos, caching |
 | 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | | Not started |
 | 004 | Business-to-business relationships (request, approve, terms) | | Not started |
 | 005 | B2B wholesale storefront (customer pricing, units, minimums, reorder) | | Not started |
@@ -27,12 +27,15 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | 009 | Supply-chain commerce (manufacturer → importer → distributor → wholesaler → retailer) | | Not started |
 | 010 | Delivery & fulfillment (drivers, zones, fees, proof of delivery) | | Not started |
 | 011 | OmniPOS marketplace (business/product discovery) | | Not started |
+| 012 | Shop-owned custom domains for online stores (DNS record, verification, automatic HTTPS) | | Not started — split out of 002 on 2026-10-18 |
 
 Other items: _(add fixes and ideas here)_
 - [x] Cloud migration (commerce) `2026-10-18_commerce_store_foundation.sql` applied 2026-10-18 and verified read-only
       (tables, RLS with no anon policy, slug index, sync triggers, 6 functions with the intended grants, allow-list clean).
 - [ ] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`) on a copy of a real customer database with
       settled days.
+- [ ] 002: buy a short dedicated storefront domain (e.g. omnipos.shop / omnipos.store) after an availability check;
+      needed before deployment.
 - [ ] 002 storefront: stock online lags the registers (≈ 60 s online, longer offline) — label it as indicative and
       re-check at order time (003). Supabase is already over the Free-plan egress quota: serve the catalog from Vercel
       with ~60 s edge caching per store/page, and long cache headers or a CDN for images.
