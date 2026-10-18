@@ -16,8 +16,8 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 
 | # | Item | Spec | Status |
 |---|------|------|--------|
-| 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | Slice A (store & listings, what 002 needs) planned — next: tasks. Slice B (relationships, orders, posting) not planned |
-| 002 | Tenant online store (activation, slug, branding, product publishing) | | Not started |
+| 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | **Slice A implemented** on branch `001-commerce-domain-foundation` (not merged; [validation](specs/001-commerce-domain-foundation/validation.md)): commerce on/off, store + web address, listings, store.* permissions, sync, public catalog functions. Slice B (relationships, orders, posting) not planned |
+| 002 | Tenant online store (activation, slug, branding, product publishing) | | Not started — back office done in 001 Slice A; 002 = public storefront on `store_public_get` / `store_public_listings`, image upload, caching |
 | 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | | Not started |
 | 004 | Business-to-business relationships (request, approve, terms) | | Not started |
 | 005 | B2B wholesale storefront (customer pricing, units, minimums, reorder) | | Not started |
@@ -29,6 +29,16 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | 011 | OmniPOS marketplace (business/product discovery) | | Not started |
 
 Other items: _(add fixes and ideas here)_
+- [ ] **Cloud migration pending (commerce):** apply `supabase/migrations/2026-10-18_commerce_store_foundation.sql`, then run
+      `supabase/checks/2026-10-18_commerce_store_checks.sql`. Safe before the release: the app skips the tables until
+      they exist. Needed before any store can be opened.
+- [ ] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`) on a copy of a real customer database with
+      settled days.
+- [ ] 002 storefront: stock online lags the registers (≈ 60 s online, longer offline) — label it as indicative and
+      re-check at order time (003). Supabase is already over the Free-plan egress quota: serve the catalog from Vercel
+      with ~60 s edge caching per store/page, and long cache headers or a CDN for images.
+- [ ] 003 ordering: `store_listings.orderable_unit_ids` holds the authoring register's local unit ids; switch to unit
+      global ids before enforcing it (the cloud catalog ignores it today).
 - [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
 - [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.

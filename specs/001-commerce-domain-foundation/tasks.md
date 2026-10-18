@@ -114,10 +114,10 @@ US5 despite its priority.
 
 ## Phase 6: Polish & cross-cutting
 
-- [ ] T033 [P] Arabic/RTL audit of the new Online store section and product card (DOM scan for Latin text in Arabic mode, as done for 1.2.1) in the preview server; fix any untranslated string in `src/intl/locales/commerce.ts`
-- [ ] T034 Run the gates: `npm test`, `npx tsc --noEmit` (no new errors), `npm run build`, `npm run build:server`
-- [ ] T035 Run quickstart.md §3 walk-through in the preview server (`omnipos-preview`) and §2 dry-run on a copy of a real tenant DB; record results in the PR description
-- [ ] T036 [P] Update `ROADMAP.md` (001 Slice A status, cloud migration `2026-10-18_commerce_store_foundation.sql` pending for the user) and note the stock-lag and egress caveats for 002
+- [X] T033 [P] Arabic/RTL audit of the new Online store section and product card (DOM scan for Latin text in Arabic mode, as done for 1.2.1) in the preview server; fix any untranslated string in `src/intl/locales/commerce.ts` — Done note: Arabic DOM scans of Settings → Online store and the product tab find only seeded names / the ASCII address example; French scan finds no English strings.
+- [X] T034 Run the gates: `npm test`, `npx tsc --noEmit` (no new errors), `npm run build`, `npm run build:server` — Done note: 389/389 tests, tsc 0 errors, both builds pass.
+- [X] T035 Run quickstart.md §3 walk-through in the preview server (`omnipos-preview`) and §2 dry-run on a copy of a real tenant DB; record results in the PR description — Done note: results in [validation.md](validation.md) (no PR yet). The dry run on a real customer DB copy is still to do (none on the dev PC).
+- [X] T036 [P] Update `ROADMAP.md` (001 Slice A status, cloud migration `2026-10-18_commerce_store_foundation.sql` pending for the user) and note the stock-lag and egress caveats for 002 — Done note: ROADMAP rows 001/002 + To do items (migration, customer dry run, 002 lag/egress, 003 unit ids).
 
 ---
 
