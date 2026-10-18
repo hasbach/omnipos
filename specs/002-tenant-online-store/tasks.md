@@ -120,19 +120,19 @@ privacy (P1), US5 photos & sharing (P2), US6 speed & cost (P2). Custom domains a
 
 **Independent test**: header assertions per route; burst script shows upstream calls ≪ requests.
 
-- [ ] T037 [P] [US6] Extend `tests/storefront-routing.test.ts`: identical URLs produce identical bodies and cache headers; no response varies on cookies or sets cookies; static asset URLs carry a content-hash version query (`?v=<hash>` computed at build/start from file contents)
-- [ ] T038 [US6] Add `storefront/scripts/burst.ts` (dev tool): fires N requests over a URL list against a base URL and reports status mix, p95 latency and, with `--count-upstream` against the dev server, how many DataSource calls were made — for SC-001/SC-002 checks in quickstart §4
-- [ ] T039 [US6] Add `storefront/src/limits.ts` page-weight guard used in a test: rendered home HTML ≤ 60 KB with 48 cards, CSS ≤ 20 KB, JS ≤ 10 KB
+- [X] T037 [P] [US6] Extend `tests/storefront-routing.test.ts`: identical URLs produce identical bodies and cache headers; no response varies on cookies or sets cookies; static asset URLs carry a content-hash version query (`?v=<hash>` computed at build/start from file contents) — Done note: identical URLs → identical bodies/headers, no `Vary`; asset-version hash test (LF-normalised).
+- [X] T038 [US6] Add `storefront/scripts/burst.ts` (dev tool): fires N requests over a URL list against a base URL and reports status mix, p95 latency and, with `--count-upstream` against the dev server, how many DataSource calls were made — for SC-001/SC-002 checks in quickstart §4 — Done note (changed): counts Vercel's `x-vercel-cache` HIT/MISS against a deployed URL (every MISS is a Supabase call) instead of instrumenting the dev server.
+- [X] T039 [US6] Add `storefront/src/limits.ts` page-weight guard used in a test: rendered home HTML ≤ 60 KB with 48 cards, CSS ≤ 20 KB, JS ≤ 10 KB — Done note: home with 48 cards, CSS 7 KB, JS 2 KB — all within budget.
 
 ---
 
 ## Phase 9: Polish & cross-cutting
 
-- [ ] T040 [P] Write `supabase/checks/2026-10-19_storefront_checks.sql` (read-only: function signatures + grants incl. `store_public_listing` and `create_store_preview_token`, wholesale gate present in `_store_public_store` source, bucket settings, storage policies, `store_preview_tokens` RLS on with no policies)
-- [ ] T041 [P] Arabic/French audit of the storefront (fixture source via `storefront/dev-server.ts --source=fixture`) and of the new back-office strings in the preview server (DOM scan as in 001)
-- [ ] T042 Gates: `npm test`, `npx tsc --noEmit`, `npm run build`, `npm run build:server`; storefront type-checks
-- [ ] T043 Run quickstart §1–2 and record results in `specs/002-tenant-online-store/validation.md`
-- [ ] T044 [P] Update `ROADMAP.md` (002 status, pending: 002 cloud migration, storefront domain purchase, Vercel project + plan, deployment checks) and `storefront/README.md` deployment steps (Vercel project, env vars, apex + wildcard domains with Vercel nameservers)
+- [X] T040 [P] Write `supabase/checks/2026-10-19_storefront_checks.sql` (read-only: function signatures + grants incl. `store_public_listing` and `create_store_preview_token`, wholesale gate present in `_store_public_store` source, bucket settings, storage policies, `store_preview_tokens` RLS on with no policies) — Done note: also executed by `tests/commerce-sql.test.ts` on PGlite with every expected result asserted.
+- [X] T041 [P] Arabic/French audit of the storefront (fixture source via `storefront/dev-server.ts --source=fixture`) and of the new back-office strings in the preview server (DOM scan as in 001) — Done note: rendered-page scan (7 page kinds × ar/fr) finds no untranslated text; added an empty favicon link (no more /favicon.ico 404).
+- [X] T042 Gates: `npm test`, `npx tsc --noEmit`, `npm run build`, `npm run build:server`; storefront type-checks — Done note: 448/448 tests, tsc 0 errors, both builds pass.
+- [X] T043 Run quickstart §1–2 and record results in `specs/002-tenant-online-store/validation.md` — Done note: [validation.md](validation.md).
+- [X] T044 [P] Update `ROADMAP.md` (002 status, pending: 002 cloud migration, storefront domain purchase, Vercel project + plan, deployment checks) and `storefront/README.md` deployment steps (Vercel project, env vars, apex + wildcard domains with Vercel nameservers) — Done note: ROADMAP 002 row + pending items (002 migration, deployment, domain); README checks and step-by-step deployment.
 
 ---
 

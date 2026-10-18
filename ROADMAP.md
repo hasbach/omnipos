@@ -17,7 +17,7 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | # | Item | Spec | Status |
 |---|------|------|--------|
 | 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | **Slice A implemented** on branch `001-commerce-domain-foundation` (not merged; [validation](specs/001-commerce-domain-foundation/validation.md)): commerce on/off, store + web address, listings, store.* permissions, sync, public catalog functions. Slice B (relationships, orders, posting) not planned |
-| 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) | Spec + clarify + [plan](specs/002-tenant-online-store/plan.md) done, [tasks](specs/002-tenant-online-store/tasks.md) (44) ready (branch `002-tenant-online-store`, on top of 001) — next: implement. Server-rendered storefront on its own Vercel project, CDN-cached, image proxy, owner preview tokens. Public storefront on the 001 public catalog: subdomain of a new storefront domain + path address, product pages, WhatsApp/phone/email contact, up to 4 photos, caching |
+| 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) · [plan](specs/002-tenant-online-store/plan.md) · [validation](specs/002-tenant-online-store/validation.md) | **Implemented** on branch `002-tenant-online-store` (on top of 001, not merged; 44/44 tasks): server-rendered storefront (`storefront/`, own Vercel project, CDN-cached), store home / product pages, WhatsApp-phone-email contact, en/ar/fr + RTL, up to 4 photos + logo/cover, owner preview, Wholesale stores never public. Not deployed: needs the 002 cloud migration, the storefront domain and the Vercel project |
 | 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | | Not started |
 | 004 | Business-to-business relationships (request, approve, terms) | | Not started |
 | 005 | B2B wholesale storefront (customer pricing, units, minimums, reorder) | | Not started |
@@ -34,6 +34,12 @@ Other items: _(add fixes and ideas here)_
       (tables, RLS with no anon policy, slug index, sync triggers, 6 functions with the intended grants, allow-list clean).
 - [ ] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`) on a copy of a real customer database with
       settled days.
+- [ ] **Cloud migration pending (002):** apply `supabase/migrations/2026-10-19_storefront.sql`, then run
+      `supabase/checks/2026-10-19_storefront_checks.sql`. Needed for photos, logo/cover, preview links and the public
+      storefront (Wholesale stores never public). Safe before the release: older apps don't call these functions.
+- [ ] 002 deployment: Vercel project `omnipos-storefront` (Root Directory `storefront`, Pro plan, env vars, apex +
+      wildcard domains with Vercel nameservers) — steps in `storefront/README.md`; then quickstart §3–4 (live check,
+      WhatsApp preview, burst test < 5% upstream).
 - [ ] 002: buy a short dedicated storefront domain (e.g. omnipos.shop / omnipos.store) after an availability check;
       needed before deployment.
 - [ ] 002 storefront: stock online lags the registers (≈ 60 s online, longer offline) — label it as indicative and

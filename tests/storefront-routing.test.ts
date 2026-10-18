@@ -109,3 +109,48 @@ test("upstream failure: 503 page, not cached", async () => {
   assert.equal(r.status, 503);
   assert.equal(r.headers["Cache-Control"], "no-store");
 });
+
+// ---- speed and cost (US6) ---------------------------------------------------------------------------------
+
+test("identical URLs give identical bodies and cache headers (CDN-cacheable; nothing varies per visitor)", async () => {
+  const { get } = make();
+  for (const url of ["/", "/?c=Dairy", "/p/00000000-0000-4000-8000-000000000001", "/?lang=ar"]) {
+    const a = await get("beirut-market.omnipos.shop", url);
+    const b = await get("beirut-market.omnipos.shop", url);
+    assert.equal(body(a), body(b), url);
+    assert.deepEqual(a.headers, b.headers, url);
+    assert.equal(a.headers.Vary, undefined, `${url} must not vary`);
+  }
+});
+
+test("asset version matches the files (sha256 of css + js + svg, LF-normalised)", async () => {
+  const fs = await import("fs");
+  const crypto = await import("crypto");
+  const { ASSET_VERSION } = await import("../storefront/src/assets.js");
+  const content = ["storefront.css", "storefront.js", "placeholder.svg"]
+    .map((f) => fs.readFileSync(`storefront/public/${f}`, "utf8").replace(/\r\n/g, "\n")).join("");
+  const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 10);
+  assert.equal(ASSET_VERSION, hash, `update storefront/src/assets.ts to '${hash}'`);
+  const home = await make().get("beirut-market.omnipos.shop", "/");
+  assert.ok(body(home).includes("/storefront.css?v=test"), "pages reference the versioned stylesheet");
+});
+
+test("page weight: home with 48 cards ≤ 60 KB, stylesheet ≤ 20 KB, script ≤ 10 KB", async () => {
+  const fs = await import("fs");
+  const { LIMITS } = await import("../storefront/src/limits.js");
+  const data = new FixtureSource(demoFixture(200));
+  const r = await handle({ host: "beirut-market.omnipos.shop", url: "/" }, { config, data, assetVersion: "0123456789" });
+  const html = body(r);
+  assert.equal((html.match(/class="sf-card"/g) || []).length, 48);
+  assert.ok(Buffer.byteLength(html) <= LIMITS.homeHtmlBytes, `home is ${Buffer.byteLength(html)} bytes`);
+  assert.ok(fs.statSync("storefront/public/storefront.css").size <= LIMITS.cssBytes);
+  assert.ok(fs.statSync("storefront/public/storefront.js").size <= LIMITS.jsBytes);
+});
+
+test("a burst on one page costs one data-source call per render, and the CDN header lets the edge absorb the rest", async () => {
+  const { data, get } = make();
+  const before = data.calls;
+  const r = await get("beirut-market.omnipos.shop", "/");
+  assert.equal(data.calls - before, 2, "home = store + listings");
+  assert.match(r.headers["Cache-Control"], /s-maxage=240/);
+});

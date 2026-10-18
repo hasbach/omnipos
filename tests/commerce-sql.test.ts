@@ -191,3 +191,31 @@ test("storage: bucket settings; a business writes only inside its own folder", a
   await user(A, "DELETE FROM storage.objects WHERE name = $1", [own]);
   assert.equal(await count(), 0);
 });
+
+test("supabase/checks/2026-10-19_storefront_checks.sql runs and every check shows its expected result", async () => {
+  const sql = fs.readFileSync(path.join(root, "supabase", "checks", "2026-10-19_storefront_checks.sql"), "utf8");
+  const statements = sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n").split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
+  assert.equal(statements.length, 7);
+  const r = [] as any[][];
+  for (const s of statements) r.push((await db.query(s)).rows as any[]);
+  const fns = Object.fromEntries(r[0].map((x) => [x.function_name, x]));
+  for (const f of Object.values(fns) as any[]) assert.equal(f.exists, true, f.function_name);
+  for (const f of ["store_public_get(text, text)", "store_public_listings(text, text, text, integer, integer, text)", "store_public_listing(text, uuid, text)"]) {
+    assert.equal(fns[`public.${f}`].anon, true, f);
+  }
+  for (const f of ["claim_store_slug(uuid, text)", "create_store_preview_token(uuid)"]) {
+    assert.equal(fns[`public.${f}`].anon, false, f);
+    assert.equal(fns[`public.${f}`].authenticated, true, f);
+  }
+  for (const f of Object.keys(fns).filter((k) => k.includes("._store_public_"))) {
+    assert.equal(fns[f].anon, false, f);
+    assert.equal(fns[f].authenticated, false, f);
+  }
+  assert.equal(Number(r[1][0].old_signatures), 0);
+  assert.equal(r[2][0].wholesale_gate_present, true);
+  assert.equal(r[3].length, 0, "allow-list");
+  assert.deepEqual({ ...r[4][0], policies: Number(r[4][0].policies) }, { rls_enabled: true, policies: 0 });
+  assert.equal(r[5][0].public, true);
+  assert.equal(r[6].length, 3);
+  for (const p of r[6]) assert.deepEqual(p.roles, ["authenticated"]);
+});

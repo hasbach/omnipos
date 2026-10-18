@@ -46,6 +46,7 @@ export function layout(i: LayoutInput): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 ${metaTags(i.meta, lang)}
 ${i.noindex ? '<meta name="robots" content="noindex">' : ''}
 ${color ? `<meta name="theme-color" content="${attr(color)}">` : ''}
