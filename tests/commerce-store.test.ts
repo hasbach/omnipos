@@ -224,3 +224,52 @@ test("reserved addresses: the back office, the storefront and the cloud claim us
     assert.equal(r.body.code, "STORE_SLUG_RESERVED", slug);
   }
 });
+
+test("wholesale stores can't be opened to the public; hybrid stores can", async () => {
+  const s = setup();
+  commerce.__setSlugClaimer(okClaimer);
+  const ws = await newStore(s.as, { name: "Meat Wholesale", mode: "wholesale" });
+  await app.api("POST", `/api/commerce/stores/${ws.id}/slug`, { ...s.as, body: { slug: `meat-${n}` } });
+  const refused = await app.api("POST", `/api/commerce/stores/${ws.id}/status`, { ...s.as, body: { status: "active" } });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.code, "STORE_MODE_NOT_PUBLIC");
+  assert.equal(refused.body.field, "mode");
+  assert.equal((app.db.prepare("SELECT status FROM stores WHERE id = ?").get(ws.id) as any).status, "draft");
+
+  const t = setup();
+  const hy = await newStore(t.as, { name: "Hybrid", mode: "hybrid" });
+  await app.api("POST", `/api/commerce/stores/${hy.id}/slug`, { ...t.as, body: { slug: `hybrid-${n}` } });
+  assert.equal((await app.api("POST", `/api/commerce/stores/${hy.id}/status`, { ...t.as, body: { status: "active" } })).body.status, "active");
+});
+
+test("status explains why a store is not public: commerce off, license, draft, paused, wholesale", async () => {
+  const s = setup();
+  commerce.__setSlugClaimer(okClaimer);
+  const store = await newStore(s.as);
+  const reason = async () => (await app.api("GET", "/api/commerce/status", s.as)).body.store;
+
+  let st = await reason();
+  assert.equal(st.publicly_visible, false);
+  assert.equal(st.not_public_reason, "license", "seeded tenants have no online license");
+  app.db.prepare("UPDATE tenants SET online_license_type = 'lifetime' WHERE id = ?").run(s.tenantId);
+  assert.equal((await reason()).not_public_reason, "draft");
+
+  await app.api("POST", `/api/commerce/stores/${store.id}/slug`, { ...s.as, body: { slug: `reason-${n}` } });
+  await app.api("POST", `/api/commerce/stores/${store.id}/status`, { ...s.as, body: { status: "active" } });
+  st = await reason();
+  assert.equal(st.publicly_visible, true);
+  assert.equal(st.not_public_reason, null);
+
+  // Switching an open store to wholesale keeps it "active" but takes it off the public storefront.
+  await app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body: { mode: "wholesale" } });
+  st = await reason();
+  assert.equal(st.status, "active");
+  assert.equal(st.publicly_visible, false);
+  assert.equal(st.not_public_reason, "wholesale");
+  await app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body: { mode: "retail" } });
+
+  await app.api("POST", `/api/commerce/stores/${store.id}/status`, { ...s.as, body: { status: "paused" } });
+  assert.equal((await reason()).not_public_reason, "paused");
+  app.db.prepare("UPDATE settings SET value = '0' WHERE tenant_id = ? AND key = 'commerce_enabled'").run(s.tenantId);
+  assert.equal((await reason()).not_public_reason, "commerce_off");
+});

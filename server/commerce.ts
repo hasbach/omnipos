@@ -42,11 +42,27 @@ export function isOnlineLicenseValid(tenantId: number): boolean {
   return Number.isFinite(expiry) && expiry > Date.now();
 }
 
-/** The tenant's first live store, as a small summary (the UI manages one store in Slice A). */
+export type NotPublicReason = 'commerce_off' | 'license' | 'draft' | 'paused' | 'wholesale';
+
+/** Why customers can't see the store right now (same gates as the cloud public catalog), or null when they can. */
+export function notPublicReason(tenantId: number, store: { status: string; mode: string }): NotPublicReason | null {
+  if (!isCommerceEnabled(tenantId)) return 'commerce_off';
+  if (!isOnlineLicenseValid(tenantId)) return 'license';
+  if (store.status === 'draft') return 'draft';
+  if (store.status === 'paused') return 'paused';
+  // Spec 002 (clarification A): only retail / hybrid stores are public until private B2B stores exist.
+  if (store.mode === 'wholesale') return 'wholesale';
+  return null;
+}
+
+/** The tenant's first live store, as a small summary (the UI manages one store). */
 export function storeSummary(tenantId: number) {
-  return (db.prepare(
+  const s = (db.prepare(
     "SELECT id, global_id, name, slug, mode, status FROM stores WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY id LIMIT 1"
   ).get(tenantId) as any) || null;
+  if (!s) return null;
+  const reason = notPublicReason(tenantId, s);
+  return { ...s, publicly_visible: reason === null, not_public_reason: reason };
 }
 
 export function commerceStatus(tenantId: number) {
@@ -204,6 +220,9 @@ export function setStoreStatus(tenantId: number, userId: number | null, storeId:
     throw fail(`A ${store.status} store cannot become ${status}.`, 'STORE_BAD_TRANSITION', 'status');
   }
   if (status === 'active' && !store.slug) throw fail('Choose the store web address before opening the store.', 'STORE_NOT_READY', 'slug', 409);
+  if (status === 'active' && store.mode === 'wholesale') {
+    throw fail('Wholesale stores are not public yet. Private B2B stores come with business relationships.', 'STORE_MODE_NOT_PUBLIC', 'mode', 409);
+  }
   db.prepare('UPDATE stores SET status = ? WHERE id = ? AND tenant_id = ?').run(status, storeId, tenantId);
   audit(tenantId, userId, 'store_status_change', 'store', storeId, { status: store.status }, { status });
   return storeView(loadStore(tenantId, storeId));

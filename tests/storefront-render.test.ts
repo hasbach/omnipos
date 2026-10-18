@@ -294,3 +294,54 @@ test("stylesheet is RTL-safe and phone-first: no physical left/right properties,
   assert.match(css, /\.sf-grid \{[^}]*repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css, /overflow-x: hidden/);
 });
+
+// ---- privacy and gates (US4) ------------------------------------------------------------------------------
+
+test("every non-public state shows one identical neutral page, with no products and no reason", async () => {
+  const states: [string, (fx: ReturnType<typeof demoFixture>) => void][] = [
+    ["paused", (fx) => { fx.store.status = "paused"; }],
+    ["draft", (fx) => { fx.store.status = "draft"; }],
+    ["wholesale", (fx) => { fx.store.mode = "wholesale"; }],
+    ["commerce off", (fx) => { fx.store.commerce_on = false; }],
+    ["license expired", (fx) => { fx.store.licensed = false; }],
+  ];
+  const unknown = await setup().get("/", "never-claimed.omnipos.shop");
+  assert.equal(unknown.status, 404);
+  for (const [label, mutate] of states) {
+    const r = await setup(mutate).get("/");
+    assert.equal(r.status, 404, label);
+    assert.equal(r.headers["Cache-Control"], "public, s-maxage=60", label);
+    assert.equal(r.html, unknown.html, `${label} looks exactly like an unknown address`);
+    assert.doesNotMatch(r.html, /Beirut Market|Whole Milk|sf-card/, label);
+    assert.match(r.html, /<meta name="robots" content="noindex">/, label);
+    const product = await setup(mutate).get(`/p/${P1}`);
+    assert.equal(product.html, unknown.html, `${label}: product links reveal nothing either`);
+  }
+  // Hybrid stores are public (retail prices).
+  assert.equal((await setup((fx) => { fx.store.mode = "hybrid"; }).get("/")).status, 200);
+});
+
+test("allow-list: no rendered page contains cost, tier prices, reorder levels, internal ids or barcodes", async () => {
+  const { fx, get } = setup((f) => { f.store.show_exact_stock = true; });
+  // Make sure a leak would be visible: the fixture carries these on the internal rows.
+  const barcode = fx.listings[0].barcode!;
+  const pages = [await get("/"), await get("/?c=Dairy&q=milk"), await get(`/p/${P1}`), await get(`/p/${P1}?lang=ar`), await get("/?page=99"),
+    await get("/p/00000000-0000-4000-8000-000000000999")];
+  for (const p of pages) {
+    for (const bad of [/cost/i, /min_price/, /wholesale/i, /reorder/i, /tenant_id/, /global_id/, /track_inventory/, new RegExp(barcode)]) {
+      assert.doesNotMatch(p.html, bad, `forbidden ${bad} in a ${p.status} page`);
+    }
+  }
+});
+
+test("search by barcode finds the product but never prints the barcode", async () => {
+  const { fx, get } = setup();
+  const barcode = fx.listings[1].barcode!;
+  const r = await get(`/?q=${barcode}`);
+  assert.equal(cards(r.html), 1);
+  // The visitor's own search text is echoed (search box, links that keep the search) — never inside a product card.
+  assert.match(r.html, new RegExp(`name="q" value="${barcode}"`));
+  const grid = r.html.slice(r.html.indexOf('<ul class="sf-grid">'), r.html.indexOf("</ul>"));
+  assert.ok(grid.length > 0);
+  assert.ok(!grid.includes(barcode), "barcode printed in a card");
+});

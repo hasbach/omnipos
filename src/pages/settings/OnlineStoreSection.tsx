@@ -64,7 +64,10 @@ export function OnlineStoreSection() {
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setErrors({});
-    try { await fn(); } catch (err: any) { showError(err); } finally { setBusy(false); }
+    try {
+      await fn();
+      setStatus(await commerceApi.status()); // keeps the "visible to customers" badge current
+    } catch (err: any) { showError(err); } finally { setBusy(false); }
   };
 
   const applyStore = (s: Store) => { setStore(s); setDetails(detailsOf(s)); setSlug(s.slug || ''); };
@@ -208,7 +211,12 @@ export function OnlineStoreSection() {
                   <StoreIcon size={18} />
                   <h3 className="text-sm font-semibold">{store.name}</h3>
                 </div>
-                <Badge variant={STATUS_VARIANT[store.status]}>{t(`commerce_status_${store.status}`)}</Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={STATUS_VARIANT[store.status]}>{t(`commerce_status_${store.status}`)}</Badge>
+                  {status.store && (status.store.publicly_visible
+                    ? <Badge variant="success">{t('commerce_public_yes')}</Badge>
+                    : <Badge variant="warning">{t(`commerce_not_public_${status.store.not_public_reason}`)}</Badge>)}
+                </div>
               </div>
             </CardHeader>
             <CardBody>
@@ -220,15 +228,18 @@ export function OnlineStoreSection() {
                   </div>
                 </Field>
                 <div className="flex flex-wrap items-center gap-2">
-                  {store.status !== 'active' && (
+                  {store.status !== 'active' && store.mode !== 'wholesale' && (
                     <Button onClick={() => changeStatus('active')} disabled={!editable || !store.slug}>{store.status === 'paused' ? t('commerce_resume_store') : t('commerce_open_store')}</Button>
                   )}
                   {store.status === 'active' && (
                     <Button variant="secondary" onClick={() => changeStatus('paused')} disabled={!editable}>{t('commerce_pause_store')}</Button>
                   )}
-                  {!store.slug && <span className="text-xs text-text-3">{t('commerce_open_needs_slug')}</span>}
+                  {!store.slug && store.mode !== 'wholesale' && <span className="text-xs text-text-3">{t('commerce_open_needs_slug')}</span>}
                 </div>
-                {err('status') && <p className="text-sm text-danger">{err('status')}</p>}
+                {store.mode === 'wholesale' && (
+                  <p className="rounded-[var(--radius-input)] bg-surface-2 px-3 py-2 text-sm text-text-2">{t('commerce_wholesale_note')}</p>
+                )}
+                {(err('status') || err('mode')) && <p className="text-sm text-danger">{err('status') || err('mode')}</p>}
               </div>
             </CardBody>
           </Card>

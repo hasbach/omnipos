@@ -5,6 +5,7 @@ import { api } from './api';
 export type StoreMode = 'retail' | 'wholesale' | 'hybrid';
 export type StoreStatus = 'draft' | 'active' | 'paused';
 export type StockState = 'in_stock' | 'low_stock' | 'out_of_stock';
+export type NotPublicReason = 'commerce_off' | 'license' | 'draft' | 'paused' | 'wholesale';
 export type UnavailableReason = 'not_published' | 'product_disabled' | 'product_deleted' | 'store_not_active' | 'commerce_off';
 
 export interface StoreSettings {
@@ -37,7 +38,10 @@ export interface Store {
 export interface CommerceStatus {
   enabled: boolean;
   online_license_valid: boolean;
-  store: Pick<Store, 'id' | 'global_id' | 'name' | 'slug' | 'mode' | 'status'> | null;
+  store: (Pick<Store, 'id' | 'global_id' | 'name' | 'slug' | 'mode' | 'status'> & {
+    publicly_visible: boolean;
+    not_public_reason: NotPublicReason | null;
+  }) | null;
 }
 
 export interface ListingView {
