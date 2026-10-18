@@ -3,14 +3,9 @@ import { attr, html } from '../escape.js';
 import { isRtl, t } from '../i18n.js';
 import type { Lang } from '../router.js';
 import type { PublicStore } from '../data.js';
+import { metaTags, type PageMeta } from '../seo.js';
 
-export interface PageMeta {
-  title: string;
-  description?: string | null;
-  /** Absolute image URL for link previews. */
-  image?: string | null;
-  canonical?: string | null;
-}
+export type { PageMeta };
 
 export interface LayoutInput {
   lang: Lang;
@@ -35,24 +30,15 @@ function header(store: PublicStore | null | undefined, homeHref: string): string
 }
 
 export function layout(i: LayoutInput): string {
-  const { lang, meta } = i;
+  const { lang } = i;
   const color = i.store?.primary_color && /^#[0-9a-f]{6}$/i.test(i.store.primary_color) ? i.store.primary_color : null;
-  const og = [
-    `<meta property="og:type" content="website">`,
-    `<meta property="og:title" content="${attr(meta.title)}">`,
-    meta.description ? `<meta property="og:description" content="${attr(meta.description)}">` : '',
-    meta.description ? `<meta name="description" content="${attr(meta.description)}">` : '',
-    meta.image ? `<meta property="og:image" content="${attr(meta.image)}">` : '',
-    meta.canonical ? `<meta property="og:url" content="${attr(meta.canonical)}"><link rel="canonical" href="${attr(meta.canonical)}">` : '',
-  ].filter(Boolean).join('\n');
   const preview = i.store?.is_preview ? `<div class="sf-preview" role="status">${html(t(lang, 'preview_banner'))}</div>` : '';
   return `<!doctype html>
 <html lang="${lang}" dir="${isRtl(lang) ? 'rtl' : 'ltr'}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${html(meta.title)}</title>
-${og}
+${metaTags(i.meta, lang)}
 ${i.noindex ? '<meta name="robots" content="noindex">' : ''}
 ${color ? `<meta name="theme-color" content="${attr(color)}">` : ''}
 <link rel="stylesheet" href="/storefront.css?v=${attr(i.assetVersion)}">

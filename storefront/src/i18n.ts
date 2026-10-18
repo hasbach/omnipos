@@ -35,6 +35,13 @@ const en: Dict = {
   sold_as: 'Sold as',
   unit_contains: '{count} × {unit}',
   category: 'Category',
+  contact_whatsapp: 'WhatsApp',
+  contact_call: 'Call',
+  contact_email: 'Email',
+  wa_product: 'Hello! I’m interested in {product}: {url}',
+  wa_store: 'Hello {store}! I found your online store: {url}',
+  back_to_store: 'Back to the store',
+  photo_of: 'Photo {n} of {count}',
 };
 
 const DICTS: Record<Lang, Dict> = { en, ar: {}, fr: {} };

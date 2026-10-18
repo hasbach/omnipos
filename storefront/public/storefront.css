@@ -94,5 +94,35 @@ img { max-inline-size: 100%; display: block; }
 .sf-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-block-start: 20px; flex-wrap: wrap; }
 .sf-pager span { color: var(--sf-muted); }
 
+.sf-contact { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 12px; }
+.sf-wa { background: #128c4a; }
+
+.sf-back { margin-block: 0 12px; }
+.sf-back a { display: inline-flex; align-items: center; min-block-size: 44px; text-decoration: none; }
+.sf-product { display: grid; gap: 16px; }
+@media (min-width: 800px) { .sf-product { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
+.sf-gallery-wrap { position: relative; }
+.sf-gallery {
+  display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
+  border-radius: var(--sf-radius); background: #f4f4f5;
+}
+.sf-gallery::-webkit-scrollbar { display: none; }
+.sf-gallery-img { flex: 0 0 100%; inline-size: 100%; aspect-ratio: 1 / 1; object-fit: contain; scroll-snap-align: center; }
+.sf-gallery-img { max-block-size: 60vh; }
+.sf-gallery-empty .sf-gallery-img { aspect-ratio: 2 / 1; max-block-size: 160px; }
+.sf-dots { display: flex; justify-content: center; gap: 6px; margin-block-start: 8px; }
+.sf-dot { inline-size: 8px; block-size: 8px; border-radius: 50%; background: var(--sf-border); }
+.sf-dot[data-active] { background: var(--sf-accent); }
+.sf-product-info h1 { margin-block: 0 8px; font-size: 1.35rem; line-height: 1.3; }
+.sf-product-price { font-size: 1.25rem; margin-block: 12px 4px; }
+.sf-product-info .sf-stock { margin-block: 0; }
+.sf-units { margin-block-start: 16px; }
+.sf-units h2 { font-size: 1rem; margin-block: 0 8px; }
+.sf-units ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--sf-border); border-radius: var(--sf-radius); background: var(--sf-surface); }
+.sf-units li { display: flex; justify-content: space-between; gap: 12px; padding-block: 10px; padding-inline: 12px; }
+.sf-units li + li { border-block-start: 1px solid var(--sf-border); }
+.sf-unit-contents { color: var(--sf-muted); font-size: 0.9em; }
+.sf-description { white-space: pre-line; margin-block: 16px; }
+
 .sf-footer { text-align: center; padding-block: 24px; padding-inline: 16px; font-size: 0.85rem; color: var(--sf-muted); }
 .sf-footer a { color: var(--sf-muted); }

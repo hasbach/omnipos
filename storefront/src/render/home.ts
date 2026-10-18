@@ -6,6 +6,8 @@ import { formatLocal, formatUsd, stockLabel } from '../format.js';
 import { PAGE_SIZE, type PageContext } from '../http.js';
 import { t } from '../i18n.js';
 import { imgUrl, type PageMeta } from './layout.js';
+import { contactButtons } from '../contact.js';
+import { summary } from '../seo.js';
 
 export function productCard(ctx: PageContext, l: PublicListing): string {
   const local = formatLocal(ctx.store, l.price, l.price_lbp);
@@ -65,6 +67,7 @@ export function renderHome(ctx: PageContext, page: ListingPage): { meta: PageMet
   const hero = `<section class="sf-hero">${cover}
 <h1>${html(store.name)}</h1>
 ${store.description ? `<p>${html(store.description)}</p>` : ''}
+${contactButtons(lang, store, { whatsapp: t(lang, 'wa_store', { store: store.name, url: ctx.canonicalHome }), subject: store.name })}
 </section>`;
 
   let list: string;
@@ -84,7 +87,7 @@ ${pager(ctx, page.total)}`;
   return {
     meta: {
       title: store.name,
-      description: store.description ? store.description.replace(/\s+/g, ' ').slice(0, 200) : null,
+      description: summary(store.description),
       image: store.cover_path || store.logo_path ? `${ctx.canonicalHome.replace(/\/$/, '')}${imgUrl((store.cover_path || store.logo_path)!)}` : null,
       canonical: ctx.canonicalHome,
     },
