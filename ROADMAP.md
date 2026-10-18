@@ -17,7 +17,7 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | # | Item | Spec | Status |
 |---|------|------|--------|
 | 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | **Slice A implemented** on branch `001-commerce-domain-foundation` (not merged; [validation](specs/001-commerce-domain-foundation/validation.md)): commerce on/off, store + web address, listings, store.* permissions, sync, public catalog functions. Slice B (relationships, orders, posting) not planned |
-| 002 | Tenant online store (activation, slug, branding, product publishing) | | Not started — back office done in 001 Slice A; 002 = public storefront on `store_public_get` / `store_public_listings`, image upload, caching |
+| 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) | Spec done (branch `002-tenant-online-store`, on top of 001) — next: clarify / plan. Public storefront on the 001 public catalog: subdomain + path address, product pages, WhatsApp contact, photos, caching; custom domains as a separate P3 story |
 | 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | | Not started |
 | 004 | Business-to-business relationships (request, approve, terms) | | Not started |
 | 005 | B2B wholesale storefront (customer pricing, units, minimums, reorder) | | Not started |
