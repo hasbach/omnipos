@@ -1,4 +1,4 @@
-# Contract — Cloud changes (`supabase/migrations/2026-10-19_storefront.sql`)
+# Contract — Cloud changes (`supabase/migrations/2026-10-19_storefront.sql` + `2026-10-19b_storefront_storage.sql`)
 
 Applied by the user in the SQL editor after 001's migration; re-runnable. Checks:
 `supabase/checks/2026-10-19_storefront_checks.sql`.

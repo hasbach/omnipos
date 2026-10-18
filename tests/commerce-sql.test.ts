@@ -1,5 +1,5 @@
 // Cloud SQL for the online store, run on PGlite (real Postgres in WASM) against stub Supabase tables:
-// supabase/migrations/2026-10-18_commerce_store_foundation.sql + 2026-10-19_storefront.sql.
+// supabase/migrations/2026-10-18_commerce_store_foundation.sql + 2026-10-19_storefront.sql + 2026-10-19b_storefront_storage.sql.
 // Guards the privacy rules that no desktop test can reach: the public gates (incl. Wholesale never public),
 // preview tokens, the single-listing RPC, the reserved addresses, function privileges and storage policies.
 import { test, before, after } from "node:test";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "url";
 import { PGlite } from "@electric-sql/pglite";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const MIGRATIONS = ["2026-10-18_commerce_store_foundation.sql", "2026-10-19_storefront.sql"]
+const MIGRATIONS = ["2026-10-18_commerce_store_foundation.sql", "2026-10-19_storefront.sql", "2026-10-19b_storefront_storage.sql"]
   .map((f) => fs.readFileSync(path.join(root, "supabase", "migrations", f), "utf8"));
 
 const A = "aaaaaaaa-0000-4000-8000-000000000001";

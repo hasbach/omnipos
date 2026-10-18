@@ -28,7 +28,8 @@ The storefront reads only the allow-listed public functions (`store_public_get`,
   (e.g. `omnipos.shop`), `OMNIPOS_WEBSITE_URL` (where the bare domain redirects).
 - Domains: apex `<STOREFRONT_DOMAIN>` and wildcard `*.<STOREFRONT_DOMAIN>` (wildcard needs the domain's nameservers
   at Vercel).
-- The cloud migrations `2026-10-18_commerce_store_foundation.sql` and `2026-10-19_storefront.sql` must be applied
+- The cloud migrations `2026-10-18_commerce_store_foundation.sql`, `2026-10-19_storefront.sql` and
+  `2026-10-19b_storefront_storage.sql` (or its dashboard equivalent) must be applied
   (then run `supabase/checks/2026-10-19_storefront_checks.sql`).
 
 Step by step:

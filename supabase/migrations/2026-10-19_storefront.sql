@@ -6,7 +6,9 @@
 --   * Owner preview tokens (30 minutes) for draft / paused / wholesale stores.
 --   * store_public_listing(): one product for the product page.
 --   * Reserved store addresses extended for subdomains (same list as storefront/src/reserved.ts).
---   * Storage bucket store-images (public read, WebP only, 2 MB) writable only in the caller's own folder.
+-- The photo bucket and its storage policies are in 2026-10-19b_storefront_storage.sql (run it after this
+-- file): storage tables are owned by supabase_storage_admin and, if that file is refused, the bucket and
+-- policies can be created in the dashboard without blocking everything here.
 
 -- ---- preview tokens ------------------------------------------------------------------------------
 
@@ -309,27 +311,3 @@ $$;
 REVOKE ALL ON FUNCTION public.claim_store_slug(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.claim_store_slug(uuid, text) FROM anon;
 GRANT EXECUTE ON FUNCTION public.claim_store_slug(uuid, text) TO authenticated;
-
--- ---- storage: product photos, store logo / cover --------------------------------------------------
--- Paths: <tenant global id>/l/<listing global id>/<random>.webp and <tenant gid>/s/<store gid>/(logo|cover)-<random>.webp.
--- Public read comes from the bucket being public; writes only inside the caller's own first folder.
-
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES ('store-images', 'store-images', true, 2097152, ARRAY['image/webp'])
-ON CONFLICT (id) DO UPDATE SET public = true, file_size_limit = 2097152, allowed_mime_types = ARRAY['image/webp'];
-
-DROP POLICY IF EXISTS "store-images owner insert" ON storage.objects;
-CREATE POLICY "store-images owner insert" ON storage.objects
-FOR INSERT TO authenticated
-WITH CHECK (bucket_id = 'store-images' AND (storage.foldername(name))[1] = auth.uid()::text);
-
-DROP POLICY IF EXISTS "store-images owner update" ON storage.objects;
-CREATE POLICY "store-images owner update" ON storage.objects
-FOR UPDATE TO authenticated
-USING (bucket_id = 'store-images' AND (storage.foldername(name))[1] = auth.uid()::text)
-WITH CHECK (bucket_id = 'store-images' AND (storage.foldername(name))[1] = auth.uid()::text);
-
-DROP POLICY IF EXISTS "store-images owner delete" ON storage.objects;
-CREATE POLICY "store-images owner delete" ON storage.objects
-FOR DELETE TO authenticated
-USING (bucket_id = 'store-images' AND (storage.foldername(name))[1] = auth.uid()::text);

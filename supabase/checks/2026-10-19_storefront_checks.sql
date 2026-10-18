@@ -1,4 +1,5 @@
--- Read-only checks for supabase/migrations/2026-10-19_storefront.sql (specs/002-tenant-online-store).
+-- Read-only checks for supabase/migrations/2026-10-19_storefront.sql and 2026-10-19b_storefront_storage.sql
+-- (specs/002-tenant-online-store). Checks 6-7 are about the storage file / the dashboard equivalent.
 -- Run in the Supabase SQL editor AFTER the migration. Nothing here writes. Each query lists its expected result.
 -- (tests/commerce-sql.test.ts runs this file against PGlite too.)
 

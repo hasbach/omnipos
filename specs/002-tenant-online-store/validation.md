@@ -38,7 +38,8 @@ both migrations, gates incl. Wholesale, preview tokens, single-listing RPC, rese
 
 ## 3–4. Still to do (needs the user / deployment)
 
-1. Apply `supabase/migrations/2026-10-19_storefront.sql` in the Supabase SQL editor, then run
+1. Apply `supabase/migrations/2026-10-19_storefront.sql`, then `2026-10-19b_storefront_storage.sql` (storage tables are
+   owned by `supabase_storage_admin`; if refused, use the dashboard steps in that file), then run
    `supabase/checks/2026-10-19_storefront_checks.sql` (each query lists its expected result).
 2. Buy the storefront domain; create the Vercel project (Root Directory `storefront`, commercial plan, env vars,
    apex + wildcard domains) — see `storefront/README.md`.

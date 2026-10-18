@@ -34,7 +34,8 @@ Other items: _(add fixes and ideas here)_
       (tables, RLS with no anon policy, slug index, sync triggers, 6 functions with the intended grants, allow-list clean).
 - [ ] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`) on a copy of a real customer database with
       settled days.
-- [ ] **Cloud migration pending (002):** apply `supabase/migrations/2026-10-19_storefront.sql`, then run
+- [ ] **Cloud migration pending (002):** apply `supabase/migrations/2026-10-19_storefront.sql`, then `2026-10-19b_storefront_storage.sql` (or create the bucket +
+      3 policies in the dashboard as described in that file), then run
       `supabase/checks/2026-10-19_storefront_checks.sql`. Needed for photos, logo/cover, preview links and the public
       storefront (Wholesale stores never public). Safe before the release: older apps don't call these functions.
 - [ ] 002 deployment: Vercel project `omnipos-storefront` (Root Directory `storefront`, Pro plan, env vars, apex +
