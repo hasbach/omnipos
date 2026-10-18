@@ -146,7 +146,7 @@ test("availability: reason order and visible only when everything holds", async 
   assert.equal(l.price, null);
 });
 
-test("field rules: lengths, images, min quantity, sort order, published", async () => {
+test("field rules: lengths, min quantity, sort order, published; photos only via the photo routes", async () => {
   const s = await setup();
   const pid = product(s.tenantId);
   const bad = async (body: any, code: string, field: string) => {
@@ -158,16 +158,16 @@ test("field rules: lengths, images, min quantity, sort order, published", async 
   await bad({ title: "t".repeat(121) }, "LISTING_FIELD_TOO_LONG", "title");
   await bad({ description: "d".repeat(4001) }, "LISTING_FIELD_TOO_LONG", "description");
   await bad({ store_category: "c".repeat(61) }, "LISTING_FIELD_TOO_LONG", "store_category");
-  await bad({ images: Array.from({ length: 9 }, (_, i) => `img/${i}.jpg`) }, "LISTING_IMAGES_INVALID", "images");
-  await bad({ images: [""] }, "LISTING_IMAGES_INVALID", "images");
+  // 002: photos change only through the photo routes (tests/commerce-photos.test.ts).
+  await bad({ images: ["a.webp"] }, "LISTING_FIELD_INVALID", "images");
   await bad({ min_quantity: 0 }, "LISTING_MIN_QTY_INVALID", "min_quantity");
   await bad({ min_quantity: -1 }, "LISTING_MIN_QTY_INVALID", "min_quantity");
   await bad({ sort_order: 1.5 }, "LISTING_FIELD_INVALID", "sort_order");
   await bad({ published: "yes" }, "LISTING_FIELD_INVALID", "published");
 
-  const ok = await put(s, pid, { title: "t".repeat(120), images: ["a.jpg", "b.jpg"], min_quantity: 2.5, sort_order: 3, title_unknown: "ignored" });
+  const ok = await put(s, pid, { title: "t".repeat(120), min_quantity: 2.5, sort_order: 3, title_unknown: "ignored" });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
-  assert.deepEqual(ok.body.images, ["a.jpg", "b.jpg"]);
+  assert.deepEqual(ok.body.images, []);
   assert.equal(ok.body.min_quantity, 2.5);
   assert.equal(ok.body.sort_order, 3);
   const cleared = await put(s, pid, { title: "", min_quantity: null });

@@ -95,6 +95,9 @@ const PORT = 3000;
 // the global one — express.json() no-ops when req._body is already set (body-parser's own guard),
 // so the global app.use(express.json()) further down never re-parses (or rejects) this route.
 app.use('/api/import', express.json({ limit: '25mb' }));
+// Online-store photos (spec 002): raw WebP bodies (already resized in the renderer, ≤ 2 MB — the route checks;
+// 3 MB here so oversize files get a translated error instead of a bare 413). Only image/webp requests are parsed.
+app.use('/api/commerce', express.raw({ type: 'image/webp', limit: '3mb' }));
 
 app.use(express.json());
 

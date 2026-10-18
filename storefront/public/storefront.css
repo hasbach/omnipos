@@ -103,12 +103,12 @@ img { max-inline-size: 100%; display: block; }
 @media (min-width: 800px) { .sf-product { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
 .sf-gallery-wrap { position: relative; }
 .sf-gallery {
-  display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
+  display: flex; align-items: center; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
   border-radius: var(--sf-radius); background: #f4f4f5;
 }
 .sf-gallery::-webkit-scrollbar { display: none; }
 .sf-gallery-img { flex: 0 0 100%; inline-size: 100%; aspect-ratio: 1 / 1; object-fit: contain; scroll-snap-align: center; }
-.sf-gallery-img { max-block-size: 60vh; }
+.sf-gallery-img { max-block-size: 60vh; block-size: auto; }
 .sf-gallery-empty .sf-gallery-img { aspect-ratio: 2 / 1; max-block-size: 160px; }
 .sf-dots { display: flex; justify-content: center; gap: 6px; margin-block-start: 8px; }
 .sf-dot { inline-size: 8px; block-size: 8px; border-radius: 50%; background: var(--sf-border); }

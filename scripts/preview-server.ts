@@ -18,6 +18,10 @@ import { createServer as createVite } from "vite";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PREVIEW_PORT || 3100);
+// Online store: public addresses and photo thumbnails point at this server instead of the real storefront
+// domain / Supabase bucket (read by server/commerce.ts).
+process.env.STOREFRONT_PATH_BASE = `http://localhost:${PORT}/s/`;
+process.env.STOREFRONT_IMAGE_BASE = `http://localhost:${PORT}/img/`;
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omnipos-preview-"));
 process.chdir(tmpDir);
@@ -75,6 +79,7 @@ const app = express();
 // See server.ts: the import wizard needs a bigger body limit than the global default, mounted
 // route-scoped and before the global parser (which no-ops once req._body is already set).
 app.use('/api/import', express.json({ limit: '25mb' }));
+app.use('/api/commerce', express.raw({ type: 'image/webp', limit: '3mb' }));
 app.use(express.json());
 app.use(session({ secret: "preview", resave: false, saveUninitialized: true }));
 app.use((req: any, _res, next) => { req.session.tenantId = tenantId; req.session.tenantName = "Beirut Wholesale Market"; next(); });
@@ -139,14 +144,32 @@ await call("POST", "/api/cash-flow", { type: "out", amount: 45, currency: "USD",
   const { ASSET_VERSION } = await import("../storefront/src/assets.js");
   const { LocalDbSource } = await import("./preview-storefront.js");
   const sfConfig = loadConfig();
-  const sfData = new LocalDbSource(db, tenantId);
+  // No cloud here: photos go to a local folder, preview tokens live in memory (30 minutes, like the cloud).
+  const { __setCommerceCloud } = await import("../server/commerce.js");
+  const crypto = await import("crypto");
+  const imgDir = path.join(tmpDir, "store-images");
+  const previewTokens = new Map<string, { store: string; until: number }>();
+  __setCommerceCloud({
+    upload: async (_t, p, bytes) => { fs.mkdirSync(path.dirname(path.join(imgDir, p)), { recursive: true }); fs.writeFileSync(path.join(imgDir, p), bytes); return { ok: true, value: null }; },
+    remove: async (_t, paths) => { for (const p of paths) fs.rmSync(path.join(imgDir, p), { force: true }); return { ok: true, value: null }; },
+    previewToken: async (_t, store) => { const token = crypto.randomBytes(32).toString("base64url"); previewTokens.set(token, { store, until: Date.now() + 30 * 60 * 1000 }); return { ok: true, value: token }; },
+  });
+  const sfData = new LocalDbSource(db, tenantId, (store, token) => { const p = previewTokens.get(token); return !!p && p.store === store && p.until > Date.now(); });
+  const { IMG_PATH } = await import("../storefront/src/img.js");
   const assets: Record<string, string> = { "/storefront.css": "text/css; charset=utf-8", "/storefront.js": "text/javascript; charset=utf-8", "/placeholder.svg": "image/svg+xml" };
   app.use(async (req: any, res: any, next: any) => {
     if (assets[req.path]) {
       res.type(assets[req.path]).set("Cache-Control", "no-cache").send(fs.readFileSync(path.join(root, "storefront", "public", req.path.slice(1))));
       return;
     }
-    if (!req.path.startsWith("/s/") && !req.path.startsWith("/img/")) return next();
+    if (req.path.startsWith("/img/")) {
+      const p = decodeURIComponent(req.path.slice(5));
+      const file = path.join(imgDir, p);
+      if (!IMG_PATH.test(p) || !fs.existsSync(file)) { res.status(404).send("Not found"); return; }
+      res.type("image/webp").set("Cache-Control", "no-cache").send(fs.readFileSync(file));
+      return;
+    }
+    if (!req.path.startsWith("/s/")) return next();
     try {
       const out = await handle({ host: String(req.headers.host || ""), url: req.originalUrl }, { config: sfConfig, data: sfData, assetVersion: ASSET_VERSION });
       res.status(out.status).set(out.headers).send(typeof out.body === "string" ? out.body : Buffer.from(out.body));

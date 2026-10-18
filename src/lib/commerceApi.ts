@@ -38,7 +38,11 @@ export interface Store {
 export interface CommerceStatus {
   enabled: boolean;
   online_license_valid: boolean;
-  store: (Pick<Store, 'id' | 'global_id' | 'name' | 'slug' | 'mode' | 'status'> & {
+  /** e.g. https://omnipos.shop */
+  storefront_origin: string;
+  /** Prefix for back-office photo thumbnails (public bucket URL). */
+  image_base: string;
+  store: (Pick<Store, 'id' | 'global_id' | 'name' | 'slug' | 'mode' | 'status' | 'public_url'> & {
     publicly_visible: boolean;
     not_public_reason: NotPublicReason | null;
   }) | null;
@@ -70,7 +74,11 @@ export interface ListingView {
 }
 
 export type StoreInput = Partial<Omit<Store, 'id' | 'global_id' | 'slug' | 'status' | 'public_url' | 'settings'>> & { settings?: Partial<StoreSettings> };
-export type ListingInput = Partial<Pick<ListingView, 'published' | 'title' | 'description' | 'images' | 'store_category' | 'sort_order' | 'min_quantity' | 'orderable_unit_ids'>>;
+export type ListingInput = Partial<Pick<ListingView, 'published' | 'title' | 'description' | 'store_category' | 'sort_order' | 'min_quantity' | 'orderable_unit_ids'>>;
+
+/** Thumbnail URL for a stored photo path. */
+export const photoUrl = (status: Pick<CommerceStatus, 'image_base'>, path: string) =>
+  `${status.image_base}${path.split('/').map(encodeURIComponent).join('/')}`;
 
 export const commerceApi = {
   status: () => api.get<CommerceStatus>('/api/commerce/status'),
@@ -86,6 +94,14 @@ export const commerceApi = {
   productListings: (productId: number) => api.get<ListingView[]>(`/api/commerce/products/${productId}/listings`),
   upsertListing: (storeId: number, productId: number, body: ListingInput) => api.put<ListingView>(`/api/commerce/stores/${storeId}/listings/${productId}`, body),
   deleteListing: (storeId: number, productId: number) => api.del<{ ok: true }>(`/api/commerce/stores/${storeId}/listings/${productId}`),
+  addPhoto: (storeId: number, productId: number, webp: Blob) =>
+    api.postBinary<ListingView>(`/api/commerce/stores/${storeId}/listings/${productId}/photos`, webp, 'image/webp'),
+  setPhotos: (storeId: number, productId: number, images: string[]) =>
+    api.put<ListingView>(`/api/commerce/stores/${storeId}/listings/${productId}/photos`, { images }),
+  setBranding: (storeId: number, kind: 'logo' | 'cover', webp: Blob) =>
+    api.postBinary<Store>(`/api/commerce/stores/${storeId}/branding/${kind}`, webp, 'image/webp'),
+  clearBranding: (storeId: number, kind: 'logo' | 'cover') => api.del<Store>(`/api/commerce/stores/${storeId}/branding/${kind}`),
+  previewLink: (storeId: number) => api.post<{ url: string }>(`/api/commerce/stores/${storeId}/preview`),
   bulkPublish: (storeId: number, productIds: number[], published: boolean) =>
     api.post<{ created: number; updated: number }>(`/api/commerce/stores/${storeId}/listings/bulk`, { product_ids: productIds, published }),
 };

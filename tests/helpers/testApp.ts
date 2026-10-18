@@ -21,7 +21,7 @@ export interface TestApp {
   close: () => Promise<void>;
   /** GET/POST/etc. helper — pass tenantId to act as that tenant, or omit for an unauthenticated call.
    * Pass userId to act as a PIN-signed-in user of that tenant (role restrictions then apply). */
-  api: (method: string, url: string, opts?: { tenantId?: number; userId?: number; body?: any }) => Promise<{ status: number; body: any }>;
+  api: (method: string, url: string, opts?: { tenantId?: number; userId?: number; body?: any; raw?: { type: string; data: Uint8Array } }) => Promise<{ status: number; body: any }>;
 }
 
 export async function createTestApp(): Promise<TestApp> {
@@ -45,6 +45,7 @@ export async function createTestApp(): Promise<TestApp> {
   // See server.ts: the import wizard needs a bigger body limit than the global default, mounted
   // route-scoped and before the global parser (which no-ops once req._body is already set).
   app.use('/api/import', express.json({ limit: '25mb' }));
+  app.use('/api/commerce', express.raw({ type: 'image/webp', limit: '3mb' }));
   app.use(express.json());
   app.use(session({ secret: "test-secret", resave: false, saveUninitialized: false }));
   app.use((req: any, _res, next) => {
@@ -67,14 +68,14 @@ export async function createTestApp(): Promise<TestApp> {
   const port = (server.address() as any).port;
   const baseUrl = `http://127.0.0.1:${port}`;
 
-  const api = async (method: string, url: string, opts: { tenantId?: number; userId?: number; body?: any } = {}) => {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const api = async (method: string, url: string, opts: { tenantId?: number; userId?: number; body?: any; raw?: { type: string; data: Uint8Array } } = {}) => {
+    const headers: Record<string, string> = { "Content-Type": opts.raw ? opts.raw.type : "application/json" };
     if (opts.tenantId) headers["x-test-tenant-id"] = String(opts.tenantId);
     if (opts.userId) headers["x-test-user-id"] = String(opts.userId);
     const res = await fetch(`${baseUrl}${url}`, {
       method,
       headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: opts.raw ? opts.raw.data : opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
     const text = await res.text();
     let body: any = null;

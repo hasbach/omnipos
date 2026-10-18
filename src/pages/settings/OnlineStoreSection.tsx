@@ -2,12 +2,13 @@
 // the store, claim its web address, open / pause it, edit its details and display settings.
 // The public storefront itself is a later feature; this is the back office for it.
 import React, { useEffect, useState } from 'react';
-import { Globe, Store as StoreIcon, Trash2 } from 'lucide-react';
+import { Copy, Eye, ExternalLink, Globe, ImagePlus, Store as StoreIcon, Trash2 } from 'lucide-react';
 import {
   Badge, Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Switch, Textarea, useConfirm, useToast,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
-import { commerceApi, type CommerceStatus, type Store, type StoreInput, type StoreSettings } from '../../lib/commerceApi';
+import { commerceApi, photoUrl, type CommerceStatus, type Store, type StoreInput, type StoreSettings } from '../../lib/commerceApi';
+import { ImageError, PHOTO_ACCEPT, resizeToWebp } from '../../lib/imageResize';
 import { translateServerError } from '../../lib/serverErrors';
 import { usePermissions } from '../../lib/usePermissions';
 
@@ -121,6 +122,41 @@ export function OnlineStoreSection() {
     applyStore(await commerceApi.updateStore(store.id, { settings: { [key]: value ? 1 : 0 } as Partial<StoreSettings> }));
   });
 
+  const copyAddress = async () => {
+    if (!store?.public_url) return;
+    try {
+      await navigator.clipboard.writeText(store.public_url);
+      toast.success(t('commerce_address_copied'));
+    } catch {
+      toast.error(t('commerce_address_copy_failed'));
+    }
+  };
+
+  const openStore = () => { if (store?.public_url) window.open(store.public_url, '_blank', 'noopener'); };
+
+  const preview = () => run(async () => {
+    if (!store) return;
+    const { url } = await commerceApi.previewLink(store.id);
+    window.open(url, '_blank', 'noopener');
+  });
+
+  const uploadBranding = async (kind: 'logo' | 'cover', file: File | undefined) => {
+    if (!store || !file) return;
+    await run(async () => {
+      try {
+        applyStore(await commerceApi.setBranding(store.id, kind, await resizeToWebp(file)));
+      } catch (e: any) {
+        if (e instanceof ImageError) { toast.error(t(`commerce_photo_err_${e.code.toLowerCase()}`)); return; }
+        throw e;
+      }
+    });
+  };
+
+  const removeBranding = (kind: 'logo' | 'cover') => run(async () => {
+    if (!store) return;
+    applyStore(await commerceApi.clearBranding(store.id, kind));
+  });
+
   const removeStore = async () => {
     if (!store) return;
     const ok = await confirm({
@@ -221,12 +257,26 @@ export function OnlineStoreSection() {
             </CardHeader>
             <CardBody>
               <div className="flex flex-col gap-4">
-                <Field label={t('commerce_slug')} helper={store.slug ? `${t('commerce_slug_current')}: ${store.public_url}` : t('commerce_slug_helper')} error={err('slug')}>
+                <Field label={t('commerce_slug')} helper={t('commerce_slug_helper')} error={err('slug')}>
                   <div className="flex gap-2">
                     <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} maxLength={40} dir="ltr" placeholder="abc-market" invalid={!!err('slug')} disabled={!editable} />
                     <Button variant="secondary" className="shrink-0 whitespace-nowrap" onClick={claim} disabled={!editable || !slug.trim() || slug === store.slug}>{t('commerce_slug_claim')}</Button>
                   </div>
                 </Field>
+                {store.public_url && (
+                  <div className="flex flex-col gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 p-3">
+                    <span className="text-xs font-medium text-text-3">{t('commerce_slug_current')}</span>
+                    <code dir="ltr" className="break-all text-sm text-text">{store.public_url}</code>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="secondary" onClick={copyAddress}><Copy size={14} /> {t('commerce_copy_address')}</Button>
+                      <Button size="sm" variant="secondary" onClick={openStore} disabled={!status.store?.publicly_visible}><ExternalLink size={14} /> {t('commerce_open_public')}</Button>
+                      {!status.store?.publicly_visible && (
+                        <Button size="sm" variant="secondary" onClick={preview} disabled={busy}><Eye size={14} /> {t('commerce_preview')}</Button>
+                      )}
+                    </div>
+                    {!status.store?.publicly_visible && <span className="text-xs text-text-3">{t('commerce_preview_helper')}</span>}
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   {store.status !== 'active' && store.mode !== 'wholesale' && (
                     <Button onClick={() => changeStatus('active')} disabled={!editable || !store.slug}>{store.status === 'paused' ? t('commerce_resume_store') : t('commerce_open_store')}</Button>
@@ -240,6 +290,35 @@ export function OnlineStoreSection() {
                   <p className="rounded-[var(--radius-input)] bg-surface-2 px-3 py-2 text-sm text-text-2">{t('commerce_wholesale_note')}</p>
                 )}
                 {(err('status') || err('mode')) && <p className="text-sm text-danger">{err('status') || err('mode')}</p>}
+              </div>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader><h3 className="text-sm font-semibold text-text-2">{t('commerce_branding_title')}</h3></CardHeader>
+            <CardBody>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {(['logo', 'cover'] as const).map((kind) => {
+                  const path = kind === 'logo' ? store.logo_path : store.cover_path;
+                  return (
+                    <div key={kind} className="flex flex-col gap-2">
+                      <span className="text-sm font-medium text-text">{t(`commerce_${kind}`)}</span>
+                      <div className={`flex items-center justify-center overflow-hidden rounded-[var(--radius-input)] border border-border bg-surface-2 ${kind === 'logo' ? 'h-24 w-24' : 'aspect-[3/1] w-full'}`}>
+                        {path ? <img src={photoUrl(status, path)} alt="" className="h-full w-full object-cover" /> : <ImagePlus size={22} className="text-text-3" />}
+                      </div>
+                      {editable && (
+                        <div className="flex flex-wrap gap-2">
+                          <label className={`inline-flex cursor-pointer items-center gap-1 rounded-[var(--radius-input)] border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-2 hover:bg-surface-2 ${busy ? 'pointer-events-none opacity-50' : ''}`}>
+                            <ImagePlus size={14} /> {path ? t('commerce_replace_image') : t('commerce_upload_image')}
+                            <input type="file" accept={PHOTO_ACCEPT} hidden onChange={(e) => { uploadBranding(kind, e.target.files?.[0]); e.target.value = ''; }} />
+                          </label>
+                          {path && <Button size="sm" variant="secondary" onClick={() => removeBranding(kind)} disabled={busy}><Trash2 size={14} /> {t('commerce_remove_image')}</Button>}
+                        </div>
+                      )}
+                      <span className="text-xs text-text-3">{t(`commerce_${kind}_helper`)}</span>
+                    </div>
+                  );
+                })}
               </div>
             </CardBody>
           </Card>

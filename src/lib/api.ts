@@ -60,6 +60,10 @@ export const api = {
       body: data === undefined ? undefined : JSON.stringify(data),
     }).then(parse);
   },
+  /** Raw binary upload (e.g. an online-store photo as image/webp). */
+  postBinary<T = any>(url: string, body: Blob, type: string): Promise<T> {
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': type }, body }).then(parse);
+  },
   del<T = any>(url: string, data?: unknown): Promise<T> {
     return fetch(url, {
       method: 'DELETE',

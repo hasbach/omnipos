@@ -8,12 +8,16 @@ import type { DataSource, ListingPage, ListingQuery, PublicListing, PublicStore 
 type LocalListing = PublicListing & { barcode: string | null; sort_order: number };
 
 export class LocalDbSource implements DataSource {
-  constructor(private db: any, private tenantId: number) {}
+  constructor(private db: any, private tenantId: number,
+    /** Is `token` a valid owner preview token for the store with this global id? */
+    private previewOk: (storeGlobalId: string, token: string) => boolean = () => false) {}
 
-  private openStore(address: string) {
+  private openStore(address: string, preview?: string | null) {
     const store = listStores(this.tenantId).find((s: any) => s.slug && s.slug === address.toLowerCase());
-    if (!store || store.status !== 'active' || store.mode === 'wholesale' || !isCommerceEnabled(this.tenantId)) return null;
-    return store;
+    if (!store || !isCommerceEnabled(this.tenantId)) return null;
+    const previewing = !!preview && this.previewOk(store.global_id, preview);
+    if (!previewing && (store.status !== 'active' || store.mode === 'wholesale')) return null;
+    return { ...store, previewing };
   }
 
   private visible(store: any): LocalListing[] {
@@ -21,7 +25,8 @@ export class LocalDbSource implements DataSource {
     for (let offset = 0; ; offset += 500) {
       const page = listListings(this.tenantId, store.id, { published: '1', limit: 500, offset });
       for (const v of page.rows as any[]) {
-        if (!v.visible) continue;
+        // Same rule as the cloud's visible-listing query: the store gate (open / preview) is checked separately.
+        if (!v.visible && v.unavailable_reason !== 'store_not_active') continue;
         if (store.settings.hide_out_of_stock === 1 && v.stock_state === 'out_of_stock') continue;
         out.push({
           listing_id: v.global_id, title: v.display_title, description: v.description, images: v.images || [],
@@ -41,8 +46,8 @@ export class LocalDbSource implements DataSource {
     return pub;
   }
 
-  async getStore(address: string): Promise<PublicStore | null> {
-    const s = this.openStore(address);
+  async getStore(address: string, preview?: string | null): Promise<PublicStore | null> {
+    const s = this.openStore(address, preview);
     if (!s) return null;
     const order: string[] = Array.isArray(s.settings.category_order) ? s.settings.category_order : [];
     const counts = new Map<string, number>();
@@ -59,12 +64,12 @@ export class LocalDbSource implements DataSource {
       address: s.address, default_language: s.default_language,
       show_local_price: s.settings.show_local_price === 1, hide_out_of_stock: s.settings.hide_out_of_stock === 1, show_exact_stock: s.settings.show_exact_stock === 1,
       local_currency_code: cur?.code ?? null, local_currency_symbol: cur?.symbol ?? null, local_rate: cur ? Number(cur.rate) : null,
-      categories, is_preview: false,
+      categories, is_preview: s.previewing,
     };
   }
 
-  async listListings(address: string, q: ListingQuery): Promise<ListingPage> {
-    const s = this.openStore(address);
+  async listListings(address: string, q: ListingQuery, preview?: string | null): Promise<ListingPage> {
+    const s = this.openStore(address, preview);
     if (!s) return { rows: [], total: 0 };
     const search = (q.search || '').trim().toLowerCase().slice(0, 60);
     const rows = this.visible(s)
@@ -74,8 +79,8 @@ export class LocalDbSource implements DataSource {
     return { rows: rows.slice(q.offset, q.offset + q.limit).map((l) => this.strip(l)), total: rows.length };
   }
 
-  async getListing(address: string, listingId: string): Promise<PublicListing | null> {
-    const s = this.openStore(address);
+  async getListing(address: string, listingId: string, preview?: string | null): Promise<PublicListing | null> {
+    const s = this.openStore(address, preview);
     if (!s) return null;
     const l = this.visible(s).find((x) => x.listing_id === listingId);
     return l ? this.strip(l) : null;

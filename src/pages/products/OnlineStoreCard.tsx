@@ -1,5 +1,5 @@
-// Product editor -> "Online store" tab (specs/001-commerce-domain-foundation, Slice A): publish this
-// product in the store and edit its online title, description, category and order. Price, units and
+// Product editor -> "Online store" tab (specs 001 Slice A + 002 US5): publish this product in the store, add
+// up to 4 photos and edit its online title, description, category and order. Price, units and
 // stock always come from the product itself, so there is nothing to keep in sync here.
 import React, { useEffect, useState } from 'react';
 import { Badge, Button, Field, Input, NumberInput, Switch, Textarea, useToast } from '../../components/ui';
@@ -7,6 +7,7 @@ import { useI18n } from '../../intl/index';
 import { commerceApi, type CommerceStatus, type ListingView } from '../../lib/commerceApi';
 import { translateServerError } from '../../lib/serverErrors';
 import { usePermissions } from '../../lib/usePermissions';
+import { ListingPhotos } from './ListingPhotos';
 
 const STOCK_VARIANT = { in_stock: 'success', low_stock: 'warning', out_of_stock: 'danger' } as const;
 
@@ -101,6 +102,8 @@ export function OnlineStoreCard({ productId, productName, productCategory }: { p
           <Badge variant="neutral">{t('commerce_listing_none')}</Badge>
         )}
       </div>
+
+      <ListingPhotos status={status} productId={productId} listing={listing} editable={editable} onChange={(l) => setListing(l)} />
 
       <Switch checked={draft.published} disabled={!editable} onChange={(v) => set({ published: v })} label={t('commerce_listing_published')} />
 

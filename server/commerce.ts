@@ -11,6 +11,10 @@ import { db, logAction } from './db.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 import { tierUnitPrice, uomUnitPrice } from './pricing.js';
 import { RESERVED_SLUGS } from '../storefront/src/reserved.js';
+import { getCommerceCloud } from './commerceStorage.js';
+import { SUPABASE_URL } from './supabase.js';
+import crypto from 'crypto';
+export { __setCommerceCloud } from './commerceStorage.js';
 
 // ---- commerce flag -------------------------------------------------------------------------------
 
@@ -62,11 +66,14 @@ export function storeSummary(tenantId: number) {
   ).get(tenantId) as any) || null;
   if (!s) return null;
   const reason = notPublicReason(tenantId, s);
-  return { ...s, publicly_visible: reason === null, not_public_reason: reason };
+  return { ...s, public_url: s.slug ? publicStoreUrl(s.slug) : null, publicly_visible: reason === null, not_public_reason: reason };
 }
 
 export function commerceStatus(tenantId: number) {
-  return { enabled: isCommerceEnabled(tenantId), online_license_valid: isOnlineLicenseValid(tenantId), store: storeSummary(tenantId) };
+  return {
+    enabled: isCommerceEnabled(tenantId), online_license_valid: isOnlineLicenseValid(tenantId), store: storeSummary(tenantId),
+    storefront_origin: storefrontOrigin(), image_base: imageBase(),
+  };
 }
 
 // ---- shared validation helpers ---------------------------------------------------------------------
@@ -116,10 +123,30 @@ function parseStoreSettings(raw: any) {
   return { ...STORE_SETTING_DEFAULTS, ...s };
 }
 
+// ---- public addresses (spec 002) -------------------------------------------------------------------
+// Stores live at https://<slug>.<STOREFRONT_DOMAIN>/. The preview server points these at itself through
+// STOREFRONT_PATH_BASE (e.g. http://localhost:3100/s/) and STOREFRONT_IMAGE_BASE.
+export const STOREFRONT_DOMAIN = (process.env.STOREFRONT_DOMAIN || 'omnipos.shop').toLowerCase();
+
+export function storefrontOrigin(): string {
+  const base = process.env.STOREFRONT_PATH_BASE;
+  return base ? new URL(base).origin : `https://${STOREFRONT_DOMAIN}`;
+}
+
+export function publicStoreUrl(slug: string): string {
+  const base = process.env.STOREFRONT_PATH_BASE;
+  return base ? `${base.replace(/\/?$/, '/')}${slug}/` : `https://${slug}.${STOREFRONT_DOMAIN}/`;
+}
+
+/** Where the back office loads photo thumbnails from (the public bucket; the storefront itself proxies). */
+export function imageBase(): string {
+  return process.env.STOREFRONT_IMAGE_BASE || `${SUPABASE_URL}/storage/v1/object/public/store-images/`;
+}
+
 function storeView(row: any) {
   if (!row) return null;
   const { tenant_id, ...rest } = row;
-  return { ...rest, settings: parseStoreSettings(row.settings), public_url: row.slug ? `/s/${row.slug}` : null };
+  return { ...rest, settings: parseStoreSettings(row.settings), public_url: row.slug ? publicStoreUrl(row.slug) : null };
 }
 
 function loadStore(tenantId: number, storeId: number): any {
@@ -395,13 +422,8 @@ function listingFields(tenantId: number, productId: number, body: any) {
     const v = optText(body, k, max, 'LISTING_FIELD_TOO_LONG');
     if (v !== undefined) out[k] = v;
   }
-  if ('images' in body) {
-    const imgs = body.images ?? [];
-    if (!Array.isArray(imgs) || imgs.length > 8 || imgs.some((p: any) => typeof p !== 'string' || !p.trim() || p.length > 300)) {
-      throw fail('Up to 8 images are allowed.', 'LISTING_IMAGES_INVALID', 'images');
-    }
-    out.images = JSON.stringify(imgs.map((p: string) => p.trim()));
-  }
+  // Photos change only through the photo routes (upload / reorder / remove), never here.
+  if ('images' in body) throw fail('Photos are changed with the photo buttons.', 'LISTING_FIELD_INVALID', 'images');
   if ('sort_order' in body) {
     const n = Number(body.sort_order ?? 0);
     if (!Number.isInteger(n)) throw fail('Sort order must be a whole number.', 'LISTING_FIELD_INVALID', 'sort_order');
@@ -534,6 +556,142 @@ export function productListings(tenantId: number, productId: number) {
   return rows.map((r) => deriveListing(r, units, loadStore(tenantId, r.store_id), enabled));
 }
 
+// ---- photos, logo / cover, preview (spec 002 US5; contracts/backoffice-api.md of 002) -----------------
+
+export const LISTING_IMAGES_MAX = 4;
+export const IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+/** A WebP file (RIFF....WEBP header), at most 2 MB — the renderer has already resized it. */
+function checkWebp(body: any): Buffer {
+  if (!Buffer.isBuffer(body) || body.length < 16 || body.length > IMAGE_MAX_BYTES
+    || body.toString('ascii', 0, 4) !== 'RIFF' || body.toString('ascii', 8, 12) !== 'WEBP') {
+    throw fail('Use a JPEG, PNG or WebP photo up to 5 MB.', 'LISTING_IMAGES_INVALID', 'images');
+  }
+  return body;
+}
+
+const randomName = () => crypto.randomBytes(16).toString('base64url').slice(0, 22);
+
+function tenantGlobalId(tenantId: number): string | null {
+  return (db.prepare('SELECT global_id FROM tenants WHERE id = ?').get(tenantId) as any)?.global_id || null;
+}
+
+function cloudFail(reason: 'offline' | 'failed', what: 'photo' | 'preview'): never {
+  if (what === 'preview') {
+    if (reason === 'offline') throw fail('Previewing the store needs an internet connection.', 'STORE_PREVIEW_NEEDS_ONLINE', undefined, 503);
+    throw fail('The preview link could not be created. Try again.', 'STORE_PREVIEW_FAILED', undefined, 502);
+  }
+  if (reason === 'offline') throw fail('Adding or removing photos needs an internet connection. Everything else works offline.', 'STORE_PHOTO_NEEDS_ONLINE', 'images', 503);
+  throw fail('The photo could not be saved in the cloud. Try again.', 'STORE_PHOTO_UPLOAD_FAILED', 'images', 502);
+}
+
+export async function addListingPhoto(tenantId: number, userId: number | null, storeId: number, productId: number, body: any) {
+  requireCommerceOn(tenantId);
+  loadStore(tenantId, storeId);
+  loadProductForListing(tenantId, productId);
+  const bytes = checkWebp(body);
+  const tgid = tenantGlobalId(tenantId);
+  if (!tgid) cloudFail('offline', 'photo');
+
+  let row = listingRow(tenantId, 'l.store_id = ? AND l.product_id = ?', storeId, productId);
+  if (row && (parseJsonArray(row.images) || []).length >= LISTING_IMAGES_MAX) {
+    throw fail(`Up to ${LISTING_IMAGES_MAX} photos are allowed.`, 'LISTING_IMAGES_INVALID', 'images');
+  }
+  // A new listing needs its global id for the photo path; it is soft-deleted again if the upload fails.
+  let created = false;
+  if (!row) {
+    const info = db.prepare('INSERT INTO store_listings (tenant_id, store_id, product_id, published) VALUES (?, ?, ?, 0)').run(tenantId, storeId, productId);
+    row = listingRow(tenantId, 'l.id = ?', Number(info.lastInsertRowid));
+    created = true;
+  }
+  const path = `${tgid}/l/${row.global_id}/${randomName()}.webp`;
+  const res = await getCommerceCloud().upload(tenantId, path, new Uint8Array(bytes));
+  if (!res.ok) {
+    if (created) db.prepare('UPDATE store_listings SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?').run(row.id, tenantId);
+    cloudFail(res.reason || 'failed', 'photo');
+  }
+  // Re-read: another edit may have happened during the upload.
+  const current: string[] = parseJsonArray(listingRow(tenantId, 'l.id = ?', row.id)?.images) || [];
+  if (current.length >= LISTING_IMAGES_MAX) {
+    await getCommerceCloud().remove(tenantId, [path]);
+    throw fail(`Up to ${LISTING_IMAGES_MAX} photos are allowed.`, 'LISTING_IMAGES_INVALID', 'images');
+  }
+  db.prepare('UPDATE store_listings SET images = ? WHERE id = ? AND tenant_id = ?').run(JSON.stringify([...current, path]), row.id, tenantId);
+  audit(tenantId, userId, 'listing_photo_add', 'listing', row.id, { images: current.length }, { images: current.length + 1, path });
+  return viewOne(tenantId, listingRow(tenantId, 'l.id = ?', row.id));
+}
+
+/** Reorder (offline is fine) and/or remove photos (needs the cloud: removed files are deleted). */
+export async function setListingPhotos(tenantId: number, userId: number | null, storeId: number, productId: number, body: any) {
+  requireCommerceOn(tenantId);
+  loadStore(tenantId, storeId);
+  const row = listingRow(tenantId, 'l.store_id = ? AND l.product_id = ?', storeId, productId);
+  if (!row) throw fail('This product is not listed in the store.', 'LISTING_NOT_FOUND', undefined, 404);
+  const current: string[] = parseJsonArray(row.images) || [];
+  const next = body?.images;
+  if (!Array.isArray(next) || next.some((p: any) => typeof p !== 'string' || !current.includes(p)) || new Set(next).size !== next.length) {
+    throw fail('Choose among the current photos.', 'LISTING_IMAGES_INVALID', 'images');
+  }
+  const removed = current.filter((p) => !next.includes(p));
+  if (removed.length) {
+    const res = await getCommerceCloud().remove(tenantId, removed);
+    if (!res.ok) cloudFail(res.reason || 'failed', 'photo');
+  }
+  db.prepare('UPDATE store_listings SET images = ? WHERE id = ? AND tenant_id = ?').run(JSON.stringify(next), row.id, tenantId);
+  audit(tenantId, userId, 'listing_photos_update', 'listing', row.id, { images: current }, { images: next });
+  return viewOne(tenantId, listingRow(tenantId, 'l.id = ?', row.id));
+}
+
+const BRANDING_KINDS = ['logo', 'cover'] as const;
+type BrandingKind = (typeof BRANDING_KINDS)[number];
+function brandingKind(kind: any): BrandingKind {
+  if (!BRANDING_KINDS.includes(kind)) throw fail('Unknown image kind.', 'STORE_BRANDING_KIND_INVALID', 'kind', 404);
+  return kind;
+}
+
+export async function setStoreBranding(tenantId: number, userId: number | null, storeId: number, rawKind: any, body: any) {
+  requireCommerceOn(tenantId);
+  const kind = brandingKind(rawKind);
+  const store = loadStore(tenantId, storeId);
+  const bytes = checkWebp(body);
+  const tgid = tenantGlobalId(tenantId);
+  if (!tgid) cloudFail('offline', 'photo');
+  const path = `${tgid}/s/${store.global_id}/${kind}-${randomName()}.webp`;
+  const res = await getCommerceCloud().upload(tenantId, path, new Uint8Array(bytes));
+  if (!res.ok) cloudFail(res.reason || 'failed', 'photo');
+  const col = kind === 'logo' ? 'logo_path' : 'cover_path';
+  const old = store[col];
+  db.prepare(`UPDATE stores SET ${col} = ? WHERE id = ? AND tenant_id = ?`).run(path, storeId, tenantId);
+  // The old file is no longer referenced; a failed delete only leaves an orphan, never a broken page.
+  if (old) await getCommerceCloud().remove(tenantId, [old]);
+  audit(tenantId, userId, 'store_branding_change', 'store', storeId, { [col]: old }, { [col]: path });
+  return storeView(loadStore(tenantId, storeId));
+}
+
+export async function clearStoreBranding(tenantId: number, userId: number | null, storeId: number, rawKind: any) {
+  requireCommerceOn(tenantId);
+  const kind = brandingKind(rawKind);
+  const store = loadStore(tenantId, storeId);
+  const col = kind === 'logo' ? 'logo_path' : 'cover_path';
+  const old = store[col];
+  if (old) {
+    const res = await getCommerceCloud().remove(tenantId, [old]);
+    if (!res.ok) cloudFail(res.reason || 'failed', 'photo');
+  }
+  db.prepare(`UPDATE stores SET ${col} = NULL WHERE id = ? AND tenant_id = ?`).run(storeId, tenantId);
+  audit(tenantId, userId, 'store_branding_change', 'store', storeId, { [col]: old }, { [col]: null });
+  return storeView(loadStore(tenantId, storeId));
+}
+
+/** Owner-only preview of a draft / paused / wholesale store: the public address with a 30-minute token. */
+export async function storePreviewLink(tenantId: number, storeId: number) {
+  const store = loadStore(tenantId, storeId);
+  if (!store.slug) throw fail('Choose the store web address first.', 'STORE_NOT_READY', 'slug', 409);
+  const res = await getCommerceCloud().previewToken(tenantId, store.global_id);
+  if (!res.ok) cloudFail(res.reason || 'failed', 'preview');
+  return { url: `${publicStoreUrl(store.slug)}?preview=${encodeURIComponent(String(res.value))}` };
+}
+
 // ---- routes (contracts/backoffice-api.md; permissions in server/permissions.ts ROUTE_RULES) ---------
 
 export function setupCommerceRoutes(app: any, authenticate: any) {
@@ -574,4 +732,11 @@ export function setupCommerceRoutes(app: any, authenticate: any) {
   app.put('/api/commerce/stores/:id/listings/:productId', authenticate, handle((t, u, req) => upsertListing(t, u, id(req.params.id), id(req.params.productId), req.body)));
   app.delete('/api/commerce/stores/:id/listings/:productId', authenticate, handle((t, u, req) => { deleteListing(t, u, id(req.params.id), id(req.params.productId)); return { ok: true }; }));
   app.get('/api/commerce/products/:productId/listings', authenticate, handle((t, _u, req) => productListings(t, id(req.params.productId))));
+
+  // Photos arrive as raw image/webp bodies (express.raw mounted on /api/commerce in server.ts).
+  app.post('/api/commerce/stores/:id/listings/:productId/photos', authenticate, handle((t, u, req) => addListingPhoto(t, u, id(req.params.id), id(req.params.productId), req.body)));
+  app.put('/api/commerce/stores/:id/listings/:productId/photos', authenticate, handle((t, u, req) => setListingPhotos(t, u, id(req.params.id), id(req.params.productId), req.body)));
+  app.post('/api/commerce/stores/:id/branding/:kind', authenticate, handle((t, u, req) => setStoreBranding(t, u, id(req.params.id), req.params.kind, req.body)));
+  app.delete('/api/commerce/stores/:id/branding/:kind', authenticate, handle((t, u, req) => clearStoreBranding(t, u, id(req.params.id), req.params.kind)));
+  app.post('/api/commerce/stores/:id/preview', authenticate, handle((t, _u, req) => storePreviewLink(t, id(req.params.id))));
 }
