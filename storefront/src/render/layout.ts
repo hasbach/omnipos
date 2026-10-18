@@ -1,6 +1,6 @@
 // The HTML document around every storefront page: language/direction, meta tags, stylesheet, header, footer.
 import { attr, html } from '../escape.js';
-import { isRtl, t } from '../i18n.js';
+import { isRtl, LANG_NAMES, t } from '../i18n.js';
 import type { Lang } from '../router.js';
 import type { PublicStore } from '../data.js';
 import { metaTags, type PageMeta } from '../seo.js';
@@ -17,6 +17,8 @@ export interface LayoutInput {
   assetVersion: string;
   websiteUrl: string;
   noindex?: boolean;
+  /** Same page in each language (store pages only). */
+  langLinks?: { lang: Lang; href: string }[];
 }
 
 export const imgUrl = (path: string) => `/img/${path.split('/').map(encodeURIComponent).join('/')}`;
@@ -27,6 +29,12 @@ function header(store: PublicStore | null | undefined, homeHref: string): string
     ? `<img class="sf-logo" src="${attr(imgUrl(store.logo_path))}" alt="" width="40" height="40">`
     : `<span class="sf-logo sf-logo-initial" aria-hidden="true">${html(store.name.trim().charAt(0).toUpperCase() || '·')}</span>`;
   return `<header class="sf-header"><a class="sf-brand" href="${attr(homeHref)}">${logo}<span class="sf-name">${html(store.name)}</span></a></header>`;
+}
+
+function languageSwitcher(current: Lang, links: { lang: Lang; href: string }[] | undefined): string {
+  if (!links?.length) return '';
+  return `<nav class="sf-langs" aria-label="${attr(t(current, 'language'))}">${links.map((l) =>
+    `<a href="${attr(l.href)}" hreflang="${l.lang}" lang="${l.lang}" data-lang="${l.lang}"${l.lang === current ? ' aria-current="true"' : ''}>${html(LANG_NAMES[l.lang])}</a>`).join('')}</nav>`;
 }
 
 export function layout(i: LayoutInput): string {
@@ -50,7 +58,7 @@ ${header(i.store, i.homeHref || '/')}
 <main class="sf-main">
 ${i.body}
 </main>
-<footer class="sf-footer"><a href="${attr(i.websiteUrl)}" rel="noopener">${html(t(lang, 'powered_by'))}</a></footer>
+<footer class="sf-footer">${languageSwitcher(lang, i.langLinks)}<a href="${attr(i.websiteUrl)}" rel="noopener">${html(t(lang, 'powered_by'))}</a></footer>
 <script src="/storefront.js?v=${attr(i.assetVersion)}" defer></script>
 </body>
 </html>`;

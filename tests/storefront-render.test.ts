@@ -223,3 +223,74 @@ test("exact stock appears on the product page only when the store turns it on", 
   const on = await setup((fx) => { fx.store.show_exact_stock = true; }).get(`/p/${P1}`);
   assert.match(on.html, /40 in stock/);
 });
+
+// ---- languages and phones (US3) ---------------------------------------------------------------------------
+
+test("i18n: English, Arabic and French have exactly the same keys and no empty strings", async () => {
+  const { __dicts } = await import("../storefront/src/i18n.js");
+  const en = Object.keys(__dicts.en).sort();
+  for (const lang of ["ar", "fr"] as const) {
+    assert.deepEqual(Object.keys(__dicts[lang]).sort(), en, `${lang} keys`);
+    for (const [k, v] of Object.entries(__dicts[lang])) assert.ok(String(v).trim(), `${lang}.${k} empty`);
+  }
+  // Placeholders survive translation.
+  for (const lang of ["ar", "fr"] as const) {
+    for (const k of en) {
+      const vars = (__dicts.en[k].match(/\{\w+\}/g) || []).sort();
+      assert.deepEqual((__dicts[lang][k].match(/\{\w+\}/g) || []).sort(), vars, `${lang}.${k} placeholders`);
+    }
+  }
+});
+
+test("default language = store language; Arabic pages are right-to-left", async () => {
+  const { get } = setup((fx) => { fx.store.default_language = "ar"; });
+  const r = await get("/");
+  assert.match(r.html, /<html lang="ar" dir="rtl">/);
+  assert.match(r.html, /كل المنتجات/);
+  assert.match(r.html, /<meta property="og:locale" content="ar_LB">/);
+  assert.doesNotMatch(r.html, />All products</);
+});
+
+test("?lang= overrides the store language and is kept in every store link", async () => {
+  const { get } = setup();
+  const r = await get("/?lang=fr");
+  assert.match(r.html, /<html lang="fr" dir="ltr">/);
+  assert.match(r.html, /Tous les produits/);
+  assert.match(r.html, /href="\/p\/00000000-0000-4000-8000-000000000004\?lang=fr"/);
+  assert.match(r.html, /href="\/\?lang=fr&amp;c=Dairy"/);
+  assert.match(r.html, /type="hidden" name="lang" value="fr"/);
+  const ar = await get(`/p/${P1}?lang=ar`);
+  assert.match(ar.html, /dir="rtl"/);
+  assert.match(ar.html, /href="\/\?lang=ar"[^>]*>العودة إلى المتجر</);
+  // The WhatsApp message is in the page language and links back to it.
+  const wa = new URL(ar.html.match(/href="(https:\/\/wa\.me\/[^"]+)"/)![1].replace(/&amp;/g, "&"));
+  assert.match(wa.searchParams.get("text")!, /مرحباً/);
+  assert.match(wa.searchParams.get("text")!, /\?lang=ar/);
+});
+
+test("language switcher: one link per language to the same page; the current one is marked", async () => {
+  const { get } = setup();
+  const r = await get("/?c=Dairy&page=1");
+  assert.match(r.html, /class="sf-langs"/);
+  assert.match(r.html, /href="\/\?c=Dairy&amp;lang=ar"[^>]*data-lang="ar"[^>]*>العربية</);
+  assert.match(r.html, /href="\/\?c=Dairy&amp;lang=fr"[^>]*data-lang="fr"[^>]*>Français</);
+  assert.match(r.html, /aria-current="true"[^>]*>English</);
+  const product = await get(`/p/${P1}`);
+  assert.ok(product.html.includes(`href="/p/${P1}?lang=ar"`), "product page switcher keeps the product");
+});
+
+test("status pages are translated too", async () => {
+  const { get } = setup((fx) => { fx.store.status = "paused"; });
+  const r = await get("/?lang=fr");
+  assert.match(r.html, /<html lang="fr"/);
+  assert.match(r.html, /Cette boutique n’est pas disponible/);
+});
+
+test("stylesheet is RTL-safe and phone-first: no physical left/right properties, 2-column grid on phones", async () => {
+  const fs = await import("fs");
+  const css = fs.readFileSync("storefront/public/storefront.css", "utf8");
+  const physical = css.match(/(margin|padding|border)-(left|right)|(^|[;{\s])(left|right)\s*:|text-align:\s*(left|right)|float:\s*(left|right)/gm);
+  assert.equal(physical, null, `physical properties found: ${physical}`);
+  assert.match(css, /\.sf-grid \{[^}]*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(css, /overflow-x: hidden/);
+});

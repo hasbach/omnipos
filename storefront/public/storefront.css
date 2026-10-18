@@ -124,5 +124,12 @@ img { max-inline-size: 100%; display: block; }
 .sf-unit-contents { color: var(--sf-muted); font-size: 0.9em; }
 .sf-description { white-space: pre-line; margin-block: 16px; }
 
+.sf-langs { display: flex; justify-content: center; gap: 4px; margin-block-end: 12px; flex-wrap: wrap; }
+.sf-langs a { display: inline-flex; align-items: center; min-block-size: 40px; padding-inline: 12px; border-radius: 999px; text-decoration: none; }
+.sf-langs a[aria-current="true"] { background: var(--sf-surface); border: 1px solid var(--sf-border); color: var(--sf-text); font-weight: 600; }
+/* Prices read left-to-right in every language ("$1.60", "145,000 LL") but sit at the start edge. */
+.sf-price, .sf-local { unicode-bidi: isolate; direction: ltr; }
+.sf-card-body .sf-price, .sf-card-body .sf-local { align-self: flex-start; }
+
 .sf-footer { text-align: center; padding-block: 24px; padding-inline: 16px; font-size: 0.85rem; color: var(--sf-muted); }
 .sf-footer a { color: var(--sf-muted); }

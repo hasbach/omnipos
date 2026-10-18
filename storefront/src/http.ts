@@ -74,8 +74,9 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
     return { status: 301, body: '', headers: { ...BASE_HEADERS, Location: `https://${config.storefrontDomain}/`, 'Cache-Control': 'public, s-maxage=3600' } };
   }
 
-  const shell = (lang: Lang, meta: PageMeta, body: string, store: PublicStore | null = null, homeHref = '/', noindex = false) =>
-    layout({ lang, meta, body, store, homeHref, assetVersion: deps.assetVersion, websiteUrl: config.websiteUrl, noindex });
+  const shell = (lang: Lang, meta: PageMeta, body: string, store: PublicStore | null = null, homeHref = '/', noindex = false,
+    langLinks?: { lang: Lang; href: string }[]) =>
+    layout({ lang, meta, body, store, homeHref, assetVersion: deps.assetVersion, websiteUrl: config.websiteUrl, noindex, langLinks });
 
   if (r.kind === 'notFound') {
     const lang = r.params.lang || 'en';
@@ -102,13 +103,21 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
       link: (path, more = {}) => url(`${base}${path}` || '/', { ...keep, ...more }),
     };
     const homeHref = ctx.link('/');
+    // The same page in each language (explicit ?lang= so the choice sticks), keeping filters and a preview token.
+    const keepPreview = store.is_preview ? preview : null;
+    const langLinks = LANGS.map((l) => ({
+      lang: l,
+      href: r.kind === 'home'
+        ? url(`${base}/`, { c: r.params.category, q: r.params.search, page: r.params.page > 1 ? r.params.page : null, preview: keepPreview, lang: l })
+        : url(`${base}/p/${r.listingId}`, { preview: keepPreview, lang: l }),
+    }));
 
     if (r.kind === 'home') {
       const page = await deps.data.listListings(r.address, {
         category: r.params.category, search: r.params.search, limit: PAGE_SIZE, offset: (r.params.page - 1) * PAGE_SIZE,
       }, preview);
       const out = renderHome(ctx, page);
-      return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview), cache, extra);
+      return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview, langLinks), cache, extra);
     }
 
     const listing = await deps.data.getListing(r.address, r.listingId, preview);
@@ -117,7 +126,7 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
       return htmlResponse(404, shell(lang, { title: t(lang, 'product_unavailable_title') }, body, store, homeHref, true), preview ? CACHE_PREVIEW : CACHE_SHORT, extra);
     }
     const out = renderProduct(ctx, listing);
-    return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview), cache, extra);
+    return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview, langLinks), cache, extra);
   } catch (e) {
     if (!(e instanceof UpstreamError)) throw e;
     const lang = r.params.lang || 'en';
