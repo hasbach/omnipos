@@ -274,3 +274,19 @@ test("isolation: another tenant can't see, edit or list into this store, nor lis
   // A's data untouched.
   assert.equal((app.db.prepare("SELECT published FROM store_listings WHERE product_id = ?").get(pa) as any).published, 1);
 });
+
+test("allow-list: store and status responses carry no cost, tier price or local tenant id either", async () => {
+  const s = await setup();
+  const pid = product(s.tenantId);
+  await put(s, pid, { published: true });
+  for (const [u, where] of [
+    ["/api/commerce/status", "status"],
+    ["/api/commerce/stores", "stores"],
+    [`/api/commerce/stores/${s.store.id}/listings?published=1`, "published listings"],
+  ] as const) {
+    const r = await app.api("GET", u, s.as);
+    assert.equal(r.status, 200, u);
+    assertNoForbidden(r.body, where);
+    assert.ok(!JSON.stringify(r.body).includes('"tenant_id"'), `${where} exposes tenant_id`);
+  }
+});

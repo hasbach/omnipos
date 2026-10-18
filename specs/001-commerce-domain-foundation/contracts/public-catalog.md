@@ -36,7 +36,7 @@ ones are excluded when the store has `hide_out_of_stock = 1`.
 | `description`, `images` (json), `category` (`store_category ?? products.category`) | listing / product |
 | `price`, `price_lbp` | product retail columns |
 | `unit` | `products.unit` (base unit label) |
-| `units` | JSON `[{ unit_id, name, factor, price, price_lbp }]` from non-deleted `product_units` (filtered by `orderable_unit_ids`) |
+| `units` | JSON `[{ unit_id, name, factor, price, price_lbp }]` from every non-deleted `product_units` row; `unit_id` is the unit's global id. `orderable_unit_ids` is **not** applied in Slice A: it holds the authoring register's local unit ids (sync doesn't translate ids inside JSON). Ordering (003) must store unit global ids before enforcing it. |
 | `stock_state` | `in_stock` \| `low_stock` \| `out_of_stock` |
 | `stock` | exact stock **only** when `show_exact_stock = 1`, else null |
 | `min_quantity` | listing |

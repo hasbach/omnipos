@@ -59,7 +59,7 @@ claimed). Delete = soft delete (`deleted_at`), which frees the slug in the cloud
 | `store_category` | TEXT | ≤ 60; NULL ⇒ product `category` |
 | `sort_order` | INTEGER DEFAULT 0 | |
 | `min_quantity` | REAL | > 0 or NULL; stored only, enforced from 003 |
-| `orderable_unit_ids` | TEXT (JSON) | NULL ⇒ base unit + all product units; else subset of the product's `product_units` ids (validated); stored only, enforced from 003 |
+| `orderable_unit_ids` | TEXT (JSON) | NULL ⇒ base unit + all product units; else subset of the product's `product_units` ids (validated); stored only, enforced from 003. These are LOCAL ids of the authoring register: the back-office preview filters by them, the cloud public catalog ignores them (003 must switch to unit global ids) |
 | sync metadata | | as above |
 
 **Never stored on a listing**: price, cost, stock, unit factors, barcode (FR-011/012).

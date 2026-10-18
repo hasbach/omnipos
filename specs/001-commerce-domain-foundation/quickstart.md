@@ -61,7 +61,8 @@ Expected: all existing tests pass unchanged, plus the new ones:
 
 ## 4. Cloud checks (after the migration is applied and a register has pushed)
 
-Run in the SQL editor (or read-only via MCP for the `select`s):
+Run `supabase/checks/2026-10-18_commerce_store_checks.sql` in the SQL editor (read-only; each query lists its expected
+result), then try one store:
 
 ```sql
 select * from store_public_get('abc-market');

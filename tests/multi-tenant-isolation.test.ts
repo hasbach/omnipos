@@ -64,3 +64,39 @@ test("an unauthenticated request (no tenant at all) is rejected", async () => {
   const res = await app.api("GET", "/api/transactions/recent");
   assert.equal(res.status, 401);
 });
+
+// Online store (specs/001-commerce-domain-foundation): stores and store_listings carry tenant_id and
+// every /api/commerce route is scoped to the session tenant. The full matrix lives in
+// tests/commerce-listings.test.ts; this is the constitution's per-table isolation case.
+test("Business B can't read or change Business A's online store or listings", async () => {
+  for (const t of [tenantA, tenantB]) {
+    app.db.prepare("INSERT INTO settings (tenant_id, key, value) VALUES (?, 'commerce_enabled', '1') ON CONFLICT(tenant_id, key) DO UPDATE SET value = '1'").run(t);
+  }
+  const storeA = (await app.api("POST", "/api/commerce/stores", { tenantId: tenantA, body: { name: "A Shop" } })).body;
+  const storeB = (await app.api("POST", "/api/commerce/stores", { tenantId: tenantB, body: { name: "B Shop" } })).body;
+  const listed = await app.api("PUT", `/api/commerce/stores/${storeA.id}/listings/${productA}`, { tenantId: tenantA, body: { published: true } });
+  assert.equal(listed.status, 200, JSON.stringify(listed.body));
+
+  // B sees only its own store; A's store and listings answer "not found", never data.
+  const storesB = await app.api("GET", "/api/commerce/stores", { tenantId: tenantB });
+  assert.deepEqual(storesB.body.map((s: any) => s.id), [storeB.id]);
+  for (const [m, u, body] of [
+    ["GET", `/api/commerce/stores/${storeA.id}/listings`, undefined],
+    ["PUT", `/api/commerce/stores/${storeA.id}`, { name: "Taken over" }],
+    ["PUT", `/api/commerce/stores/${storeA.id}/listings/${productA}`, { published: false }],
+    ["DELETE", `/api/commerce/stores/${storeA.id}`, undefined],
+  ] as const) {
+    const r = await app.api(m, u, { tenantId: tenantB, body });
+    assert.equal(r.status, 404, `${m} ${u}`);
+    assert.ok(!JSON.stringify(r.body).includes("A Shop"), `${m} ${u} leaked A's store`);
+  }
+  // B can't list A's product in its own store, nor read A's product listings.
+  assert.equal((await app.api("PUT", `/api/commerce/stores/${storeB.id}/listings/${productA}`, { tenantId: tenantB, body: { published: true } })).status, 404);
+  assert.equal((await app.api("GET", `/api/commerce/products/${productA}/listings`, { tenantId: tenantB })).status, 404);
+
+  // A's rows are untouched.
+  const a = app.db.prepare("SELECT s.name, l.published FROM stores s JOIN store_listings l ON l.store_id = s.id WHERE s.id = ?").get(storeA.id) as any;
+  assert.deepEqual({ ...a }, { name: "A Shop", published: 1 });
+  // And without a tenant at all, the commerce routes are closed.
+  assert.equal((await app.api("GET", "/api/commerce/stores")).status, 401);
+});
