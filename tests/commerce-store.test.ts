@@ -208,3 +208,19 @@ test("permissions: a cashier cannot create stores; every store route has a rule"
   ];
   for (const [m, u, need] of routes) assert.equal(findRule(m, u)?.need, need, `${m} ${u}`);
 });
+
+test("reserved addresses: the back office, the storefront and the cloud claim use the same list", async () => {
+  const fs = await import("fs");
+  const path = await import("path");
+  const sql = fs.readFileSync(path.join(process.cwd(), "supabase", "migrations", "2026-10-19_storefront.sql"), "utf8");
+  const m = sql.match(/v_slug = ANY \(ARRAY\[([^\]]+)\]\)/);
+  assert.ok(m, "reserved array found in claim_store_slug");
+  const cloud = m![1].split(",").map((x) => x.trim().replace(/^'|'$/g, "")).sort();
+  assert.deepEqual(cloud, [...commerce.RESERVED_SLUGS].sort());
+  const s = setup();
+  const store = await newStore(s.as);
+  for (const slug of ["mail", "cdn", "dashboard", "demo"]) {
+    const r = await app.api("POST", `/api/commerce/stores/${store.id}/slug`, { ...s.as, body: { slug } });
+    assert.equal(r.body.code, "STORE_SLUG_RESERVED", slug);
+  }
+});

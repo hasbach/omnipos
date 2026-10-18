@@ -11,8 +11,8 @@ lowercase. All HTML responses: `Content-Type: text/html; charset=utf-8`, `<html 
 | apex `/s/<address>[/...]` | same pages as the store host (path form); links stay in path form | same |
 | apex `/` | 302 → OmniPOS website | `public, s-maxage=3600` |
 | reserved subdomain host (`www.` …) | 301 → apex | `public, s-maxage=3600` |
-| any host, unknown address | 404 "store not found" page | `public, s-maxage=60` |
-| store gated off (paused, draft, wholesale, commerce off, license expired, deleted) | 200 neutral "store unavailable" page, no product data | `public, s-maxage=60` |
+| unknown address, or store gated off (paused, draft, wholesale, commerce off, license expired, deleted) | 404, one identical neutral "store isn't available" page, no product data, `noindex` | `public, s-maxage=60` |
+| unknown path inside a store host | 404 "page not found" | `public, s-maxage=60` |
 | any page `?preview=<token>` | page with "Preview — not public" banner if token valid for this store, else as without token | `private, no-store` + `X-Robots-Tag: noindex` |
 | `/img/<tenant>/<l|s>/<id>/<name>.webp` | proxied image bytes, `Content-Type: image/webp`; 404 for paths not matching the pattern | `public, max-age=31536000, immutable` |
 | `/storefront.css`, `/storefront.js`, `/placeholder.svg` (versioned query) | static | `public, max-age=31536000, immutable` |

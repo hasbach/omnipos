@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/((?!storefront\.css|storefront\.js|placeholder\.svg).*)", "destination": "/api/index" }
+  ],
+  "headers": [
+    {
+      "source": "/(storefront\.css|storefront\.js|placeholder\.svg)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    }
+  ]
+}

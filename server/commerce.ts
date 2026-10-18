@@ -10,6 +10,7 @@
 import { db, logAction } from './db.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 import { tierUnitPrice, uomUnitPrice } from './pricing.js';
+import { RESERVED_SLUGS } from '../storefront/src/reserved.js';
 
 // ---- commerce flag -------------------------------------------------------------------------------
 
@@ -87,8 +88,9 @@ export const STORE_LANGUAGES = ['en', 'ar', 'fr'] as const;
 const STORE_SETTING_FLAGS = ['show_exact_stock', 'hide_out_of_stock', 'show_local_price'] as const;
 const STORE_SETTING_DEFAULTS = { show_exact_stock: 0, hide_out_of_stock: 0, show_local_price: 1, category_order: [] as string[] };
 
-// Shared with the cloud claim_store_slug function (same rules, same list).
-export const RESERVED_SLUGS = ['admin', 'api', 'app', 'www', 'monitor', 'store', 'stores', 'omnipos', 'login', 'signup', 'help', 'support', 'static', 'assets'];
+// One list for the back office, the storefront router and the cloud claim_store_slug (spec 002 FR-004);
+// it lives in the storefront folder because that folder is deployed on its own.
+export { RESERVED_SLUGS } from '../storefront/src/reserved.js';
 
 const STORE_COLS = 'id, global_id, tenant_id, name, slug, mode, status, description, logo_path, cover_path, primary_color, contact_phone, contact_whatsapp, contact_email, address, default_language, settings, created_at, updated_at';
 

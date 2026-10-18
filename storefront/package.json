@@ -1,0 +1,7 @@
+{
+  "name": "omnipos-storefront",
+  "private": true,
+  "type": "module",
+  "description": "OmniPOS public online-store pages (specs/002-tenant-online-store). Deployed as its own Vercel project.",
+  "engines": { "node": ">=20" }
+}

@@ -279,7 +279,8 @@ reaching the cloud database.
 - **FR-016a**: In the back office, a store in Wholesale mode MUST NOT be openable to the public; Settings → Online store
   MUST explain that private B2B stores come with business relationships. Switching an open store to Wholesale mode
   MUST take it off the public storefront (within the refresh period, FR-022).
-- **FR-017**: An address that was never claimed MUST show a "store not found" page.
+- **FR-017**: An address that was never claimed MUST show the same neutral page as an unavailable store (FR-016): the
+  public catalog deliberately never reveals whether an address exists. (Changed during implementation, 2026-10-19.)
 - **FR-018**: The storefront MUST read store data only through the public catalog's allow-listed fields; it MUST NOT
   expose costs, non-retail prices, reorder levels, internal identifiers, other customers, suppliers, invoices, staff
   data or any other business's data.

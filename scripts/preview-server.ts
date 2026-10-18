@@ -131,6 +131,29 @@ const { recomputeAllBalances } = await import("../server/balance.js");
 recomputeAllBalances(tenantId);
 await call("POST", "/api/cash-flow", { type: "out", amount: 45, currency: "USD", exchange_rate: 1, reason: "Generator fuel" });
 
+// Storefront (feature 002) on the demo data: http://localhost:3100/s/<store address>. Same handler as production,
+// fed from the local database instead of the cloud public catalog (scripts/preview-storefront.ts).
+{
+  const { handle } = await import("../storefront/src/http.js");
+  const { loadConfig } = await import("../storefront/src/config.js");
+  const { ASSET_VERSION } = await import("../storefront/src/assets.js");
+  const { LocalDbSource } = await import("./preview-storefront.js");
+  const sfConfig = loadConfig();
+  const sfData = new LocalDbSource(db, tenantId);
+  const assets: Record<string, string> = { "/storefront.css": "text/css; charset=utf-8", "/storefront.js": "text/javascript; charset=utf-8", "/placeholder.svg": "image/svg+xml" };
+  app.use(async (req: any, res: any, next: any) => {
+    if (assets[req.path]) {
+      res.type(assets[req.path]).set("Cache-Control", "no-cache").send(fs.readFileSync(path.join(root, "storefront", "public", req.path.slice(1))));
+      return;
+    }
+    if (!req.path.startsWith("/s/") && !req.path.startsWith("/img/")) return next();
+    try {
+      const out = await handle({ host: String(req.headers.host || ""), url: req.originalUrl }, { config: sfConfig, data: sfData, assetVersion: ASSET_VERSION });
+      res.status(out.status).set(out.headers).send(typeof out.body === "string" ? out.body : Buffer.from(out.body));
+    } catch (e) { next(e); }
+  });
+}
+
 const vite = await createVite({ root, server: { middlewareMode: true, hmr: { port: PORT + 1 } }, appType: "spa" });
 app.use(vite.middlewares);
 console.log(`Preview ready on http://localhost:${PORT} (data in ${tmpDir})`);
