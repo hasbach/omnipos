@@ -37,11 +37,12 @@ Other items: _(add fixes and ideas here)_
 - [x] Cloud migrations (002) `2026-10-19_storefront.sql` + `2026-10-19b_storefront_storage.sql` applied 2026-10-19 and verified
       read-only (all 9 functions with the intended grants, Wholesale gate, allow-list clean, preview-token table closed,
       `store-images` bucket public / 2 MB / WebP, 3 owner-only storage policies, new reserved list).
-- [ ] 002 deployment: Render web service `omnipos-storefront` from `render.yaml` (existing Render workspace, Starter
-      instance, Frankfurt, edge caching "All files", apex + wildcard domains via registrar DNS records) — steps in `storefront/README.md`; then quickstart §3–4 (live check,
-      WhatsApp preview, burst test < 5% upstream).
-- [ ] 002: buy the storefront domain myomnipos.com (chosen 2026-10-19; omnipos.shop/.store were taken) at a registrar;
-      needed before deployment.
+- [x] 002 deployment (2026-10-19): Render web service `omnipos-storefront` from `render.yaml` (branch
+      `002-tenant-online-store`, Starter, Frankfurt, edge caching "All files"); `myomnipos.com` bought at Hostinger,
+      apex + wildcard Let's Encrypt certificates issued; redirects, headers and edge cache checked (validation.md).
+- [ ] 002 live store check: a register on these branches signed into a **test** business opens a store → store and
+      product pages, WhatsApp preview, pause, owner preview (quickstart §3–4). Then switch the Render service to
+      `main` after the merge.
 - [ ] 002 storefront: stock online lags the registers (≈ 60 s online, longer offline) — label it as indicative and
       re-check at order time (003). Supabase is already over the Free-plan egress quota: serve the catalog from the
       storefront with ~60 s edge caching per store/page, and long cache headers or a CDN for images.

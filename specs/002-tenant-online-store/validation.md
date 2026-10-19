@@ -48,8 +48,14 @@ no policies, bucket `store-images` public / 2 MB / WebP, three owner-only storag
 ## 3–4. Still to do (needs the user / deployment)
 
 1. ~~Apply the 002 migrations and run the checks~~ — done 2026-10-19 (section 3).
-2. Buy `myomnipos.com`; create the Render web service from `render.yaml` (env vars, edge caching, apex + wildcard
-   domains) — see `storefront/README.md`.
+2. ~~Buy `myomnipos.com`; create the Render web service~~ — done 2026-10-19: `myomnipos.com` (Hostinger DNS),
+   Render `omnipos-storefront` from `render.yaml` on branch `002-tenant-online-store`, edge caching "All files",
+   Let's Encrypt `*.myomnipos.com` certificate (apex + wildcard). Checked live: `/` → 302 to `OMNIPOS_WEBSITE_URL`
+   (`s-maxage=3600`), `www.` → 301 apex, reserved `admin.` → 301 apex, `http://` → 301 `https://`, `/healthz` 200
+   `no-store` (BYPASS); unknown store (host and path form) → 404 "This store isn't available", `noindex`,
+   `s-maxage=60`, no cookies; `storefront.css?v=…` immutable; repeat requests `cf-cache-status: HIT`. Burst of 300
+   requests over 3 URLs: 298 HIT / 2 MISS (upstream ≈ 0.7%, target < 5%); p50 94 ms, p95 749 ms from the dev PC.
+   No store is open in the cloud yet, so store and product pages are still to check live (item 3).
 3. A register on these branches, signed into a **test** business, opens a store, uploads photos; check the live
    storefront, a WhatsApp link preview, the unavailable states (pause, wait ≤ 5 min) and the owner preview.
 4. Burst test against the deployed URL (`storefront/scripts/burst.ts`): upstream share < 5% (SC-002), Lighthouse
