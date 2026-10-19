@@ -65,6 +65,24 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.9.0 — Online store (2026-10-20)
+Specs: [001](specs/001-commerce-domain-foundation/spec.md) Slice A · [002](specs/002-tenant-online-store/spec.md) ·
+[003](specs/003-retail-ordering/spec.md) Slice 1. Cloud migrations 2026-10-18, 2026-10-19(b) and 2026-10-21 applied.
+- **Online store (off by default):** Settings → Online store turns commerce on, creates the store (Retail / Hybrid;
+  Wholesale can't be public), claims its address `<address>.myomnipos.com`, opens / pauses it, branding (logo, cover,
+  colour), contact details, display settings, owner preview of a draft or paused store. Permissions store.view /
+  manage / publish (admin by default).
+- **Products online:** product editor "Online store" tab — publish, online title / description / category / order, up to
+  4 photos (resized to WebP before upload; needs internet), orderable units and minimum quantity; bulk publish in
+  Products. Price, units and stock always come from the product.
+- **Public storefront** (separate web service, edge-cached): store and product pages in en / ar / fr with RTL, USD +
+  local prices, indicative stock, WhatsApp / call / email buttons, link previews.
+- **Order on WhatsApp:** when a shop turns it on (Settings → Online store → Ordering: pickup / delivery notes, minimum
+  order), visitors fill a cart on the storefront and send it as a pre-filled WhatsApp message to the shop; payment on
+  pickup or delivery; nothing about visitors or orders is stored.
+- Upgrade: stores, listings and settings sync like products; listing orderable units switch from register-local ids to
+  unit keys once at startup.
+
 ### 1.7.x — Cash-flow categories, POS layout, shift vs day, balance history (2026-09-29 → 2026-10-07)
 - **1.7.9** (2026-10-08) — Fixes the duplicated invoices / wrong balances after 1.7.8: its one-time full
   re-download brought back day-settled invoices, cash movements and a shift whose cloud delete had failed while the
