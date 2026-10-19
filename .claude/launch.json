@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["tsx", "scripts/preview-server.ts"],
       "port": 3100
+    },
+    {
+      "name": "omnipos-monitor-build",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "preview", "-c", "vite.monitor.config.ts", "--port", "4173", "--strictPort"],
+      "port": 4173
     }
   ]
 }
