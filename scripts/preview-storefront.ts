@@ -36,10 +36,10 @@ export class LocalDbSource implements DataSource {
         out.push({
           listing_id: v.global_id, title: v.display_title, description: v.description, images: v.images || [],
           category: v.category, price: Number(v.price) || 0, price_lbp: v.price_lbp ?? null, unit: v.unit || 'pcs',
-          units: (v.units || []).map((u: any) => ({ unit_id: String(u.id), name: u.name, factor: u.factor, price: u.price, price_lbp: u.price_lbp ?? null })),
+          units: (v.units || []).map((u: any) => ({ unit_id: String(u.key ?? u.id), name: u.name, factor: u.factor, price: u.price, price_lbp: u.price_lbp ?? null })),
           stock_state: v.stock_state, stock: store.settings.show_exact_stock === 1 ? (v.product?.stock ?? null) : null,
           min_quantity: v.min_quantity ?? null, barcode: v.product?.barcode ?? null, sort_order: v.sort_order ?? 0,
-          base_orderable: (() => { const k = orderableKeys(v.orderable_unit_keys ?? v.orderable_unit_ids); return !k || k.includes('base'); })(),
+          base_orderable: v.base_orderable ?? (() => { const k = orderableKeys(v.orderable_unit_keys); return !k || k.includes('base'); })(),
         });
       }
       if (offset + 500 >= page.total) break;

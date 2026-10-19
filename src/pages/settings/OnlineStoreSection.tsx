@@ -2,9 +2,9 @@
 // the store, claim its web address, open / pause it, edit its details and display settings.
 // The public storefront itself is a later feature; this is the back office for it.
 import React, { useEffect, useState } from 'react';
-import { Copy, Eye, ExternalLink, Globe, ImagePlus, Store as StoreIcon, Trash2 } from 'lucide-react';
+import { Copy, Eye, ExternalLink, Globe, ImagePlus, ShoppingCart, Store as StoreIcon, Trash2 } from 'lucide-react';
 import {
-  Badge, Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Switch, Textarea, useConfirm, useToast,
+  Badge, Button, Card, CardBody, CardHeader, EmptyState, Field, Input, MoneyInput, Select, Switch, Textarea, useConfirm, useToast,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { commerceApi, photoUrl, type CommerceStatus, type Store, type StoreInput, type StoreSettings } from '../../lib/commerceApi';
@@ -15,6 +15,16 @@ import { usePermissions } from '../../lib/usePermissions';
 const STATUS_VARIANT = { draft: 'neutral', active: 'success', paused: 'warning' } as const;
 
 type Details = Required<Pick<StoreInput, 'name' | 'mode' | 'description' | 'contact_phone' | 'contact_whatsapp' | 'contact_email' | 'address' | 'primary_color' | 'default_language'>>;
+
+type Ordering = Pick<StoreSettings, 'ordering_mode' | 'pickup_note' | 'delivery_note'> & { pickup_enabled: boolean; delivery_enabled: boolean; min_order_usd: number | '' };
+
+function orderingOf(s: Store): Ordering {
+  const st = s.settings;
+  return {
+    ordering_mode: st.ordering_mode || 'off', pickup_enabled: st.pickup_enabled !== 0, pickup_note: st.pickup_note || '',
+    delivery_enabled: st.delivery_enabled === 1, delivery_note: st.delivery_note || '', min_order_usd: st.min_order_usd ?? '',
+  };
+}
 
 function detailsOf(s: Store): Details {
   return {
@@ -39,6 +49,7 @@ export function OnlineStoreSection() {
   const [newMode, setNewMode] = useState<Store['mode']>('retail');
   const [slug, setSlug] = useState('');
   const [details, setDetails] = useState<Details | null>(null);
+  const [ordering, setOrdering] = useState<Ordering | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const load = async () => {
@@ -47,7 +58,7 @@ export function OnlineStoreSection() {
       setStatus(st);
       const s = stores[0] || null;
       setStore(s);
-      if (s) { setDetails(detailsOf(s)); setSlug(s.slug || ''); }
+      if (s) { setDetails(detailsOf(s)); setOrdering(orderingOf(s)); setSlug(s.slug || ''); }
     } catch (err: any) {
       toast.error(translateServerError(err, t) || err?.message || String(err));
     } finally {
@@ -71,7 +82,7 @@ export function OnlineStoreSection() {
     } catch (err: any) { showError(err); } finally { setBusy(false); }
   };
 
-  const applyStore = (s: Store) => { setStore(s); setDetails(detailsOf(s)); setSlug(s.slug || ''); };
+  const applyStore = (s: Store) => { setStore(s); setDetails(detailsOf(s)); setOrdering(orderingOf(s)); setSlug(s.slug || ''); };
 
   const toggleCommerce = async (enabled: boolean) => {
     const ok = await confirm({
@@ -121,6 +132,21 @@ export function OnlineStoreSection() {
     if (!store) return;
     applyStore(await commerceApi.updateStore(store.id, { settings: { [key]: value ? 1 : 0 } as Partial<StoreSettings> }));
   });
+
+  const saveOrdering = (e: React.FormEvent) => {
+    e.preventDefault();
+    run(async () => {
+      if (!store || !ordering) return;
+      applyStore(await commerceApi.updateStore(store.id, {
+        settings: {
+          ordering_mode: ordering.ordering_mode, pickup_enabled: ordering.pickup_enabled ? 1 : 0, pickup_note: ordering.pickup_note,
+          delivery_enabled: ordering.delivery_enabled ? 1 : 0, delivery_note: ordering.delivery_note,
+          min_order_usd: ordering.min_order_usd === '' || ordering.min_order_usd === 0 ? null : ordering.min_order_usd,
+        },
+      }));
+      toast.success(t('commerce_ordering_saved'));
+    });
+  };
 
   const copyAddress = async () => {
     if (!store?.public_url) return;
@@ -182,6 +208,7 @@ export function OnlineStoreSection() {
   const enabled = status.enabled;
   const editable = canManage && enabled && !busy;
   const set = (patch: Partial<Details>) => setDetails((d) => (d ? { ...d, ...patch } : d));
+  const setOrder = (patch: Partial<Ordering>) => setOrdering((o) => (o ? { ...o, ...patch } : o));
   const err = (f: string) => errors[f];
 
   return (
@@ -376,6 +403,54 @@ export function OnlineStoreSection() {
               </form>
             </CardBody>
           </Card>
+
+          {ordering && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2 text-text-2">
+                  <ShoppingCart size={18} />
+                  <h3 className="text-sm font-semibold">{t('commerce_ordering_title')}</h3>
+                </div>
+              </CardHeader>
+              <CardBody>
+                <form onSubmit={saveOrdering} className="flex flex-col gap-4">
+                  <p className="text-sm text-text-3">{t('commerce_ordering_subtitle')}</p>
+                  <Field label={t('commerce_ordering_mode')} error={err('settings.ordering_mode')}>
+                    <Select value={ordering.ordering_mode} disabled={!editable} onChange={(e) => setOrder({ ordering_mode: e.target.value as Ordering['ordering_mode'] })} options={[
+                      { value: 'off', label: t('commerce_ordering_off') },
+                      { value: 'whatsapp', label: t('commerce_ordering_whatsapp') },
+                      { value: 'online', label: t('commerce_ordering_online'), disabled: true },
+                    ]} />
+                  </Field>
+                  {ordering.ordering_mode === 'whatsapp' && !store.contact_whatsapp && (
+                    <p className="rounded-[var(--radius-input)] bg-accent-soft px-3 py-2 text-sm text-accent">{t('commerce_ordering_needs_whatsapp')}</p>
+                  )}
+                  {err('contact_whatsapp') && <p className="text-sm text-danger">{err('contact_whatsapp')}</p>}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="flex flex-col gap-2">
+                      <Switch checked={ordering.pickup_enabled} disabled={!editable} onChange={(v) => setOrder({ pickup_enabled: v })} label={t('commerce_ordering_pickup')} />
+                      <Field label={t('commerce_ordering_pickup_note')} error={err('settings.pickup_note')}>
+                        <Input value={ordering.pickup_note} maxLength={200} disabled={!editable || !ordering.pickup_enabled} onChange={(e) => setOrder({ pickup_note: e.target.value })} />
+                      </Field>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Switch checked={ordering.delivery_enabled} disabled={!editable} onChange={(v) => setOrder({ delivery_enabled: v })} label={t('commerce_ordering_delivery')} />
+                      <Field label={t('commerce_ordering_delivery_note')} helper={t('commerce_ordering_delivery_helper')} error={err('settings.delivery_note')}>
+                        <Input value={ordering.delivery_note} maxLength={200} disabled={!editable || !ordering.delivery_enabled} onChange={(e) => setOrder({ delivery_note: e.target.value })} />
+                      </Field>
+                    </div>
+                  </div>
+                  {err('settings.pickup_enabled') && <p className="text-sm text-danger">{err('settings.pickup_enabled')}</p>}
+                  <Field label={t('commerce_ordering_min_order')} helper={t('commerce_ordering_min_helper')} error={err('settings.min_order_usd')} className="sm:max-w-xs">
+                    <MoneyInput value={ordering.min_order_usd} currencySymbol="$" min={0} disabled={!editable} invalid={!!err('settings.min_order_usd')} onChange={(v) => setOrder({ min_order_usd: v })} />
+                  </Field>
+                  <div className="flex justify-end">
+                    <Button type="submit" disabled={!editable}>{t('commerce_save')}</Button>
+                  </div>
+                </form>
+              </CardBody>
+            </Card>
+          )}
 
           <Card>
             <CardHeader><h3 className="text-sm font-semibold text-text-2">{t('commerce_display_title')}</h3></CardHeader>

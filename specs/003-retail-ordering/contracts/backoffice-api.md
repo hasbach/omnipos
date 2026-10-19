@@ -25,8 +25,10 @@ The store view (`GET /api/commerce/stores`) returns the merged settings with def
 
 - New input `orderable_unit_keys: string[] | null` (`"base"` or unit global ids of this product); `null` = all units.
 - Legacy input `orderable_unit_ids: number[]` still accepted (older UI builds) and converted to keys server-side.
-- `ListingView` returns `orderable_unit_keys` (and drops `orderable_unit_ids`), and `units` gains `key`
-  (`"base"` row first, then units) so the UI can render checkboxes.
+- `ListingView` returns `orderable_unit_keys` and `base_orderable` (and drops `orderable_unit_ids`); `units` still lists the
+  orderable units, now with `key`; new `unit_options` lists every live unit with its key (`"base"` row first) for the
+  checkboxes.
+- Legacy `orderable_unit_ids: []` (no units) is saved as `["base"]`, its old meaning.
 
 | Code | When |
 |---|---|

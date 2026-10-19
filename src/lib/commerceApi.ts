@@ -13,6 +13,13 @@ export interface StoreSettings {
   hide_out_of_stock: 0 | 1;
   show_local_price: 0 | 1;
   category_order: string[];
+  // 003 ordering (Slice 1: 'online' is refused by the server until Slice 2)
+  ordering_mode: 'off' | 'whatsapp' | 'online';
+  pickup_enabled: 0 | 1;
+  pickup_note: string;
+  delivery_enabled: 0 | 1;
+  delivery_note: string;
+  min_order_usd: number | null;
 }
 
 export interface Store {
@@ -60,7 +67,9 @@ export interface ListingView {
   store_category: string | null;
   sort_order: number;
   min_quantity: number | null;
-  orderable_unit_ids: number[] | null;
+  /** "base" or unit global ids; null = every unit is orderable. */
+  orderable_unit_keys: string[] | null;
+  base_orderable: boolean;
   display_title: string;
   category: string | null;
   visible: boolean;
@@ -69,12 +78,15 @@ export interface ListingView {
   price: number | null;
   price_lbp: number | null;
   unit: string;
-  units: { id: number; name: string; factor: number; price: number; price_lbp: number | null }[];
+  /** Orderable units (besides the base unit when base_orderable). */
+  units: { id: number; key: string; name: string; factor: number; price: number; price_lbp: number | null }[];
+  /** Every live unit with its key, base first (for the orderable-units choice). */
+  unit_options: { key: string; name: string; factor: number; price: number }[];
   product: { id: number; name: string; barcode: string | null; active: number; stock: number } | null;
 }
 
 export type StoreInput = Partial<Omit<Store, 'id' | 'global_id' | 'slug' | 'status' | 'public_url' | 'settings'>> & { settings?: Partial<StoreSettings> };
-export type ListingInput = Partial<Pick<ListingView, 'published' | 'title' | 'description' | 'store_category' | 'sort_order' | 'min_quantity' | 'orderable_unit_ids'>>;
+export type ListingInput = Partial<Pick<ListingView, 'published' | 'title' | 'description' | 'store_category' | 'sort_order' | 'min_quantity' | 'orderable_unit_keys'>>;
 
 /** Thumbnail URL for a stored photo path. */
 export const photoUrl = (status: Pick<CommerceStatus, 'image_base'>, path: string) =>
