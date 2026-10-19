@@ -35,6 +35,7 @@ the shop never maintains a second catalogue.
 
 - Q: Which domain should host every store's default address? → A: Buy a short, dedicated new domain for storefronts
   (e.g. `omnipos.shop` / `omnipos.store`); exact name picked after an availability check, before deployment.
+  Availability check 2026-10-19: omnipos.shop and omnipos.store taken; chosen: `myomnipos.com`.
 - Q: How can visitors contact a shop from the storefront? → A: WhatsApp, phone and email — one button per contact
   detail the shop filled in, on the store page and every product page.
 - Q: Are custom domains part of this feature? → A: No — they become a separate feature after storefronts are live;
@@ -359,7 +360,7 @@ reaching the cloud database.
 
 ## Assumptions
 
-- The storefront domain is a new, dedicated short domain bought by OmniPOS (for example `omnipos.shop`); the exact
+- The storefront domain is a new, dedicated short domain bought by OmniPOS (chosen 2026-10-19: `myomnipos.com`); the exact
   name is chosen after an availability check and is needed before deployment, not before planning.
 - The storefront is hosted alongside the Live Monitor on the same hosting provider, on a plan that allows commercial
   use, wildcard subdomains, custom domains and caching. Hosting cost is accepted as part of offering stores.

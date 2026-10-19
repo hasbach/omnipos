@@ -6,13 +6,13 @@ import { handle } from "../storefront/src/http.js";
 import { FixtureSource, demoFixture } from "../storefront/src/fixture.js";
 import { loadConfig } from "../storefront/src/config.js";
 
-const config = loadConfig({ STOREFRONT_DOMAIN: "omnipos.shop", OMNIPOS_WEBSITE_URL: "https://omnipos.example" });
+const config = loadConfig({ STOREFRONT_DOMAIN: "myomnipos.com", OMNIPOS_WEBSITE_URL: "https://omnipos.example" });
 
 function setup(mutate?: (fx: ReturnType<typeof demoFixture>) => void) {
   const fx = demoFixture(60);
   mutate?.(fx);
   const data = new FixtureSource(fx);
-  const get = async (url: string, host = "beirut-market.omnipos.shop") => {
+  const get = async (url: string, host = "beirut-market.myomnipos.com") => {
     const r = await handle({ host, url }, { config, data, assetVersion: "test" });
     return { ...r, html: typeof r.body === "string" ? r.body : "" };
   };
@@ -169,7 +169,7 @@ test("contact buttons: WhatsApp pre-filled with product name and link, Call and 
   assert.equal(waUrl.pathname, "/96170123456");
   const text = waUrl.searchParams.get("text")!;
   assert.match(text, /Whole Milk 1L/);
-  assert.match(text, new RegExp(`https://beirut-market\.omnipos\.shop/p/${P1}`));
+  assert.match(text, new RegExp(`https://beirut-market\.myomnipos.com/p/${P1}`));
   assert.match(r.html, /href="tel:\+9611234567"/);
   assert.match(r.html, /href="mailto:hello@beirut-market\.test\?subject=Whole%20Milk%201L"/);
 
@@ -193,17 +193,17 @@ test("store home shows the contact buttons too, with a store message", async () 
   assert.match(r.html, /class="sf-contact"/);
   const wa = new URL(r.html.match(/href="(https:\/\/wa\.me\/[^"]+)"/)![1].replace(/&amp;/g, "&"));
   assert.match(wa.searchParams.get("text")!, /Beirut Market/);
-  assert.match(wa.searchParams.get("text")!, /https:\/\/beirut-market\.omnipos\.shop\//);
+  assert.match(wa.searchParams.get("text")!, /https:\/\/beirut-market\.myomnipos.com\//);
 });
 
 test("link previews: product title, price and first photo as absolute URLs; canonical in host form", async () => {
   const { get } = setup((fx) => { fx.listings[0].images = [PHOTO(1)]; });
-  const r = await get(`/s/beirut-market/p/${P1}`, "omnipos.shop"); // path form: canonical still host form
+  const r = await get(`/s/beirut-market/p/${P1}`, "myomnipos.com"); // path form: canonical still host form
   assert.match(r.html, /<title>Whole Milk 1L — Beirut Market<\/title>/);
   assert.match(r.html, /<meta property="og:title" content="Whole Milk 1L — Beirut Market">/);
   assert.match(r.html, /<meta property="og:description" content="\$1\.50[^"]*">/);
-  assert.match(r.html, new RegExp(`<meta property="og:image" content="https://beirut-market\.omnipos\.shop/img/${PHOTO(1).replace(/\//g, "\/")}">`));
-  assert.match(r.html, new RegExp(`<link rel="canonical" href="https://beirut-market\.omnipos\.shop/p/${P1}">`));
+  assert.match(r.html, new RegExp(`<meta property="og:image" content="https://beirut-market\.myomnipos.com/img/${PHOTO(1).replace(/\//g, "\/")}">`));
+  assert.match(r.html, new RegExp(`<link rel="canonical" href="https://beirut-market\.myomnipos.com/p/${P1}">`));
   assert.match(r.html, /<meta property="og:locale" content="en_US">/);
   assert.match(r.html, /<meta name="twitter:card" content="summary_large_image">/);
 });
@@ -305,7 +305,7 @@ test("every non-public state shows one identical neutral page, with no products 
     ["commerce off", (fx) => { fx.store.commerce_on = false; }],
     ["license expired", (fx) => { fx.store.licensed = false; }],
   ];
-  const unknown = await setup().get("/", "never-claimed.omnipos.shop");
+  const unknown = await setup().get("/", "never-claimed.myomnipos.com");
   assert.equal(unknown.status, 404);
   for (const [label, mutate] of states) {
     const r = await setup(mutate).get("/");

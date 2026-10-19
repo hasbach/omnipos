@@ -48,8 +48,8 @@ no policies, bucket `store-images` public / 2 MB / WebP, three owner-only storag
 ## 3–4. Still to do (needs the user / deployment)
 
 1. ~~Apply the 002 migrations and run the checks~~ — done 2026-10-19 (section 3).
-2. Buy the storefront domain; create the Vercel project (Root Directory `storefront`, commercial plan, env vars,
-   apex + wildcard domains) — see `storefront/README.md`.
+2. Buy `myomnipos.com`; create the Render web service from `render.yaml` (env vars, edge caching, apex + wildcard
+   domains) — see `storefront/README.md`.
 3. A register on these branches, signed into a **test** business, opens a store, uploads photos; check the live
    storefront, a WhatsApp link preview, the unavailable states (pause, wait ≤ 5 min) and the owner preview.
 4. Burst test against the deployed URL (`storefront/scripts/burst.ts`): upstream share < 5% (SC-002), Lighthouse

@@ -6,7 +6,7 @@ import { route } from "../storefront/src/router.js";
 import { FixtureSource, demoFixture } from "../storefront/src/fixture.js";
 import { loadConfig } from "../storefront/src/config.js";
 
-const config = loadConfig({ STOREFRONT_DOMAIN: "omnipos.shop", OMNIPOS_WEBSITE_URL: "https://omnipos.example" });
+const config = loadConfig({ STOREFRONT_DOMAIN: "myomnipos.com", OMNIPOS_WEBSITE_URL: "https://omnipos.example" });
 const make = () => {
   const fx = demoFixture(10);
   const data = new FixtureSource(fx);
@@ -16,8 +16,8 @@ const body = (r: { body: string | Uint8Array }) => (typeof r.body === "string" ?
 
 test("host form and path form show the same store; links stay in their own form", async () => {
   const { get } = make();
-  const host = await get("beirut-market.omnipos.shop", "/");
-  const path = await get("omnipos.shop", "/s/beirut-market");
+  const host = await get("beirut-market.myomnipos.com", "/");
+  const path = await get("myomnipos.com", "/s/beirut-market");
   assert.equal(host.status, 200);
   assert.equal(path.status, 200);
   assert.match(body(host), /href="\/p\/00000000-0000-4000-8000-000000000001"/);
@@ -28,69 +28,69 @@ test("host form and path form show the same store; links stay in their own form"
 
 test("addresses are matched case-insensitively", async () => {
   const { get } = make();
-  assert.equal((await get("Beirut-Market.OMNIPOS.shop", "/")).status, 200);
-  assert.equal((await get("omnipos.shop", "/s/BEIRUT-MARKET")).status, 200);
+  assert.equal((await get("Beirut-Market.MYOMNIPOS.com", "/")).status, 200);
+  assert.equal((await get("myomnipos.com", "/s/BEIRUT-MARKET")).status, 200);
 });
 
 test("route(): product pages, unknown paths, invalid addresses, nested subdomains", () => {
-  const d = "omnipos.shop";
-  assert.equal(route("a-shop.omnipos.shop", "/p/00000000-0000-4000-8000-000000000001/cola-can", d).kind, "product");
-  assert.equal(route("a-shop.omnipos.shop", "/p/not-a-uuid", d).kind, "notFound");
-  assert.equal(route("a-shop.omnipos.shop", "/admin", d).kind, "notFound");
-  assert.equal(route("x.y.omnipos.shop", "/", d).kind, "notFound");
-  assert.equal(route("omnipos.shop", "/s/bad_address!", d).kind, "notFound");
-  assert.equal(route("omnipos.shop", "/img/a/b.webp", d).kind, "img");
-  const r = route("a-shop.omnipos.shop", "/?c=Dairy&q=%20milk%20&page=0&lang=de&preview=ok_token-1", d) as any;
+  const d = "myomnipos.com";
+  assert.equal(route("a-shop.myomnipos.com", "/p/00000000-0000-4000-8000-000000000001/cola-can", d).kind, "product");
+  assert.equal(route("a-shop.myomnipos.com", "/p/not-a-uuid", d).kind, "notFound");
+  assert.equal(route("a-shop.myomnipos.com", "/admin", d).kind, "notFound");
+  assert.equal(route("x.y.myomnipos.com", "/", d).kind, "notFound");
+  assert.equal(route("myomnipos.com", "/s/bad_address!", d).kind, "notFound");
+  assert.equal(route("myomnipos.com", "/img/a/b.webp", d).kind, "img");
+  const r = route("a-shop.myomnipos.com", "/?c=Dairy&q=%20milk%20&page=0&lang=de&preview=ok_token-1", d) as any;
   assert.deepEqual(r.params, { category: "Dairy", search: "milk", page: 1, lang: null, preview: "ok_token-1" });
 });
 
 test("apex root redirects to the OmniPOS website; reserved subdomains to the apex", async () => {
   const { get } = make();
-  const apex = await get("omnipos.shop", "/");
+  const apex = await get("myomnipos.com", "/");
   assert.equal(apex.status, 302);
   assert.equal(apex.headers.Location, "https://omnipos.example");
   for (const sub of ["www", "api", "mail", "admin"]) {
-    const r = await get(`${sub}.omnipos.shop`, "/");
+    const r = await get(`${sub}.myomnipos.com`, "/");
     assert.equal(r.status, 301, sub);
-    assert.equal(r.headers.Location, "https://omnipos.shop/");
+    assert.equal(r.headers.Location, "https://myomnipos.com/");
   }
 });
 
 test("unknown and non-public stores get the same neutral page, cached briefly", async () => {
   const { fx, get } = make();
-  const unknown = await get("nope.omnipos.shop", "/");
+  const unknown = await get("nope.myomnipos.com", "/");
   assert.equal(unknown.status, 404);
   assert.equal(unknown.headers["Cache-Control"], CACHE_SHORT);
   fx.store.status = "paused";
-  const paused = await get("beirut-market.omnipos.shop", "/");
+  const paused = await get("beirut-market.myomnipos.com", "/");
   assert.equal(paused.status, 404);
   assert.equal(body(paused), body(unknown), "paused looks exactly like unknown");
   fx.store.status = "active";
   fx.store.mode = "wholesale";
-  assert.equal(body(await get("beirut-market.omnipos.shop", "/")), body(unknown), "wholesale looks exactly like unknown");
+  assert.equal(body(await get("beirut-market.myomnipos.com", "/")), body(unknown), "wholesale looks exactly like unknown");
 });
 
 test("cache headers per route kind; no cookies; security headers", async () => {
   const { fx, get } = make();
-  const home = await get("beirut-market.omnipos.shop", "/");
+  const home = await get("beirut-market.myomnipos.com", "/");
   assert.equal(home.headers["Cache-Control"], CACHE_PAGE);
   assert.equal(home.headers["Content-Type"], "text/html; charset=utf-8");
   assert.equal(home.headers["X-Content-Type-Options"], "nosniff");
   assert.ok(home.headers["Referrer-Policy"]);
-  const product = await get("beirut-market.omnipos.shop", "/p/00000000-0000-4000-8000-000000000001");
+  const product = await get("beirut-market.myomnipos.com", "/p/00000000-0000-4000-8000-000000000001");
   assert.equal(product.headers["Cache-Control"], CACHE_PAGE);
-  const gone = await get("beirut-market.omnipos.shop", "/p/00000000-0000-4000-8000-000000000999");
+  const gone = await get("beirut-market.myomnipos.com", "/p/00000000-0000-4000-8000-000000000999");
   assert.equal(gone.status, 404);
   assert.equal(gone.headers["Cache-Control"], CACHE_SHORT);
-  const notFound = await get("beirut-market.omnipos.shop", "/nothing-here");
+  const notFound = await get("beirut-market.myomnipos.com", "/nothing-here");
   assert.equal(notFound.status, 404);
   assert.equal(notFound.headers["Cache-Control"], CACHE_SHORT);
-  const badImg = await get("omnipos.shop", "/img/../../etc/passwd");
+  const badImg = await get("myomnipos.com", "/img/../../etc/passwd");
   assert.equal(badImg.status, 404);
 
   fx.previewTokens.push("tok_1");
   fx.store.status = "draft";
-  const preview = await get("beirut-market.omnipos.shop", "/?preview=tok_1");
+  const preview = await get("beirut-market.myomnipos.com", "/?preview=tok_1");
   assert.equal(preview.status, 200);
   assert.equal(preview.headers["Cache-Control"], CACHE_PREVIEW);
   assert.equal(preview.headers["X-Robots-Tag"], "noindex");
@@ -105,7 +105,7 @@ test("cache headers per route kind; no cookies; security headers", async () => {
 test("upstream failure: 503 page, not cached", async () => {
   const { UpstreamError } = await import("../storefront/src/data.js");
   const failing = { getStore: async () => { throw new UpstreamError("down"); }, listListings: async () => ({ rows: [], total: 0 }), getListing: async () => null };
-  const r = await handle({ host: "beirut-market.omnipos.shop", url: "/" }, { config, data: failing as any, assetVersion: "t" });
+  const r = await handle({ host: "beirut-market.myomnipos.com", url: "/" }, { config, data: failing as any, assetVersion: "t" });
   assert.equal(r.status, 503);
   assert.equal(r.headers["Cache-Control"], "no-store");
 });
@@ -115,8 +115,8 @@ test("upstream failure: 503 page, not cached", async () => {
 test("identical URLs give identical bodies and cache headers (CDN-cacheable; nothing varies per visitor)", async () => {
   const { get } = make();
   for (const url of ["/", "/?c=Dairy", "/p/00000000-0000-4000-8000-000000000001", "/?lang=ar"]) {
-    const a = await get("beirut-market.omnipos.shop", url);
-    const b = await get("beirut-market.omnipos.shop", url);
+    const a = await get("beirut-market.myomnipos.com", url);
+    const b = await get("beirut-market.myomnipos.com", url);
     assert.equal(body(a), body(b), url);
     assert.deepEqual(a.headers, b.headers, url);
     assert.equal(a.headers.Vary, undefined, `${url} must not vary`);
@@ -131,7 +131,7 @@ test("asset version matches the files (sha256 of css + js + svg, LF-normalised)"
     .map((f) => fs.readFileSync(`storefront/public/${f}`, "utf8").replace(/\r\n/g, "\n")).join("");
   const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 10);
   assert.equal(ASSET_VERSION, hash, `update storefront/src/assets.ts to '${hash}'`);
-  const home = await make().get("beirut-market.omnipos.shop", "/");
+  const home = await make().get("beirut-market.myomnipos.com", "/");
   assert.ok(body(home).includes("/storefront.css?v=test"), "pages reference the versioned stylesheet");
 });
 
@@ -139,7 +139,7 @@ test("page weight: home with 48 cards ≤ 60 KB, stylesheet ≤ 20 KB, script �
   const fs = await import("fs");
   const { LIMITS } = await import("../storefront/src/limits.js");
   const data = new FixtureSource(demoFixture(200));
-  const r = await handle({ host: "beirut-market.omnipos.shop", url: "/" }, { config, data, assetVersion: "0123456789" });
+  const r = await handle({ host: "beirut-market.myomnipos.com", url: "/" }, { config, data, assetVersion: "0123456789" });
   const html = body(r);
   assert.equal((html.match(/class="sf-card"/g) || []).length, 48);
   assert.ok(Buffer.byteLength(html) <= LIMITS.homeHtmlBytes, `home is ${Buffer.byteLength(html)} bytes`);
@@ -150,7 +150,7 @@ test("page weight: home with 48 cards ≤ 60 KB, stylesheet ≤ 20 KB, script �
 test("a burst on one page costs one data-source call per render, and the CDN header lets the edge absorb the rest", async () => {
   const { data, get } = make();
   const before = data.calls;
-  const r = await get("beirut-market.omnipos.shop", "/");
+  const r = await get("beirut-market.myomnipos.com", "/");
   assert.equal(data.calls - before, 2, "home = store + listings");
   assert.match(r.headers["Cache-Control"], /s-maxage=240/);
 });

@@ -9,7 +9,7 @@ ROUTE_RULES conventions; every write is audited with `logAction`.
 
 | Field | Meaning |
 |---|---|
-| `storefront_origin` | e.g. `https://omnipos.shop` (build-time constant until the domain is bought) |
+| `storefront_origin` | e.g. `https://myomnipos.com` (build-time constant until the domain is bought) |
 | `store.public_url` | `https://<slug>.<domain>` when a slug is claimed, else null |
 | `store.publicly_visible` | local estimate: active + retail/hybrid + commerce on + license valid |
 | `store.not_public_reason` | `draft` \| `paused` \| `wholesale` \| `commerce_off` \| `license` \| null |

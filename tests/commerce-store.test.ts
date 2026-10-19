@@ -147,7 +147,7 @@ test("slug: offline => STORE_SLUG_NEEDS_ONLINE and nothing saved; taken => STORE
   const ok = await app.api("POST", `/api/commerce/stores/${store.id}/slug`, { ...s.as, body: { slug: " ABC-Market " } });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   assert.equal(ok.body.slug, "abc-market");
-  assert.equal(ok.body.public_url, "https://abc-market.omnipos.shop/");
+  assert.equal(ok.body.public_url, "https://abc-market.myomnipos.com/");
   assert.deepEqual(seen, { tenantId: s.tenantId, gid: store.global_id, slug: "abc-market" });
   const log = app.db.prepare("SELECT details FROM user_logs WHERE tenant_id = ? AND action = 'store_slug_change'").get(s.tenantId) as any;
   assert.deepEqual(JSON.parse(log.details).after, { slug: "abc-market" });

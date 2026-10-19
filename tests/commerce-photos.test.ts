@@ -177,16 +177,16 @@ test("preview link: needs an address and the cloud; returns the public address w
   cloud.mode = "ok";
   const ok = await app.api("POST", url, s.as);
   assert.equal(ok.status, 200);
-  assert.equal(ok.body.url, `https://photo-shop-${n}.omnipos.shop/?preview=tok_preview_1`);
+  assert.equal(ok.body.url, `https://photo-shop-${n}.myomnipos.com/?preview=tok_preview_1`);
 });
 
 test("status: public address in host form, storefront origin and where back-office thumbnails load from", async () => {
   const s = await setup();
   await app.api("POST", `/api/commerce/stores/${s.store.id}/slug`, { ...s.as, body: { slug: `addr-${n}` } });
   const st = (await app.api("GET", "/api/commerce/status", s.as)).body;
-  assert.equal(st.storefront_origin, "https://omnipos.shop");
-  assert.equal(st.store.public_url, `https://addr-${n}.omnipos.shop/`);
+  assert.equal(st.storefront_origin, "https://myomnipos.com");
+  assert.equal(st.store.public_url, `https://addr-${n}.myomnipos.com/`);
   assert.match(st.image_base, /\/storage\/v1\/object\/public\/store-images\/$/);
   const stores = (await app.api("GET", "/api/commerce/stores", s.as)).body;
-  assert.equal(stores[0].public_url, `https://addr-${n}.omnipos.shop/`);
+  assert.equal(stores[0].public_url, `https://addr-${n}.myomnipos.com/`);
 });

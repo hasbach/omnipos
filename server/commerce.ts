@@ -126,7 +126,7 @@ function parseStoreSettings(raw: any) {
 // ---- public addresses (spec 002) -------------------------------------------------------------------
 // Stores live at https://<slug>.<STOREFRONT_DOMAIN>/. The preview server points these at itself through
 // STOREFRONT_PATH_BASE (e.g. http://localhost:3100/s/) and STOREFRONT_IMAGE_BASE.
-export const STOREFRONT_DOMAIN = (process.env.STOREFRONT_DOMAIN || 'omnipos.shop').toLowerCase();
+export const STOREFRONT_DOMAIN = (process.env.STOREFRONT_DOMAIN || 'myomnipos.com').toLowerCase();
 
 export function storefrontOrigin(): string {
   const base = process.env.STOREFRONT_PATH_BASE;

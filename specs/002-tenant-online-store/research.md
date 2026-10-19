@@ -22,6 +22,12 @@ Decisions for [plan.md](plan.md). Format: decision, rationale, alternatives.
 - **Alternatives**: `*.vercel.app` subdomains (not ours to hand out); path-only (works, but less brandable — kept as
   the fallback form).
 - **Note**: Vercel Hobby forbids commercial use → Pro plan; recorded as an accepted cost in the spec assumptions.
+- **Revised 2026-10-19 (before deployment)**: hosted on **Render** instead, as a second web service in the existing
+  Render workspace (no Vercel Pro subscription). Same handler (`src/http.ts`) behind a plain Node server
+  (`storefront/server.ts`, `render.yaml`); Render's edge cache honours the same `Cache-Control` / `s-maxage` headers
+  once Edge Caching is set to "All files", so R3 holds unchanged. Apex + wildcard custom domains use DNS records at
+  the registrar (no nameserver move). Domain: `myomnipos.com` (omnipos.shop / .store taken). The store is resolved
+  from `Host` only: `X-Forwarded-Host` is ignored because the edge caches by `Host`.
 
 ## R3 — Caching and freshness (protecting Supabase egress)
 

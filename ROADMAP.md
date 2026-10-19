@@ -17,7 +17,7 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 | # | Item | Spec | Status |
 |---|------|------|--------|
 | 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | **Slice A implemented** on branch `001-commerce-domain-foundation` (not merged; [validation](specs/001-commerce-domain-foundation/validation.md)): commerce on/off, store + web address, listings, store.* permissions, sync, public catalog functions. Slice B (relationships, orders, posting) not planned |
-| 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) · [plan](specs/002-tenant-online-store/plan.md) · [validation](specs/002-tenant-online-store/validation.md) | **Implemented** on branch `002-tenant-online-store` (on top of 001, not merged; 44/44 tasks): server-rendered storefront (`storefront/`, own Vercel project, CDN-cached), store home / product pages, WhatsApp-phone-email contact, en/ar/fr + RTL, up to 4 photos + logo/cover, owner preview, Wholesale stores never public. Cloud migration applied 2026-10-19; not deployed: needs the storefront domain and the Vercel project |
+| 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) · [plan](specs/002-tenant-online-store/plan.md) · [validation](specs/002-tenant-online-store/validation.md) | **Implemented** on branch `002-tenant-online-store` (on top of 001, not merged; 44/44 tasks): server-rendered storefront (`storefront/`, own Render web service, edge-cached), store home / product pages, WhatsApp-phone-email contact, en/ar/fr + RTL, up to 4 photos + logo/cover, owner preview, Wholesale stores never public. Cloud migration applied 2026-10-19; not deployed: needs the storefront domain and the Render service |
 | 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | | Not started |
 | 004 | Business-to-business relationships (request, approve, terms) | | Not started |
 | 005 | B2B wholesale storefront (customer pricing, units, minimums, reorder) | | Not started |
@@ -37,14 +37,14 @@ Other items: _(add fixes and ideas here)_
 - [x] Cloud migrations (002) `2026-10-19_storefront.sql` + `2026-10-19b_storefront_storage.sql` applied 2026-10-19 and verified
       read-only (all 9 functions with the intended grants, Wholesale gate, allow-list clean, preview-token table closed,
       `store-images` bucket public / 2 MB / WebP, 3 owner-only storage policies, new reserved list).
-- [ ] 002 deployment: Vercel project `omnipos-storefront` (Root Directory `storefront`, Pro plan, env vars, apex +
-      wildcard domains with Vercel nameservers) — steps in `storefront/README.md`; then quickstart §3–4 (live check,
+- [ ] 002 deployment: Render web service `omnipos-storefront` from `render.yaml` (existing Render workspace, Starter
+      instance, Frankfurt, edge caching "All files", apex + wildcard domains via registrar DNS records) — steps in `storefront/README.md`; then quickstart §3–4 (live check,
       WhatsApp preview, burst test < 5% upstream).
-- [ ] 002: buy a short dedicated storefront domain (e.g. omnipos.shop / omnipos.store) after an availability check;
+- [ ] 002: buy the storefront domain myomnipos.com (chosen 2026-10-19; omnipos.shop/.store were taken) at a registrar;
       needed before deployment.
 - [ ] 002 storefront: stock online lags the registers (≈ 60 s online, longer offline) — label it as indicative and
-      re-check at order time (003). Supabase is already over the Free-plan egress quota: serve the catalog from Vercel
-      with ~60 s edge caching per store/page, and long cache headers or a CDN for images.
+      re-check at order time (003). Supabase is already over the Free-plan egress quota: serve the catalog from the
+      storefront with ~60 s edge caching per store/page, and long cache headers or a CDN for images.
 - [ ] 003 ordering: `store_listings.orderable_unit_ids` holds the authoring register's local unit ids; switch to unit
       global ids before enforcing it (the cloud catalog ignores it today).
 - [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or

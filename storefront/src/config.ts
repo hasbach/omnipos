@@ -4,7 +4,7 @@ export { RESERVED_SLUGS as RESERVED_SUBDOMAINS } from './reserved.js';
 export interface StorefrontConfig {
   supabaseUrl: string;
   supabaseAnonKey: string;
-  /** e.g. "omnipos.shop" — stores live at <address>.<domain> and <domain>/s/<address>. */
+  /** e.g. "myomnipos.com" — stores live at <address>.<domain> and <domain>/s/<address>. */
   storefrontDomain: string;
   /** Where the bare storefront domain redirects. */
   websiteUrl: string;
@@ -19,7 +19,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   return {
     supabaseUrl: (env.SUPABASE_URL || DEFAULT_SUPABASE_URL).replace(/\/+$/, ''),
     supabaseAnonKey: env.SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY,
-    storefrontDomain: (env.STOREFRONT_DOMAIN || 'omnipos.shop').toLowerCase(),
+    storefrontDomain: (env.STOREFRONT_DOMAIN || 'myomnipos.com').toLowerCase(),
     websiteUrl: env.OMNIPOS_WEBSITE_URL || 'https://github.com/hasbach/omnipos',
   };
 }

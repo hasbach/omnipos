@@ -38,7 +38,7 @@ export interface Store {
 export interface CommerceStatus {
   enabled: boolean;
   online_license_valid: boolean;
-  /** e.g. https://omnipos.shop */
+  /** e.g. https://myomnipos.com */
   storefront_origin: string;
   /** Prefix for back-office photo thumbnails (public bucket URL). */
   image_base: string;

@@ -1,0 +1,35 @@
+# Render Blueprint — the public storefront (feature 002). Only the storefront deploys from this repo; the desktop
+# app ships through electron-builder. Setup and DNS steps: storefront/README.md.
+services:
+  - type: web
+    name: omnipos-storefront
+    runtime: node
+    rootDir: storefront
+    # Frankfurt: closest Render region to the shops' customers (Lebanon); Supabase is in ap-south-1 and is only
+    # reached on edge-cache misses.
+    region: frankfurt
+    plan: starter
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    # Deploy only when the storefront changes, not on every desktop-app commit.
+    buildFilter:
+      paths:
+        - storefront/**
+    domains:
+      - myomnipos.com
+      - "*.myomnipos.com"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: STOREFRONT_DOMAIN
+        value: myomnipos.com
+      - key: SUPABASE_URL
+        value: https://cqxoxrgjazgcfhozoeyr.supabase.co
+      # The public anon key (same as src/lib/supabase.ts); set in the dashboard.
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      # Where the bare domain redirects (the OmniPOS website).
+      - key: OMNIPOS_WEBSITE_URL
+        sync: false

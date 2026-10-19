@@ -2,6 +2,12 @@
   "name": "omnipos-storefront",
   "private": true,
   "type": "module",
-  "description": "OmniPOS public online-store pages (specs/002-tenant-online-store). Deployed as its own Vercel project.",
-  "engines": { "node": ">=20" }
+  "description": "OmniPOS public online-store pages (specs/002-tenant-online-store). Deployed as its own Render web service (render.yaml).",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "tsx server.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.21.0"
+  }
 }

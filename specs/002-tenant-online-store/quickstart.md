@@ -46,7 +46,7 @@ npx tsx scripts/preview-server.ts
 3. `npx tsx storefront/dev-server.ts` (data source = cloud) → `http://localhost:3200/s/<address>`; check pages,
    unavailable states (pause the store, wait ≤ 5 min) and the preview link from Settings.
 
-## 4. Deployment checks (after the storefront domain is bought and the Vercel project exists)
+## 4. Deployment checks (after the storefront domain is bought and the Render service exists)
 
 - `https://<address>.<domain>/` and `https://<domain>/s/<address>` show the same store; `www.<domain>` → apex.
 - Response headers match [storefront-routes.md](contracts/storefront-routes.md) (cache headers, no cookies).
