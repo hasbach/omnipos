@@ -290,3 +290,89 @@ test("allow-list: store and status responses carry no cost, tier price or local 
     assert.ok(!JSON.stringify(r.body).includes('"tenant_id"'), `${where} exposes tenant_id`);
   }
 });
+
+// ---- 003 Slice 1: orderable units as keys ("base" / unit global id) — research R5 -----------------------
+
+function unit(t: number, pid: number, name: string, factor: number, price: number) {
+  const id = Number(app.db.prepare("INSERT INTO product_units (tenant_id, product_id, name, factor, price) VALUES (?, ?, ?, ?, ?)").run(t, pid, name, factor, price).lastInsertRowid);
+  const gid = (app.db.prepare("SELECT global_id FROM product_units WHERE id = ?").get(id) as any).global_id as string;
+  return { id, gid };
+}
+
+test("003 unit keys: base and this product's units by global id; empty, unknown or foreign keys refused", async () => {
+  const s = await setup();
+  const pid = product(s.tenantId, { price: 2 });
+  const pack = unit(s.tenantId, pid, "Pack", 6, 11);
+  const carton = unit(s.tenantId, pid, "Carton", 24, 40);
+  const other = unit(s.tenantId, product(s.tenantId), "Box", 12, 20);
+  const foreignTenant = await setup();
+  const foreign = unit(foreignTenant.tenantId, product(foreignTenant.tenantId), "Crate", 12, 20);
+
+  let r = await put(s, pid, { published: true });
+  assert.equal(r.body.orderable_unit_keys, null);
+  assert.equal(r.body.base_orderable, true);
+  assert.deepEqual(r.body.units.map((u: any) => u.key), [pack.gid, carton.gid]);
+  assert.deepEqual(r.body.unit_options.map((u: any) => [u.key, u.name, u.factor]), [["base", "pcs", 1], [pack.gid, "Pack", 6], [carton.gid, "Carton", 24]]);
+  assert.ok(!("orderable_unit_ids" in r.body), "local ids are no longer exposed");
+
+  r = await put(s, pid, { orderable_unit_keys: [carton.gid] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.orderable_unit_keys, [carton.gid]);
+  assert.equal(r.body.base_orderable, false);
+  assert.deepEqual(r.body.units.map((u: any) => u.name), ["Carton"]);
+  assert.equal((app.db.prepare("SELECT orderable_unit_ids FROM store_listings WHERE id = ?").get(r.body.id) as any).orderable_unit_ids, JSON.stringify([carton.gid]));
+
+  r = await put(s, pid, { orderable_unit_keys: ["base", "base", pack.gid] });
+  assert.deepEqual(r.body.orderable_unit_keys, ["base", pack.gid], "duplicates dropped");
+  assert.equal(r.body.base_orderable, true);
+
+  for (const keys of [[], ["nope"], [other.gid], [foreign.gid], [pack.id], "base"]) {
+    const bad = await put(s, pid, { orderable_unit_keys: keys });
+    assert.deepEqual([bad.status, bad.body.code, bad.body.field], [400, "LISTING_UNIT_INVALID", "orderable_unit_keys"], JSON.stringify(keys));
+  }
+  r = await put(s, pid, { orderable_unit_keys: null });
+  assert.equal(r.body.orderable_unit_keys, null);
+  assert.equal(r.body.units.length, 2);
+});
+
+test("003 unit keys: legacy integer input is converted (base always included, as before)", async () => {
+  const s = await setup();
+  const pid = product(s.tenantId);
+  const pack = unit(s.tenantId, pid, "Pack", 6, 8);
+  const r = await put(s, pid, { orderable_unit_ids: [pack.id] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.orderable_unit_keys, ["base", pack.gid]);
+  const none = await put(s, pid, { orderable_unit_ids: [] });
+  assert.deepEqual(none.body.orderable_unit_keys, ["base"], "no units = base only, the old meaning");
+});
+
+test("003 startup conversion: integer ids become unit keys once, per tenant, and the rows are pushed", async () => {
+  const { convertOrderableUnitIds } = await import("../server/db.js");
+  const s = await setup();
+  const other = await setup();
+  const pid = product(s.tenantId);
+  const pack = unit(s.tenantId, pid, "Pack", 6, 8);
+  const carton = unit(s.tenantId, pid, "Carton", 24, 30);
+  const lid = (await put(s, pid, { published: true })).body.id;
+  // Another tenant's unit with the same local id must never be picked up.
+  const opid = product(other.tenantId);
+  const otherUnit = unit(other.tenantId, opid, "Crate", 12, 20);
+  const raw = (v: string | null) => app.db.prepare("UPDATE store_listings SET orderable_unit_ids = ?, updated_at = '2000-01-01 00:00:00' WHERE id = ?").run(v, lid);
+  const read = () => app.db.prepare("SELECT orderable_unit_ids, updated_at FROM store_listings WHERE id = ?").get(lid) as any;
+
+  raw(JSON.stringify([carton.id, 999999, otherUnit.id]));
+  assert.ok(convertOrderableUnitIds(app.db) >= 1);
+  const after = read();
+  assert.equal(after.orderable_unit_ids, JSON.stringify(["base", carton.gid]), "unknown and foreign ids dropped");
+  assert.notEqual(after.updated_at, "2000-01-01 00:00:00", "updated_at bumped so sync pushes the row");
+  assert.equal(convertOrderableUnitIds(app.db), 0, "second run changes nothing");
+  assert.equal(read().orderable_unit_ids, JSON.stringify(["base", carton.gid]));
+
+  raw(JSON.stringify([]));
+  convertOrderableUnitIds(app.db);
+  assert.equal(read().orderable_unit_ids, JSON.stringify(["base"]));
+  raw(null);
+  convertOrderableUnitIds(app.db);
+  assert.equal(read().orderable_unit_ids, null, "NULL (all units) is left alone");
+  void pack;
+});

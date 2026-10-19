@@ -8,8 +8,21 @@ import { t } from '../i18n.js';
 import { imgUrl, type PageMeta } from './layout.js';
 import { contactButtons } from '../contact.js';
 import { summary } from '../seo.js';
+import { canOrder, isMeasuredUnit, orderableUnits } from '../ordering.js';
 
-export function productCard(ctx: PageContext, l: PublicListing): string {
+/** 003: "Add" for a listing with one orderable unit and no minimum above 1, otherwise "Choose" (product page).
+ *  Outside the card link (no nested controls); hidden until cart.js runs. */
+function cardOrder(ctx: PageContext, l: PublicListing): string {
+  if (!canOrder(l)) return '';
+  const units = orderableUnits(l);
+  if (units.length === 1 && !(l.min_quantity && l.min_quantity > 1)) {
+    const u = units[0];
+    return `<button class="sf-button sf-add" type="button" hidden data-sf-add data-id="${attr(l.listing_id)}" data-title="${attr(l.title)}" data-img="${attr(l.images[0] || '')}" data-min="${l.min_quantity ?? ''}" data-base="${attr(l.unit)}" data-dec="${isMeasuredUnit(l.unit) ? 1 : 0}" data-unit="${attr(u.key)}" data-name="${attr(u.name)}" data-factor="${u.factor}" data-price="${u.price}" data-price-lbp="${u.price_lbp ?? ''}">${html(t(ctx.lang, 'add_to_cart'))}</button>`;
+  }
+  return `<a class="sf-button sf-button-secondary sf-add" href="${attr(ctx.link(`/p/${l.listing_id}`))}" hidden data-sf-choose>${html(t(ctx.lang, 'choose_options'))}</a>`;
+}
+
+export function productCard(ctx: PageContext, l: PublicListing, ordering = false): string {
   const local = formatLocal(ctx.store, l.price, l.price_lbp);
   const src = l.images[0] ? imgUrl(l.images[0]) : `/placeholder.svg?v=${ctx.assetVersion}`;
   return `<li><a class="sf-card" href="${attr(ctx.link(`/p/${l.listing_id}`))}">
@@ -18,7 +31,7 @@ export function productCard(ctx: PageContext, l: PublicListing): string {
 <span class="sf-card-title">${html(l.title)}</span>
 <span class="sf-price">${html(formatUsd(l.price))}</span>${local ? `\n<span class="sf-local">${html(local)}</span>` : ''}
 <span class="sf-stock sf-stock-${l.stock_state}">${html(stockLabel(ctx.lang, l.stock_state, l.stock))}</span>
-</span></a></li>`;
+</span></a>${ordering ? cardOrder(ctx, l) : ''}</li>`;
 }
 
 function searchForm(ctx: PageContext): string {
@@ -60,7 +73,7 @@ ${page < pages ? `<a class="sf-button sf-button-secondary" href="${href(page + 1
 </nav>`;
 }
 
-export function renderHome(ctx: PageContext, page: ListingPage): { meta: PageMeta; body: string } {
+export function renderHome(ctx: PageContext, page: ListingPage, ordering = false): { meta: PageMeta; body: string } {
   const { store, lang } = ctx;
   const filtered = !!(ctx.params.category || ctx.params.search);
   const cover = store.cover_path ? `<img class="sf-cover" src="${attr(imgUrl(store.cover_path))}" alt="">` : '';
@@ -74,7 +87,7 @@ ${contactButtons(lang, store, { whatsapp: t(lang, 'wa_store', { store: store.nam
   if (page.rows.length > 0) {
     list = `<p class="sf-count">${html(t(lang, 'products_count', { count: page.total }))}</p>
 <ul class="sf-grid">
-${page.rows.map((l) => productCard(ctx, l)).join('\n')}
+${page.rows.map((l) => productCard(ctx, l, ordering)).join('\n')}
 </ul>
 ${pager(ctx, page.total)}`;
   } else if (page.total > 0) {

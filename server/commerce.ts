@@ -109,8 +109,13 @@ function audit(tenantId: number, userId: number | null, action: string, entity: 
 
 export const STORE_MODES = ['retail', 'wholesale', 'hybrid'] as const;
 export const STORE_LANGUAGES = ['en', 'ar', 'fr'] as const;
-const STORE_SETTING_FLAGS = ['show_exact_stock', 'hide_out_of_stock', 'show_local_price'] as const;
-const STORE_SETTING_DEFAULTS = { show_exact_stock: 0, hide_out_of_stock: 0, show_local_price: 1, category_order: [] as string[] };
+const STORE_SETTING_FLAGS = ['show_exact_stock', 'hide_out_of_stock', 'show_local_price', 'pickup_enabled', 'delivery_enabled'] as const;
+// 003 ordering settings (specs/003-retail-ordering, research R6): ordering stays off until the owner opts in.
+export const ORDERING_MODES = ['off', 'whatsapp', 'online'] as const;
+const STORE_SETTING_DEFAULTS = {
+  show_exact_stock: 0, hide_out_of_stock: 0, show_local_price: 1, category_order: [] as string[],
+  ordering_mode: 'off', pickup_enabled: 1, pickup_note: '', delivery_enabled: 0, delivery_note: '', min_order_usd: null as number | null,
+};
 
 // One list for the back office, the storefront router and the cloud claim_store_slug (spec 002 FR-004);
 // it lives in the storefront folder because that folder is deployed on its own.
@@ -200,6 +205,22 @@ function storeFields(body: any, existingSettings?: any) {
       if ((STORE_SETTING_FLAGS as readonly string[]).includes(k)) {
         if (![true, false, 0, 1].includes(v as any)) throw fail(`${k} must be on or off.`, 'STORE_SETTINGS_INVALID', `settings.${k}`);
         merged[k] = v ? 1 : 0;
+      } else if (k === 'ordering_mode') {
+        if (!(ORDERING_MODES as readonly string[]).includes(v as any)) throw fail('Choose off or WhatsApp.', 'STORE_SETTINGS_INVALID', 'settings.ordering_mode');
+        if (v === 'online') throw fail('Online orders are not available yet.', 'ORDERING_MODE_UNAVAILABLE', 'settings.ordering_mode');
+        merged[k] = v;
+      } else if (k === 'pickup_note' || k === 'delivery_note') {
+        if (typeof v !== 'string' || v.trim().length > 200) throw fail('Use at most 200 characters.', 'STORE_SETTINGS_INVALID', `settings.${k}`);
+        merged[k] = v.trim();
+      } else if (k === 'min_order_usd') {
+        if (v === null || v === '' || v === 0) merged[k] = null;
+        else {
+          const n = typeof v === 'number' ? v : NaN;
+          if (!Number.isFinite(n) || n < 0 || n > 100000 || Math.abs(Math.round(n * 100) - n * 100) > 1e-6) {
+            throw fail('Enter a minimum between 0 and 100,000 USD with at most 2 decimals.', 'STORE_SETTINGS_INVALID', 'settings.min_order_usd');
+          }
+          merged[k] = n;
+        }
       } else if (k === 'category_order') {
         if (!Array.isArray(v) || v.length > 200 || v.some((c) => typeof c !== 'string' || c.trim().length === 0 || c.length > 60)) {
           throw fail('category_order must be a list of category names.', 'STORE_SETTINGS_INVALID', 'settings.category_order');
@@ -214,6 +235,21 @@ function storeFields(body: any, existingSettings?: any) {
   return out;
 }
 
+/** Ordering needs a WhatsApp number (WhatsApp mode) and a way to receive the goods. Checked on the merged
+ *  result, so changing the number alone is refused too while WhatsApp ordering is on. */
+function checkOrdering(fields: Record<string, any>, before: any | null) {
+  if (!('settings' in fields) && !('contact_whatsapp' in fields)) return;
+  const settings = parseStoreSettings(fields.settings ?? before?.settings);
+  if (settings.ordering_mode === 'off') return;
+  if (!settings.pickup_enabled && !settings.delivery_enabled) {
+    throw fail('Turn on pickup or delivery to take orders.', 'STORE_ORDERING_NEEDS_FULFILMENT', 'settings.pickup_enabled');
+  }
+  const wa = 'contact_whatsapp' in fields ? fields.contact_whatsapp : before?.contact_whatsapp;
+  if (settings.ordering_mode === 'whatsapp' && !normalizeWhatsapp(wa)) {
+    throw fail('WhatsApp orders need the store WhatsApp number.', 'STORE_ORDERING_NEEDS_WHATSAPP', 'contact_whatsapp');
+  }
+}
+
 export function listStores(tenantId: number) {
   return (db.prepare(`SELECT ${STORE_COLS} FROM stores WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY id`).all(tenantId) as any[]).map(storeView);
 }
@@ -222,6 +258,7 @@ export function createStore(tenantId: number, userId: number | null, body: any) 
   requireCommerceOn(tenantId);
   const f = storeFields(body || {});
   if (!('settings' in f)) f.settings = JSON.stringify(STORE_SETTING_DEFAULTS);
+  checkOrdering(f, null);
   const cols = Object.keys(f);
   const info = db.prepare(`INSERT INTO stores (tenant_id, ${cols.join(', ')}) VALUES (?, ${cols.map(() => '?').join(', ')})`)
     .run(tenantId, ...cols.map((c) => f[c]));
@@ -234,6 +271,7 @@ export function updateStore(tenantId: number, userId: number | null, storeId: nu
   requireCommerceOn(tenantId);
   const before = loadStore(tenantId, storeId);
   const f = storeFields(body || {}, before.settings);
+  checkOrdering(f, before);
   const cols = Object.keys(f);
   if (cols.length) {
     db.prepare(`UPDATE stores SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ? AND tenant_id = ?`).run(...cols.map((c) => f[c]), storeId, tenantId);
@@ -347,10 +385,22 @@ function unitsFor(tenantId: number, productIds: number[]): Map<number, any[]> {
   const map = new Map<number, any[]>();
   if (!productIds.length) return map;
   const rows = db.prepare(
-    `SELECT id, product_id, name, factor, price, price_lbp FROM product_units WHERE tenant_id = ? AND deleted_at IS NULL AND product_id IN (${productIds.map(() => '?').join(',')}) ORDER BY sort_order, factor, id`
+    `SELECT id, global_id, product_id, name, factor, price, price_lbp FROM product_units WHERE tenant_id = ? AND deleted_at IS NULL AND product_id IN (${productIds.map(() => '?').join(',')}) ORDER BY sort_order, factor, id`
   ).all(tenantId, ...productIds) as any[];
   for (const r of rows) (map.get(r.product_id) || map.set(r.product_id, []).get(r.product_id)!).push(r);
   return map;
+}
+
+/** 003 orderable units (research R5): a non-empty array of unit keys ("base" or a product_units global id)
+ *  restricts; NULL = every live unit. A legacy array of local ids (before the startup conversion, or pulled
+ *  from an older register) keeps its old meaning: base unit plus those units. */
+function unitRestriction(raw: any): { keys: string[] | null; base: boolean; has: (u: any) => boolean } {
+  const a = parseJsonArray(raw);
+  if (a && a.length && a.every((x) => typeof x === 'string')) {
+    return { keys: a, base: a.includes('base'), has: (u) => a.includes(u.global_id) };
+  }
+  if (a && a.every((x) => Number.isInteger(x))) return { keys: null, base: true, has: (u) => a.includes(u.id) };
+  return { keys: null, base: true, has: () => true };
 }
 
 /** One listing as the back office sees it: channel fields + values derived from the product NOW. */
@@ -359,7 +409,7 @@ function deriveListing(row: any, units: any[], store: any, enabled: boolean) {
     id: row.p_id, name: row.p_name, barcode: row.p_barcode, category: row.p_category, price: row.p_price, price_lbp: row.p_price_lbp,
     stock: row.p_stock, reorder_point: row.p_reorder_point, track_inventory: row.p_track_inventory, active: row.p_active, unit: row.p_unit,
   } : null;
-  const orderable = parseJsonArray(row.orderable_unit_ids);
+  const restriction = unitRestriction(row.orderable_unit_ids);
   const published = row.published === 1;
   let reason: string | null = null;
   if (!published) reason = 'not_published';
@@ -381,7 +431,8 @@ function deriveListing(row: any, units: any[], store: any, enabled: boolean) {
     store_category: row.store_category,
     sort_order: row.sort_order ?? 0,
     min_quantity: row.min_quantity,
-    orderable_unit_ids: orderable,
+    orderable_unit_keys: restriction.keys,
+    base_orderable: restriction.base,
     display_title: row.title || product?.name || '',
     category: row.store_category || product?.category || null,
     visible: reason === null,
@@ -391,10 +442,16 @@ function deriveListing(row: any, units: any[], store: any, enabled: boolean) {
     price: priceProduct ? tierUnitPrice(priceProduct, 'retail') : null,
     price_lbp: product?.price_lbp ?? null,
     unit: product?.unit || 'pcs',
+    // Orderable units only (what the storefront offers besides the base unit when base_orderable).
     units: priceProduct
       ? units
-          .filter((u) => !orderable || orderable.includes(u.id))
-          .map((u) => ({ id: u.id, name: u.name, factor: u.factor, price: uomUnitPrice(priceProduct, u, 'retail'), price_lbp: u.price_lbp ?? null }))
+          .filter((u) => restriction.has(u))
+          .map((u) => ({ id: u.id, key: u.global_id, name: u.name, factor: u.factor, price: uomUnitPrice(priceProduct, u, 'retail'), price_lbp: u.price_lbp ?? null }))
+      : [],
+    // Every live unit with its key, base first: the "Orderable units" checkboxes.
+    unit_options: priceProduct
+      ? [{ key: 'base', name: product?.unit || 'pcs', factor: 1, price: tierUnitPrice(priceProduct, 'retail') },
+         ...units.map((u) => ({ key: u.global_id, name: u.name, factor: u.factor, price: uomUnitPrice(priceProduct, u, 'retail') }))]
       : [],
     product: product ? { id: product.id, name: product.name, barcode: product.barcode, active: product.active, stock: product.stock } : null,
   };
@@ -444,14 +501,27 @@ function listingFields(tenantId: number, productId: number, body: any) {
       out.min_quantity = n;
     }
   }
-  if ('orderable_unit_ids' in body) {
+  // Orderable units are stored as unit keys, the same on every register and in the cloud (003 research R5).
+  const ownUnits = () => db.prepare('SELECT id, global_id FROM product_units WHERE tenant_id = ? AND product_id = ? AND deleted_at IS NULL').all(tenantId, productId) as any[];
+  if ('orderable_unit_keys' in body) {
+    const keys = body.orderable_unit_keys;
+    if (keys === null) out.orderable_unit_ids = null;
+    else {
+      const own = new Set(ownUnits().map((r) => r.global_id));
+      if (!Array.isArray(keys) || keys.length === 0 || keys.some((k: any) => typeof k !== 'string' || (k !== 'base' && !own.has(k)))) {
+        throw fail('Choose at least one unit of this product.', 'LISTING_UNIT_INVALID', 'orderable_unit_keys');
+      }
+      out.orderable_unit_ids = JSON.stringify([...new Set(keys as string[])]);
+    }
+  } else if ('orderable_unit_ids' in body) {
+    // Older back-office builds send local unit ids: same check as before, saved as keys (base included).
     const ids = body.orderable_unit_ids;
     if (ids === null) out.orderable_unit_ids = null;
     else {
       if (!Array.isArray(ids) || ids.some((x: any) => !Number.isInteger(x))) throw fail('Choose units of this product.', 'LISTING_UNIT_INVALID', 'orderable_unit_ids');
-      const own = new Set((db.prepare('SELECT id FROM product_units WHERE tenant_id = ? AND product_id = ? AND deleted_at IS NULL').all(tenantId, productId) as any[]).map((r) => r.id));
+      const own = new Map(ownUnits().map((r) => [r.id, r.global_id]));
       if (ids.some((x: number) => !own.has(x))) throw fail('Choose units of this product.', 'LISTING_UNIT_INVALID', 'orderable_unit_ids');
-      out.orderable_unit_ids = JSON.stringify([...new Set(ids)]);
+      out.orderable_unit_ids = JSON.stringify(['base', ...new Set(ids.map((x: number) => own.get(x)))]);
     }
   }
   return out;

@@ -903,6 +903,37 @@ export function runSettlementLinkBackfill() {
 }
 runSettlementLinkBackfill();
 
+// 003 (specs/003-retail-ordering, research R5): listing orderable units were stored as this register's local
+// product_units ids, which mean nothing on other registers or in the cloud. Convert them to unit keys ("base" =
+// the product's base unit, else the unit's global_id). The old meaning always included the base unit. Ids with
+// no unit (deleted, other tenant/product) are dropped. Only integer arrays are touched, so it is idempotent; the
+// updated_at trigger marks converted rows for push. Exported so the suite can re-run it.
+export function convertOrderableUnitIds(database: any = db): number {
+  const rows = database.prepare("SELECT id, tenant_id, product_id, orderable_unit_ids FROM store_listings WHERE orderable_unit_ids IS NOT NULL AND orderable_unit_ids <> ''").all() as any[];
+  const unitGid = database.prepare('SELECT global_id FROM product_units WHERE id = ? AND tenant_id = ? AND product_id = ? AND global_id IS NOT NULL');
+  const save = database.prepare('UPDATE store_listings SET orderable_unit_ids = ? WHERE id = ? AND tenant_id = ?');
+  let converted = 0;
+  database.transaction(() => {
+    for (const r of rows) {
+      let ids: any;
+      try { ids = JSON.parse(r.orderable_unit_ids); } catch { continue; }
+      if (!Array.isArray(ids) || !ids.every((x: any) => Number.isInteger(x))) continue;
+      const keys = ['base'];
+      for (const id of ids) {
+        const u = unitGid.get(id, r.tenant_id, r.product_id) as any;
+        if (u && !keys.includes(u.global_id)) keys.push(u.global_id);
+      }
+      save.run(JSON.stringify(keys), r.id, r.tenant_id);
+      converted++;
+    }
+  })();
+  return converted;
+}
+{
+  const n = convertOrderableUnitIds();
+  if (n) console.log(`[db] converted orderable units of ${n} store listing(s) to unit keys`);
+}
+
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
 if (tenantCount.count === 0) {

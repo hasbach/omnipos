@@ -41,7 +41,11 @@ test("create: draft, no slug, default settings; listed; audited", async () => {
   assert.equal(store.slug, null);
   assert.equal(store.public_url, null);
   assert.equal(store.mode, "wholesale");
-  assert.deepEqual(store.settings, { show_exact_stock: 0, hide_out_of_stock: 0, show_local_price: 1, category_order: [] });
+  assert.deepEqual(store.settings, {
+    show_exact_stock: 0, hide_out_of_stock: 0, show_local_price: 1, category_order: [],
+    // 003 ordering settings: off by default.
+    ordering_mode: "off", pickup_enabled: 1, pickup_note: "", delivery_enabled: 0, delivery_note: "", min_order_usd: null,
+  });
   assert.equal(store.tenant_id, undefined, "local tenant id is not exposed");
   assert.ok(store.global_id);
 
@@ -274,4 +278,88 @@ test("status explains why a store is not public: commerce off, license, draft, p
   assert.equal((await reason()).not_public_reason, "paused");
   app.db.prepare("UPDATE settings SET value = '0' WHERE tenant_id = ? AND key = 'commerce_enabled'").run(s.tenantId);
   assert.equal((await reason()).not_public_reason, "commerce_off");
+});
+
+// ---- 003 Slice 1: ordering settings (specs/003-retail-ordering/contracts/backoffice-api.md) -------------
+
+test("003 ordering settings: defaults keep ordering off; stores created before 003 get the defaults too", async () => {
+  const s = setup();
+  const store = await newStore(s.as);
+  assert.deepEqual(
+    [store.settings.ordering_mode, store.settings.pickup_enabled, store.settings.pickup_note, store.settings.delivery_enabled, store.settings.delivery_note, store.settings.min_order_usd],
+    ["off", 1, "", 0, "", null],
+  );
+  // A store row written before 003 (settings without the new keys).
+  app.db.prepare("UPDATE stores SET settings = ? WHERE id = ?").run(JSON.stringify({ show_exact_stock: 1 }), store.id);
+  const listed = (await app.api("GET", "/api/commerce/stores", s.as)).body.find((x: any) => x.id === store.id);
+  assert.equal(listed.settings.ordering_mode, "off");
+  assert.equal(listed.settings.show_exact_stock, 1);
+});
+
+test("003 ordering settings: WhatsApp mode needs a WhatsApp number and a way to receive the goods", async () => {
+  const s = setup();
+  const store = await newStore(s.as);
+  const put = (body: any) => app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body });
+
+  let r = await put({ settings: { ordering_mode: "whatsapp" } });
+  assert.equal(r.status, 400);
+  assert.deepEqual([r.body.code, r.body.field], ["STORE_ORDERING_NEEDS_WHATSAPP", "contact_whatsapp"]);
+
+  r = await put({ contact_whatsapp: "71 315 744", settings: { ordering_mode: "whatsapp", pickup_enabled: false, delivery_enabled: false } });
+  assert.deepEqual([r.body.code, r.body.field], ["STORE_ORDERING_NEEDS_FULFILMENT", "settings.pickup_enabled"]);
+
+  r = await put({
+    contact_whatsapp: "71 315 744",
+    settings: { ordering_mode: "whatsapp", pickup_note: "  Back door after 4 pm ", delivery_enabled: true, delivery_note: "Hamra only", min_order_usd: 10.5 },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(
+    [r.body.settings.ordering_mode, r.body.settings.pickup_enabled, r.body.settings.pickup_note, r.body.settings.delivery_enabled, r.body.settings.delivery_note, r.body.settings.min_order_usd],
+    ["whatsapp", 1, "Back door after 4 pm", 1, "Hamra only", 10.5],
+  );
+
+  // Clearing or breaking the number while WhatsApp ordering is on is refused; nothing saved.
+  for (const wa of ["", "12345"]) {
+    const bad = await put({ contact_whatsapp: wa });
+    assert.equal(bad.status, 400, wa);
+  }
+  assert.equal((await put({ contact_whatsapp: "" })).body.code, "STORE_ORDERING_NEEDS_WHATSAPP");
+  const still = (await app.api("GET", "/api/commerce/stores", s.as)).body.find((x: any) => x.id === store.id);
+  assert.equal(still.contact_whatsapp, "+96171315744");
+  // Turning ordering off first makes the number optional again.
+  assert.equal((await put({ settings: { ordering_mode: "off" } })).status, 200);
+  assert.equal((await put({ contact_whatsapp: "" })).status, 200);
+});
+
+test("003 ordering settings: online orders not yet; field rules for notes and the minimum", async () => {
+  const s = setup();
+  const store = await newStore(s.as, { name: "Shop", contact_whatsapp: "70 123 456" });
+  const put = (settings: any) => app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body: { settings } });
+  const bad = async (settings: any, code: string, field: string) => {
+    const r = await put(settings);
+    assert.equal(r.status, 400, JSON.stringify(settings));
+    assert.deepEqual([r.body.code, r.body.field], [code, field], JSON.stringify(settings));
+  };
+  await bad({ ordering_mode: "online" }, "ORDERING_MODE_UNAVAILABLE", "settings.ordering_mode");
+  await bad({ ordering_mode: "shop" }, "STORE_SETTINGS_INVALID", "settings.ordering_mode");
+  await bad({ pickup_enabled: "yes" }, "STORE_SETTINGS_INVALID", "settings.pickup_enabled");
+  await bad({ pickup_note: "x".repeat(201) }, "STORE_SETTINGS_INVALID", "settings.pickup_note");
+  await bad({ delivery_note: 5 }, "STORE_SETTINGS_INVALID", "settings.delivery_note");
+  await bad({ min_order_usd: -1 }, "STORE_SETTINGS_INVALID", "settings.min_order_usd");
+  await bad({ min_order_usd: 100001 }, "STORE_SETTINGS_INVALID", "settings.min_order_usd");
+  await bad({ min_order_usd: 1.234 }, "STORE_SETTINGS_INVALID", "settings.min_order_usd");
+  await bad({ min_order_usd: "ten" }, "STORE_SETTINGS_INVALID", "settings.min_order_usd");
+  assert.equal((await put({ min_order_usd: 0 })).body.settings.min_order_usd, null, "0 means no minimum");
+  assert.equal((await put({ min_order_usd: null })).body.settings.min_order_usd, null);
+  assert.equal((await put({ min_order_usd: 25 })).body.settings.min_order_usd, 25);
+});
+
+test("003 ordering settings: another tenant can't change them", async () => {
+  const a = setup();
+  const b = setup();
+  const store = await newStore(a.as, { name: "Shop", contact_whatsapp: "70 123 456" });
+  const r = await app.api("PUT", `/api/commerce/stores/${store.id}`, { ...b.as, body: { settings: { ordering_mode: "whatsapp" } } });
+  assert.equal(r.status, 404);
+  const mine = (await app.api("GET", "/api/commerce/stores", a.as)).body.find((x: any) => x.id === store.id);
+  assert.equal(mine.settings.ordering_mode, "off");
 });

@@ -2,7 +2,7 @@
 // up to 4 photos and edit its online title, description, category and order. Price, units and
 // stock always come from the product itself, so there is nothing to keep in sync here.
 import React, { useEffect, useState } from 'react';
-import { Badge, Button, Field, Input, NumberInput, Switch, Textarea, useToast } from '../../components/ui';
+import { Badge, Button, Checkbox, Field, Input, NumberInput, Switch, Textarea, useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { commerceApi, type CommerceStatus, type ListingView } from '../../lib/commerceApi';
 import { translateServerError } from '../../lib/serverErrors';
@@ -11,7 +11,11 @@ import { ListingPhotos } from './ListingPhotos';
 
 const STOCK_VARIANT = { in_stock: 'success', low_stock: 'warning', out_of_stock: 'danger' } as const;
 
-interface Draft { published: boolean; title: string; description: string; store_category: string; sort_order: number }
+interface Draft {
+  published: boolean; title: string; description: string; store_category: string; sort_order: number;
+  /** 003: null = all units orderable; otherwise unit keys ("base" / unit global id). */
+  unit_keys: string[] | null; min_quantity: number | '';
+}
 
 const toDraft = (l: ListingView | null): Draft => ({
   published: l?.published ?? false,
@@ -19,6 +23,8 @@ const toDraft = (l: ListingView | null): Draft => ({
   description: l?.description ?? '',
   store_category: l?.store_category ?? '',
   sort_order: l?.sort_order ?? 0,
+  unit_keys: l?.orderable_unit_keys ?? null,
+  min_quantity: l?.min_quantity ?? '',
 });
 
 export function OnlineStoreCard({ productId, productName, productCategory }: { productId: number; productName: string; productCategory: string }) {
@@ -74,6 +80,8 @@ export function OnlineStoreCard({ productId, productName, productCategory }: { p
         description: draft.description,
         store_category: draft.store_category,
         sort_order: Math.trunc(draft.sort_order || 0),
+        orderable_unit_keys: draft.unit_keys,
+        min_quantity: draft.min_quantity === '' || draft.min_quantity === 0 ? null : draft.min_quantity,
       });
       setListing(l);
       setDraft(toDraft(l));
@@ -121,6 +129,32 @@ export function OnlineStoreCard({ productId, productName, productCategory }: { p
           <NumberInput value={draft.sort_order} onChange={(v) => set({ sort_order: v })} disabled={!editable} />
         </Field>
       </div>
+      {listing && listing.unit_options.length > 1 && (
+        <Field label={t('commerce_listing_units')} error={errors.orderable_unit_keys}>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap gap-4">
+              <label className="inline-flex items-center gap-2 text-sm"><input type="radio" checked={draft.unit_keys === null} disabled={!editable} onChange={() => set({ unit_keys: null })} /> {t('commerce_listing_units_all')}</label>
+              <label className="inline-flex items-center gap-2 text-sm"><input type="radio" checked={draft.unit_keys !== null} disabled={!editable} onChange={() => set({ unit_keys: listing.unit_options.map((u) => u.key) })} /> {t('commerce_listing_units_pick')}</label>
+            </div>
+            {draft.unit_keys !== null && (
+              <div className="flex flex-wrap gap-4 ps-6">
+                {listing.unit_options.map((u) => (
+                  <Checkbox
+                    key={u.key}
+                    checked={draft.unit_keys!.includes(u.key)}
+                    disabled={!editable}
+                    label={u.key === 'base' ? u.name : `${u.name} (${u.factor} × ${listing.unit})`}
+                    onChange={(e) => set({ unit_keys: e.target.checked ? [...draft.unit_keys!, u.key] : draft.unit_keys!.filter((k) => k !== u.key) })}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </Field>
+      )}
+      <Field label={t('commerce_listing_min_qty').replace('{unit}', listing?.unit || 'pcs')} helper={t('commerce_listing_min_qty_helper')} error={errors.min_quantity} className="sm:max-w-xs">
+        <NumberInput value={draft.min_quantity} min={0} step={1} onChange={(v) => set({ min_quantity: v })} disabled={!editable} />
+      </Field>
       <p className="text-xs text-text-3">{t('commerce_listing_derived_note')}</p>
       {canPublish && (
         <div className="flex justify-end">

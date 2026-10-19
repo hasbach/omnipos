@@ -19,16 +19,22 @@ export interface LayoutInput {
   noindex?: boolean;
   /** Same page in each language (store pages only). */
   langLinks?: { lang: Lang; href: string }[];
+  /** 003: the store takes orders — cart link in the header, the sf-order JSON block and cart.js. */
+  order?: { cartHref: string; json: string; checkout?: boolean };
 }
 
 export const imgUrl = (path: string) => `/img/${path.split('/').map(encodeURIComponent).join('/')}`;
 
-function header(store: PublicStore | null | undefined, homeHref: string): string {
+function cartLink(lang: Lang, href: string): string {
+  return `<a class="sf-cart-link" href="${attr(href)}" hidden>${html(t(lang, 'cart'))} <span class="sf-cart-count" hidden></span></a>`;
+}
+
+function header(store: PublicStore | null | undefined, homeHref: string, cart: string): string {
   if (!store) return '';
   const logo = store.logo_path
     ? `<img class="sf-logo" src="${attr(imgUrl(store.logo_path))}" alt="" width="40" height="40">`
     : `<span class="sf-logo sf-logo-initial" aria-hidden="true">${html(store.name.trim().charAt(0).toUpperCase() || '·')}</span>`;
-  return `<header class="sf-header"><a class="sf-brand" href="${attr(homeHref)}">${logo}<span class="sf-name">${html(store.name)}</span></a></header>`;
+  return `<header class="sf-header"><a class="sf-brand" href="${attr(homeHref)}">${logo}<span class="sf-name">${html(store.name)}</span></a>${cart}</header>`;
 }
 
 function languageSwitcher(current: Lang, links: { lang: Lang; href: string }[] | undefined): string {
@@ -55,12 +61,15 @@ ${color ? `<style>:root{--sf-accent:${color}}</style>` : ''}
 </head>
 <body>
 ${preview}
-${header(i.store, i.homeHref || '/')}
+${header(i.store, i.homeHref || '/', i.order ? cartLink(lang, i.order.cartHref) : '')}
 <main class="sf-main">
 ${i.body}
 </main>
 <footer class="sf-footer">${languageSwitcher(lang, i.langLinks)}<a href="${attr(i.websiteUrl)}" rel="noopener">${html(t(lang, 'powered_by'))}</a></footer>
-<script src="/storefront.js?v=${attr(i.assetVersion)}" defer></script>
+<script src="/storefront.js?v=${attr(i.assetVersion)}" defer></script>${i.order ? `
+${i.order.json}
+<script src="/cart.js?v=${attr(i.assetVersion)}" defer></script>${i.order.checkout ? `
+<script src="/checkout.js?v=${attr(i.assetVersion)}" defer></script>` : ''}` : ''}
 </body>
 </html>`;
 }

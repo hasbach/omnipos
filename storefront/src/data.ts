@@ -24,8 +24,17 @@ export interface PublicStore {
   local_currency_symbol: string | null;
   local_rate: number | null;
   categories: PublicCategory[];
+  /** 003 ordering settings (missing in the catalog before migration 2026-10-21 → ordering off). */
+  ordering_mode: OrderingMode;
+  pickup_enabled: boolean;
+  pickup_note: string;
+  delivery_enabled: boolean;
+  delivery_note: string;
+  min_order_usd: number | null;
   is_preview: boolean;
 }
+
+export type OrderingMode = 'off' | 'whatsapp' | 'online';
 
 export interface PublicUnit { unit_id: string; name: string; factor: number; price: number; price_lbp: number | null }
 
@@ -45,6 +54,8 @@ export interface PublicListing {
   /** Only when the store shows exact stock; null otherwise. */
   stock: number | null;
   min_quantity: number | null;
+  /** The product's base unit can be ordered (003; `units` already holds only orderable units). */
+  base_orderable: boolean;
 }
 
 export interface ListingQuery { category?: string | null; search?: string | null; limit: number; offset: number }
@@ -73,6 +84,12 @@ export function normalizeStore(r: any): PublicStore {
     show_local_price: !!r.show_local_price, hide_out_of_stock: !!r.hide_out_of_stock, show_exact_stock: !!r.show_exact_stock,
     local_currency_code: r.local_currency_code ?? null, local_currency_symbol: r.local_currency_symbol ?? null, local_rate: num(r.local_rate),
     categories: Array.isArray(r.categories) ? r.categories.map((c: any) => ({ name: String(c.name), count: Number(c.count) || 0 })) : [],
+    ordering_mode: (['off', 'whatsapp', 'online'].includes(r.ordering_mode) ? r.ordering_mode : 'off') as OrderingMode,
+    pickup_enabled: r.pickup_enabled === undefined || r.pickup_enabled === null ? true : !!r.pickup_enabled,
+    pickup_note: typeof r.pickup_note === 'string' ? r.pickup_note : '',
+    delivery_enabled: !!r.delivery_enabled,
+    delivery_note: typeof r.delivery_note === 'string' ? r.delivery_note : '',
+    min_order_usd: num(r.min_order_usd) !== null && (num(r.min_order_usd) as number) > 0 ? num(r.min_order_usd) : null,
     is_preview: !!r.is_preview,
   };
 }
@@ -86,6 +103,7 @@ export function normalizeListing(r: any): PublicListing {
     units: units.map((u: any) => ({ unit_id: String(u.unit_id), name: String(u.name ?? ''), factor: Number(u.factor) || 1, price: Number(u.price) || 0, price_lbp: num(u.price_lbp) })),
     stock_state: (['in_stock', 'low_stock', 'out_of_stock'].includes(r.stock_state) ? r.stock_state : 'in_stock') as StockState,
     stock: num(r.stock), min_quantity: num(r.min_quantity),
+    base_orderable: r.base_orderable === undefined || r.base_orderable === null ? true : !!r.base_orderable,
   };
 }
 

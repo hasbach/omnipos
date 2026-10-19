@@ -16,7 +16,12 @@ const CATS: [string, string, number, StockState][] = [
   ['Pantry', 'Olive Oil 1L', 9.5, 'in_stock'], ['Pantry', 'Hummus Can', 1.8, 'low_stock'], ['Cleaning', 'Dish Soap', 2.4, 'in_stock'],
 ];
 
-export function demoFixture(count = 60): FixtureStore {
+export interface FixtureOptions {
+  /** 003: a store that takes WhatsApp orders, with listings covering the ordering cases (see below). */
+  ordering?: boolean;
+}
+
+export function demoFixture(count = 60, opts: FixtureOptions = {}): FixtureStore {
   const listings: FixtureStore['listings'] = [];
   for (let i = 0; i < count; i++) {
     const [category, name, price, stock_state] = CATS[i % CATS.length];
@@ -27,8 +32,18 @@ export function demoFixture(count = 60): FixtureStore {
       images: [], category, price, price_lbp: null, unit: 'pcs',
       units: i % 4 === 0 ? [{ unit_id: `u-${i}`, name: 'Pack', factor: 6, price: +(price * 5.5).toFixed(2), price_lbp: null }] : [],
       stock_state, stock: stock_state === 'out_of_stock' ? 0 : stock_state === 'low_stock' ? 3 : 40, min_quantity: null,
+      base_orderable: true,
       barcode: `622100000${String(i).padStart(4, '0')}`, published: true, sort_order: 0,
     });
+  }
+  if (opts.ordering) {
+    // Labneh (#2) sold by the kg; Halloumi (#3) only by the pack of 6; Arabic Bread (#4) minimum 6 pieces;
+    // Manakish (#5) is out of stock; Whole Milk (#1) piece or pack (the default "every 4th has a pack").
+    if (listings[1]) Object.assign(listings[1], { unit: 'kg', price: 6.5 });
+    if (listings[2]) Object.assign(listings[2], {
+      base_orderable: false, units: [{ unit_id: '30000000-0000-4000-8000-000000000003', name: 'Pack of 6', factor: 6, price: 25, price_lbp: null }],
+    });
+    if (listings[3]) listings[3].min_quantity = 6;
   }
   return {
     store: {
@@ -39,6 +54,10 @@ export function demoFixture(count = 60): FixtureStore {
       address: 'Hamra Street, Beirut', default_language: 'en',
       show_local_price: true, hide_out_of_stock: false, show_exact_stock: false,
       local_currency_code: 'LBP', local_currency_symbol: 'LL', local_rate: 89500,
+      ordering_mode: opts.ordering ? 'whatsapp' : 'off',
+      pickup_enabled: true, pickup_note: opts.ordering ? 'Back door after 4 pm' : '',
+      delivery_enabled: !!opts.ordering, delivery_note: opts.ordering ? 'Hamra and Ras Beirut only' : '',
+      min_order_usd: opts.ordering ? 10 : null,
     },
     listings,
     previewTokens: [],

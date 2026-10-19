@@ -8,11 +8,24 @@ the CDN so visitor traffic barely touches Supabase.
   `public/` and `/healthz` and hands every page to `src/http.ts`, which routes by host (`<address>.<domain>`) or
   path (`/s/<address>`).
 - `src/` — router, data source (public catalog RPCs), page renderers, i18n.
-- `public/` — stylesheet, small script, placeholder image (immutable caching).
-- `dev-server.ts` — run locally: `npx tsx storefront/dev-server.ts [--source=fixture|cloud]` → http://localhost:3200/s/<address>.
+- `public/` — stylesheet, small script, placeholder image, and the 003 cart scripts (immutable caching):
+  `cart.js` (loaded only on stores that take orders) and `checkout.js` (cart page only).
+- `dev-server.ts` — run locally: `npx tsx storefront/dev-server.ts [--source=fixture|cloud] [--ordering]` →
+  http://localhost:3200/s/<address> (`--ordering`: the fixture store takes WhatsApp orders).
+
+## Ordering (feature [003](../specs/003-retail-ordering/spec.md), Slice 1 — WhatsApp order)
+
+When a store's ordering mode is "Order on WhatsApp" (Settings → Online store → Ordering), pages get "Add to cart"
+controls, a header cart link and a `/cart` page. Pages stay the same for every visitor (still cached per URL): the
+cart lives in the visitor's browser (`localStorage`, one key per store) and `checkout.js` turns it into a
+pre-filled `wa.me` message to the shop in the store's language. Nothing about visitors or orders reaches OmniPOS.
+Store-level data (ordering settings, local-currency rule, WhatsApp digits, strings) is in the page's
+`<script type="application/json" id="sf-order">` block. Contracts: `specs/003-retail-ordering/contracts/`.
 
 The storefront reads only the allow-listed public functions (`store_public_get`, `store_public_listings`,
-`store_public_listing`); it never touches tables and never writes.
+`store_public_listing`); it never touches tables and never writes. Without migration
+`2026-10-21_retail_ordering_s1.sql` those functions don't return the ordering fields, and the storefront simply treats
+every store as "ordering off" — so the storefront and the migration can be deployed in either order.
 
 ## Checks
 
@@ -22,6 +35,8 @@ The storefront reads only the allow-listed public functions (`store_public_get`,
   --requests=2000 --concurrency=20` — reports latency and the edge cache mix (`cf-cache-status`); upstream share should
   stay under 5%. In Git Bash prefix the command with `MSYS_NO_PATHCONV=1` (it rewrites arguments that start with `/`).
 - After editing anything in `public/`, update `ASSET_VERSION` in `src/assets.ts` (a test prints the new value).
+- Page weight (`src/limits.ts`): home ≤ 60 KB with 48 cards (also with ordering on), CSS ≤ 20 KB, `storefront.js`
+  ≤ 10 KB, `cart.js` ≤ 16 KB, `checkout.js` ≤ 10 KB.
 
 ## Render web service (deployment)
 
@@ -32,6 +47,8 @@ the other services in the workspace.
 
 Before deploying, the cloud migrations `2026-10-18_commerce_store_foundation.sql`, `2026-10-19_storefront.sql` and
 `2026-10-19b_storefront_storage.sql` must be applied (then run `supabase/checks/2026-10-19_storefront_checks.sql`).
+For ordering (003), apply `2026-10-21_retail_ordering_s1.sql` and run its checks file; don't re-run
+`2026-10-19_storefront.sql` after it (the public functions' columns changed).
 
 Step by step:
 
