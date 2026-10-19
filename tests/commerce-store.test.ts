@@ -79,15 +79,17 @@ test("field rules: name, mode, lengths, colour, email, language, settings", asyn
   await bad({ address: "a".repeat(301) }, "STORE_FIELD_TOO_LONG", "address");
   await bad({ primary_color: "red" }, "STORE_COLOR_INVALID", "primary_color");
   await bad({ contact_email: "not-an-email" }, "STORE_EMAIL_INVALID", "contact_email");
+  await bad({ contact_whatsapp: "12345" }, "STORE_WHATSAPP_INVALID", "contact_whatsapp");
   await bad({ default_language: "de" }, "STORE_LANGUAGE_INVALID", "default_language");
   await bad({ settings: { unknown_key: 1 } }, "STORE_SETTINGS_INVALID", "settings.unknown_key");
   await bad({ settings: { show_exact_stock: "yes" } }, "STORE_SETTINGS_INVALID", "settings.show_exact_stock");
   await bad({ settings: { category_order: "Drinks" } }, "STORE_SETTINGS_INVALID", "settings.category_order");
 
   const ok = await newStore(s.as, {
-    name: "Shop", description: "d".repeat(1000), contact_phone: "+961 1 234 567", primary_color: "#1A2B3C",
+    name: "Shop", description: "d".repeat(1000), contact_phone: "+961 1 234 567", contact_whatsapp: "071 315 744", primary_color: "#1A2B3C",
     contact_email: "shop@example.com", default_language: "ar", settings: { show_exact_stock: true, category_order: [" Drinks "] },
   });
+  assert.equal(ok.contact_whatsapp, "+96171315744", "local numbers are saved as Lebanese international");
   assert.equal(ok.primary_color, "#1a2b3c");
   assert.equal(ok.default_language, "ar");
   assert.equal(ok.settings.show_exact_stock, 1);

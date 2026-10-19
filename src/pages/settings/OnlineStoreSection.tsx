@@ -343,8 +343,8 @@ export function OnlineStoreSection() {
                 <Field label={t('commerce_contact_phone')} error={err('contact_phone')}>
                   <Input value={details.contact_phone} onChange={(e) => set({ contact_phone: e.target.value })} maxLength={30} dir="ltr" disabled={!editable} />
                 </Field>
-                <Field label={t('commerce_contact_whatsapp')} error={err('contact_whatsapp')}>
-                  <Input value={details.contact_whatsapp} onChange={(e) => set({ contact_whatsapp: e.target.value })} maxLength={30} dir="ltr" disabled={!editable} />
+                <Field label={t('commerce_contact_whatsapp')} helper={t('commerce_whatsapp_hint')} error={err('contact_whatsapp')}>
+                  <Input value={details.contact_whatsapp} onChange={(e) => set({ contact_whatsapp: e.target.value })} maxLength={30} dir="ltr" placeholder="+961 70 123 456" invalid={!!err('contact_whatsapp')} disabled={!editable} />
                 </Field>
                 <Field label={t('commerce_contact_email')} error={err('contact_email')}>
                   <Input type="email" value={details.contact_email} onChange={(e) => set({ contact_email: e.target.value })} maxLength={120} dir="ltr" invalid={!!err('contact_email')} disabled={!editable} />

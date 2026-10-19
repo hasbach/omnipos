@@ -4,14 +4,12 @@ import { attr, html } from './escape.js';
 import { t } from './i18n.js';
 import type { Lang } from './router.js';
 import type { PublicStore } from './data.js';
+import { whatsappDigits } from './phone.js';
 
-/** wa.me link with digits only (international format, no "+" or "00"); null when there is no usable number. */
+/** wa.me link with digits only (international format, local numbers get +961); null when there is no usable number. */
 export function whatsappLink(number: string | null | undefined, text: string): string | null {
-  if (!number) return null;
-  let digits = number.replace(/\D/g, '');
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  if (digits.length < 6) return null;
-  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  const digits = whatsappDigits(number);
+  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : null;
 }
 
 export function telLink(phone: string | null | undefined): string | null {

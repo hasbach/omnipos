@@ -11,6 +11,7 @@ import { db, logAction } from './db.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 import { tierUnitPrice, uomUnitPrice } from './pricing.js';
 import { RESERVED_SLUGS } from '../storefront/src/reserved.js';
+import { normalizeWhatsapp } from '../storefront/src/phone.js';
 import { getCommerceCloud } from './commerceStorage.js';
 import { SUPABASE_URL } from './supabase.js';
 import crypto from 'crypto';
@@ -171,6 +172,11 @@ function storeFields(body: any, existingSettings?: any) {
   for (const [k, max] of texts) {
     const v = optText(body, k, max, 'STORE_FIELD_TOO_LONG');
     if (v !== undefined) out[k] = v;
+  }
+  if (out.contact_whatsapp) {
+    const wa = normalizeWhatsapp(out.contact_whatsapp);
+    if (!wa) throw fail('Enter a WhatsApp number, e.g. 70 123 456 or +961 70 123 456.', 'STORE_WHATSAPP_INVALID', 'contact_whatsapp');
+    out.contact_whatsapp = wa;
   }
   const email = optText(body, 'contact_email', 120, 'STORE_EMAIL_INVALID');
   if (email !== undefined) {

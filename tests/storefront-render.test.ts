@@ -179,10 +179,15 @@ test("contact buttons: WhatsApp pre-filled with product name and link, Call and 
   assert.doesNotMatch(r2.html, /class="sf-contact"/);
 });
 
-test("WhatsApp numbers: digits only; 00 prefix dropped; numbers without digits give no button", async () => {
+test("WhatsApp numbers: digits only; 00 prefix dropped; local numbers get +961; numbers without digits give no button", async () => {
   const { whatsappLink } = await import("../storefront/src/contact.js");
   assert.equal(whatsappLink("+961 70-123 456", "hi"), "https://wa.me/96170123456?text=hi");
   assert.equal(whatsappLink("00961 70 123 456", "hi"), "https://wa.me/96170123456?text=hi");
+  assert.equal(whatsappLink("71315744", "hi"), "https://wa.me/96171315744?text=hi");
+  assert.equal(whatsappLink("03 123 456", "hi"), "https://wa.me/9613123456?text=hi");
+  assert.equal(whatsappLink("96171315744", "hi"), "https://wa.me/96171315744?text=hi");
+  assert.equal(whatsappLink("+33 6 12 34 56 78", "hi"), "https://wa.me/33612345678?text=hi");
+  assert.equal(whatsappLink("12345", "hi"), null);
   assert.equal(whatsappLink("n/a", "hi"), null);
   assert.equal(whatsappLink(null, "hi"), null);
 });
