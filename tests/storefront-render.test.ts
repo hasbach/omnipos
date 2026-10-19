@@ -350,3 +350,157 @@ test("search by barcode finds the product but never prints the barcode", async (
   assert.ok(grid.length > 0);
   assert.ok(!grid.includes(barcode), "barcode printed in a card");
 });
+
+// ---- 003 Slice 1: cart controls (WhatsApp ordering) ---------------------------------------------------
+
+function setupOrdering(mutate?: (fx: ReturnType<typeof demoFixture>) => void) {
+  const fx = demoFixture(60, { ordering: true });
+  mutate?.(fx);
+  const data = new FixtureSource(fx);
+  const get = async (url: string, host = "beirut-market.myomnipos.com") => {
+    const r = await handle({ host, url }, { config, data, assetVersion: "test" });
+    return { ...r, html: typeof r.body === "string" ? r.body : "" };
+  };
+  return { fx, data, get };
+}
+const lid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const orderJson = (html: string) => {
+  const m = html.match(/<script type="application\/json" id="sf-order">([\s\S]*?)<\/script>/);
+  return m ? JSON.parse(m[1]) : null;
+};
+
+test("003: ordering off — pages carry no cart link, controls, sf-order block or cart.js", async () => {
+  const { get } = setup();
+  for (const url of ["/", `/p/${lid(1)}`]) {
+    const { html } = await get(url);
+    for (const s of ["sf-order", "cart.js", "sf-cart-link", "data-sf-add", "Add to cart"]) assert.ok(!html.includes(s), `${url}: ${s}`);
+  }
+  // Ordering mode on but no usable WhatsApp number, or no way to receive the goods: still off.
+  const noNumber = (fx: any) => { fx.store.contact_whatsapp = null; };
+  const noFulfilment = (fx: any) => { fx.store.pickup_enabled = false; fx.store.delivery_enabled = false; };
+  for (const m of [noNumber, noFulfilment]) {
+    const { html } = await setupOrdering(m).get("/");
+    assert.ok(!html.includes("cart.js"));
+  }
+});
+
+test("003: ordering on — header cart link and the sf-order block with store-level data only", async () => {
+  const { get } = setupOrdering();
+  const { html } = await get("/");
+  assert.match(html, /<a class="sf-cart-link" href="\/cart" hidden>Cart <span class="sf-cart-count" hidden><\/span><\/a>/);
+  assert.match(html, /<script src="\/cart\.js\?v=test" defer><\/script>/);
+  const p = orderJson(html);
+  assert.deepEqual(
+    { address: p.address, home: p.home, cart: p.cart, product: p.product, wa: p.wa, local: p.local, pickup: p.pickup, delivery: p.delivery, min: p.minOrderUsd },
+    {
+      address: "beirut-market", home: "https://beirut-market.myomnipos.com/", cart: "/cart", product: "/p/__ID__", wa: "96170123456",
+      local: { show: true, code: "LBP", symbol: "LL", rate: 89500 }, pickup: { on: true, note: "Back door after 4 pm" },
+      delivery: { on: true, note: "Hamra and Ras Beirut only" }, min: 10,
+    },
+  );
+  assert.equal(p.ui.added_to_cart, "Added to your cart.");
+  // Path form keeps its own links; ?lang= is kept in the cart link and the strings follow the page language.
+  const path = await get("/s/beirut-market?lang=fr", "myomnipos.com");
+  assert.equal(orderJson(path.html).cart, "/s/beirut-market/cart?lang=fr");
+  assert.equal(orderJson(path.html).ui.added_to_cart, "Ajouté à votre panier.");
+});
+
+test("003: product page form lists only orderable units with their price data, hidden until JS", async () => {
+  const { get } = setupOrdering();
+  const milk = (await get(`/p/${lid(1)}`)).html;
+  assert.match(milk, /<form class="sf-order" data-id="00000000-0000-4000-8000-000000000001" data-title="Whole Milk 1L" data-img="" data-min="" data-base="pcs" data-dec="0" hidden>/);
+  assert.match(milk, /<option value="base" data-unit="base" data-name="pcs" data-factor="1" data-price="1.5" data-price-lbp="">pcs<\/option>/);
+  assert.match(milk, /<option value="u-0" data-unit="u-0" data-name="Pack" data-factor="6" data-price="8.25" data-price-lbp="">Pack \(6 × pcs\)<\/option>/);
+  assert.match(milk, /step="1"/);
+
+  const halloumi = (await get(`/p/${lid(3)}`)).html; // pack only
+  assert.doesNotMatch(halloumi, /data-unit="base"/);
+  assert.match(halloumi, /data-unit="30000000-0000-4000-8000-000000000003"/);
+  assert.match(halloumi, /<select name="unit" disabled>/);
+
+  const labneh = (await get(`/p/${lid(2)}`)).html; // kg
+  assert.match(labneh, /data-dec="1"/);
+  assert.match(labneh, /step="0\.001"/);
+  assert.match(labneh, /inputmode="decimal"/);
+
+  const bread = (await get(`/p/${lid(4)}`)).html; // minimum 6
+  assert.match(bread, /data-min="6"/);
+  assert.match(bread, /value="6"/);
+  assert.match(bread, /Minimum order: 6 pcs\./);
+
+  const manakish = (await get(`/p/${lid(5)}`)).html; // out of stock
+  assert.doesNotMatch(manakish, /class="sf-order"/);
+  assert.match(manakish, /class="sf-button sf-wa"/, "contact buttons stay");
+});
+
+test("003: cards — Add for one unit without a minimum, Choose otherwise, nothing when out of stock", async () => {
+  const { get } = setupOrdering();
+  const { html } = await get("/");
+  const card = (n: number) => html.split("<li>").find((c) => c.includes(`/p/${lid(n)}"`)) || "";
+  assert.match(card(2), /<button class="sf-button sf-add" type="button" hidden data-sf-add data-id="00000000-0000-4000-8000-000000000002"/, "Labneh: kg only");
+  assert.match(card(3), /data-sf-add[^>]*data-unit="30000000-0000-4000-8000-000000000003"/, "Halloumi: pack only");
+  const milkCard = (await get("/?q=whole")).html.split("<li>").find((c) => c.includes(`/p/${lid(1)}"`)) || "";
+  assert.match(milkCard, /data-sf-choose/, "Whole Milk (sorted onto page 2): piece or pack");
+  assert.match(card(4), /data-sf-choose/, "Arabic Bread: minimum 6");
+  assert.doesNotMatch(card(5), /sf-add/, "Manakish: out of stock");
+  // The control sits after the card link, never inside it.
+  for (const n of [2, 3, 4]) {
+    const c = card(n);
+    assert.ok(c.indexOf("</a>") < c.indexOf("sf-add"), `card ${n}`);
+  }
+});
+
+test("003: store text is escaped in data attributes and in the sf-order JSON", async () => {
+  const { get } = setupOrdering((fx) => {
+    fx.store.name = `Joe's "Best" </script><script>alert(1)</script>`;
+    fx.store.pickup_note = "<b>back</b>";
+    fx.listings[0].title = `"><img src=x onerror=alert(1)>`;
+  });
+  const home = (await get("/")).html;
+  assert.ok(!home.includes("</script><script>alert(1)"), "no script break-out");
+  assert.ok(!home.includes(`"><img src=x`), "attribute stays closed");
+  const p = orderJson(home);
+  assert.equal(p.storeName, `Joe's "Best" </script><script>alert(1)</script>`);
+  assert.equal(p.pickup.note, "<b>back</b>");
+  const product = (await get(`/p/${lid(1)}`)).html;
+  assert.match(product, /data-title="&quot;&gt;&lt;img src=x onerror=alert\(1\)&gt;"/);
+});
+
+test("003: the same URL gives the same page for everyone; no cookies, no Vary", async () => {
+  const { get } = setupOrdering();
+  for (const url of ["/", `/p/${lid(1)}`, "/cart"]) {
+    const a = await get(url);
+    const b = await get(url);
+    assert.equal(a.html, b.html, url);
+    assert.equal(a.headers["Set-Cookie"], undefined, url);
+    assert.equal(a.headers.Vary, undefined, url);
+  }
+});
+
+test("003: cart page — store shell, notes, noscript contact, cacheable and noindex; 302 home when ordering is off", async () => {
+  const { get } = setupOrdering();
+  const r = await get("/cart");
+  assert.equal(r.status, 200);
+  assert.equal(r.headers["Cache-Control"], "public, s-maxage=240, stale-while-revalidate=60");
+  assert.match(r.html, /<meta name="robots" content="noindex">/);
+  const expected = ['id="sf-cart-lines"', 'id="sf-cart-total"', 'id="sf-cart-empty"', 'id="sf-cart-full" hidden',
+    "Prices and availability are confirmed by the shop.", "You pay on pickup or delivery.", "Any delivery charge is agreed with the shop.",
+    "<noscript>", "Ordering needs JavaScript"];
+  for (const s of expected) assert.ok(r.html.includes(s), s);
+  assert.match(r.html, /<title>Cart — Beirut Market<\/title>/);
+  const ar = await get("/cart?lang=ar");
+  assert.match(ar.html, /<html lang="ar" dir="rtl">/);
+  assert.match(ar.html, /السلة/);
+
+  const off = setup();
+  const redirect = await off.get("/cart");
+  assert.equal(redirect.status, 302);
+  assert.equal(redirect.headers.Location, "/");
+  assert.equal(redirect.headers["Cache-Control"], "public, s-maxage=60");
+  const pathOff = await off.get("/s/beirut-market/cart?lang=fr", "myomnipos.com");
+  assert.equal(pathOff.headers.Location, "/s/beirut-market/?lang=fr");
+  // A store that isn't public answers like its home: the neutral unavailable page.
+  const closed = await setupOrdering((fx) => { fx.store.status = "paused"; }).get("/cart");
+  assert.equal(closed.status, 404);
+  assert.match(closed.html, /This store isn’t available/);
+});

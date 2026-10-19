@@ -1,5 +1,5 @@
 // The storefront handler on plain Node http: production on Render (server.ts) and local runs (dev-server.ts).
-// Serves the three public/ assets itself, answers /healthz for the platform, and hands everything else to
+// Serves the public/ assets itself, answers /healthz for the platform, and hands everything else to
 // src/http.ts. The store is picked from the Host header only — X-Forwarded-Host is client-controlled and the
 // edge cache keys on Host, so trusting it would let one request poison another store's cached page.
 import http from 'node:http';
@@ -16,6 +16,7 @@ const ASSETS: Record<string, string> = {
   '/storefront.css': 'text/css; charset=utf-8',
   '/storefront.js': 'text/javascript; charset=utf-8',
   '/placeholder.svg': 'image/svg+xml',
+  '/cart.js': 'text/javascript; charset=utf-8',
 };
 
 export interface NodeServerOptions {

@@ -9,7 +9,9 @@ import { layout, type PageMeta } from './render/layout.js';
 import { statusBody } from './render/status.js';
 import { renderHome } from './render/home.js';
 import { renderProduct } from './render/product.js';
+import { renderCart } from './render/cart.js';
 import { t } from './i18n.js';
+import { orderingEnabled, orderJsonScript, orderPayload } from './ordering.js';
 
 export interface StoreRequest { host: string; url: string }
 export interface StoreResponse { status: number; headers: Record<string, string>; body: string | Uint8Array }
@@ -75,8 +77,8 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
   }
 
   const shell = (lang: Lang, meta: PageMeta, body: string, store: PublicStore | null = null, homeHref = '/', noindex = false,
-    langLinks?: { lang: Lang; href: string }[]) =>
-    layout({ lang, meta, body, store, homeHref, assetVersion: deps.assetVersion, websiteUrl: config.websiteUrl, noindex, langLinks });
+    langLinks?: { lang: Lang; href: string }[], order?: { cartHref: string; json: string }) =>
+    layout({ lang, meta, body, store, homeHref, assetVersion: deps.assetVersion, websiteUrl: config.websiteUrl, noindex, langLinks, order });
 
   if (r.kind === 'notFound') {
     const lang = r.params.lang || 'en';
@@ -109,15 +111,33 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
       lang: l,
       href: r.kind === 'home'
         ? url(`${base}/`, { c: r.params.category, q: r.params.search, page: r.params.page > 1 ? r.params.page : null, preview: keepPreview, lang: l })
-        : url(`${base}/p/${r.listingId}`, { preview: keepPreview, lang: l }),
+        : r.kind === 'cart'
+          ? url(`${base}/cart`, { preview: keepPreview, lang: l })
+          : url(`${base}/p/${r.listingId}`, { preview: keepPreview, lang: l }),
     }));
+    // 003: store-level ordering data (same for every visitor); the cart itself stays in the browser.
+    const ordering = orderingEnabled(store);
+    const order = ordering
+      ? {
+          cartHref: ctx.link('/cart'),
+          json: orderJsonScript(orderPayload({ store, lang, address: r.address, canonicalHome: ctx.canonicalHome, link: ctx.link, assetVersion: deps.assetVersion })),
+        }
+      : undefined;
+
+    if (r.kind === 'cart') {
+      if (!ordering) {
+        return { status: 302, body: '', headers: { ...BASE_HEADERS, Location: homeHref, 'Cache-Control': preview ? CACHE_PREVIEW : CACHE_SHORT } };
+      }
+      const out = renderCart(ctx);
+      return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, true, langLinks, order), cache, extra);
+    }
 
     if (r.kind === 'home') {
       const page = await deps.data.listListings(r.address, {
         category: r.params.category, search: r.params.search, limit: PAGE_SIZE, offset: (r.params.page - 1) * PAGE_SIZE,
       }, preview);
-      const out = renderHome(ctx, page);
-      return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview, langLinks), cache, extra);
+      const out = renderHome(ctx, page, ordering);
+      return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview, langLinks, order), cache, extra);
     }
 
     const listing = await deps.data.getListing(r.address, r.listingId, preview);
@@ -125,8 +145,8 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
       const body = statusBody(lang, 'product_unavailable', { href: homeHref, label: t(lang, 'visit_store') });
       return htmlResponse(404, shell(lang, { title: t(lang, 'product_unavailable_title') }, body, store, homeHref, true), preview ? CACHE_PREVIEW : CACHE_SHORT, extra);
     }
-    const out = renderProduct(ctx, listing);
-    return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview, langLinks), cache, extra);
+    const out = renderProduct(ctx, listing, ordering);
+    return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, store.is_preview, langLinks, order), cache, extra);
   } catch (e) {
     if (!(e instanceof UpstreamError)) throw e;
     const lang = r.params.lang || 'en';

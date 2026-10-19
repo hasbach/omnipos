@@ -123,11 +123,11 @@ test("identical URLs give identical bodies and cache headers (CDN-cacheable; not
   }
 });
 
-test("asset version matches the files (sha256 of css + js + svg, LF-normalised)", async () => {
+test("asset version matches the files (sha256 of css + js + svg + cart.js, LF-normalised)", async () => {
   const fs = await import("fs");
   const crypto = await import("crypto");
   const { ASSET_VERSION } = await import("../storefront/src/assets.js");
-  const content = ["storefront.css", "storefront.js", "placeholder.svg"]
+  const content = ["storefront.css", "storefront.js", "placeholder.svg", "cart.js"]
     .map((f) => fs.readFileSync(`storefront/public/${f}`, "utf8").replace(/\r\n/g, "\n")).join("");
   const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 10);
   assert.equal(ASSET_VERSION, hash, `update storefront/src/assets.ts to '${hash}'`);

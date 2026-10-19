@@ -26,7 +26,7 @@ All values are store- or listing-level, identical for every visitor of the URL.
   `base_orderable`, then `units`), quantity input (`step` 1, or 0.001 for measured base units — research R10; `min` =
   1 or the listing minimum when ordering in base unit), "Add to cart" button. Each `<option>` carries
   `data-unit` (`base` | unit uuid), `data-name`, `data-factor`, `data-price`, `data-price-lbp`. The form carries
-  `data-id`, `data-title`, `data-img`, `data-min`, `data-dec`. Not rendered when the listing is out of stock or has no
+  `data-id`, `data-title`, `data-img`, `data-min`, `data-base` (base unit name), `data-dec`. Not rendered when the listing is out of stock or has no
   orderable unit.
 - **Product card**: when the listing has exactly one orderable unit and no minimum above 1 → a small "Add" button with
   the same data attributes (`hidden` until script); otherwise a "Choose" link to the product page. Out of stock → none.
@@ -70,7 +70,7 @@ checkout form:
 3. Add: validates quantity (limits, decimals), merges by (`id`, `unit`), shows a short confirmation (`role="status"`).
 4. On every page: refreshes known lines from any listing data on the page (research R3).
 5. Cart page: renders lines (quantity stepper, remove), per-line and cart totals in USD and local currency
-   (local = `price_lbp × qty` when set, else `round(price × qty × rate)`; totals = sum of line amounts), minimum
+   (local = unit local price × qty, rounded, where the unit local price is `price_lbp` when set, else `round(price × rate)`; totals = sum of line amounts), minimum
    messages, prefill from remembered details.
 6. Submit: validates the form, builds the message (below), opens `https://wa.me/<wa>?text=<encoded>` in a new
    tab/window, then asks "Did you send the order?" on return (research R9).

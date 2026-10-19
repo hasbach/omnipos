@@ -14,6 +14,12 @@
       "port": 3100
     },
     {
+      "name": "storefront-fixture-ordering",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "storefront/dev-server.ts", "--source=fixture", "--ordering"],
+      "port": 3200
+    },
+    {
       "name": "omnipos-monitor-build",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "preview", "-c", "vite.monitor.config.ts", "--port", "4173", "--strictPort"],

@@ -1,6 +1,7 @@
 // Turns a request (Host header + path + query) into what to show — contracts/storefront-routes.md.
 //   <address>.<domain>/            store home (host form)
 //   <address>.<domain>/p/<id>      product page
+//   <address>.<domain>/cart        cart + WhatsApp checkout (003; only when the store takes orders)
 //   <domain>/s/<address>[/p/<id>]  same pages, path form
 //   any host /img/<path>           proxied photo
 // Hosts other than the storefront domain (localhost, preview deployments) behave like the apex.
@@ -20,6 +21,7 @@ export interface PageParams {
 export type Route =
   | { kind: 'home'; address: string; form: 'host' | 'path'; params: PageParams }
   | { kind: 'product'; address: string; form: 'host' | 'path'; listingId: string; params: PageParams }
+  | { kind: 'cart'; address: string; form: 'host' | 'path'; params: PageParams }
   | { kind: 'img'; path: string }
   | { kind: 'apexRoot' }
   | { kind: 'reservedRedirect' }
@@ -52,6 +54,7 @@ function storeRoute(address: string, rest: string[], form: 'host' | 'path', para
   if (!ADDRESS.test(address) || address.length > 40) return { kind: 'notFound', params };
   const parts = rest.filter(Boolean);
   if (parts.length === 0) return { kind: 'home', address, form, params };
+  if (parts.length === 1 && parts[0] === 'cart') return { kind: 'cart', address, form, params };
   if (parts[0] === 'p' && parts[1] && UUID.test(parts[1]) && parts.length <= 3) {
     return { kind: 'product', address, form, listingId: parts[1].toLowerCase(), params };
   }

@@ -1,5 +1,6 @@
 // Cloud SQL for the online store, run on PGlite (real Postgres in WASM) against stub Supabase tables:
-// supabase/migrations/2026-10-18_commerce_store_foundation.sql + 2026-10-19_storefront.sql + 2026-10-19b_storefront_storage.sql.
+// supabase/migrations/2026-10-18_commerce_store_foundation.sql + 2026-10-19_storefront.sql + 2026-10-19b_storefront_storage.sql
+// + 2026-10-21_retail_ordering_s1.sql (003: ordering settings, orderable unit keys).
 // Guards the privacy rules that no desktop test can reach: the public gates (incl. Wholesale never public),
 // preview tokens, the single-listing RPC, the reserved addresses, function privileges and storage policies.
 import { test, before, after } from "node:test";
@@ -10,7 +11,8 @@ import { fileURLToPath } from "url";
 import { PGlite } from "@electric-sql/pglite";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const MIGRATIONS = ["2026-10-18_commerce_store_foundation.sql", "2026-10-19_storefront.sql", "2026-10-19b_storefront_storage.sql"]
+const MIGRATIONS = ["2026-10-18_commerce_store_foundation.sql", "2026-10-19_storefront.sql", "2026-10-19b_storefront_storage.sql",
+  "2026-10-21_retail_ordering_s1.sql"]
   .map((f) => fs.readFileSync(path.join(root, "supabase", "migrations", f), "utf8"));
 
 const A = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -68,8 +70,9 @@ before(async () => {
     ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
     CREATE POLICY "read all" ON storage.objects FOR SELECT USING (true);
   `);
-  for (const sql of MIGRATIONS) await db.exec(sql);
-  for (const sql of MIGRATIONS) await db.exec(sql); // re-runnable
+  // Each file is re-runnable on its own. (Re-running 2026-10-19 after 2026-10-21 is not supported: the 003 file
+  // changes the public functions' return columns — see its header.)
+  for (const sql of MIGRATIONS) { await db.exec(sql); await db.exec(sql); }
   await db.exec(`
     INSERT INTO tenants VALUES ('${A}', 'Shop A', 'lifetime', NULL, NULL), ('${B}', 'Shop B', 'lifetime', NULL, NULL);
     INSERT INTO settings VALUES ('${A}', 'commerce_enabled', '1', NULL), ('${B}', 'commerce_enabled', '1', NULL);
@@ -218,4 +221,122 @@ test("supabase/checks/2026-10-19_storefront_checks.sql runs and every check show
   assert.equal(r[5][0].public, true);
   assert.equal(r[6].length, 3);
   for (const p of r[6]) assert.deepEqual(p.roles, ["authenticated"]);
+});
+
+// ---- 003 Slice 1: ordering settings and orderable unit keys (2026-10-21_retail_ordering_s1.sql) -------
+
+const U1 = "30000000-0000-4000-8000-000000000001"; // P1 pack of 6
+const U2 = "30000000-0000-4000-8000-000000000002"; // P1 carton of 24
+const U3 = "30000000-0000-4000-8000-000000000003"; // P1 tray, soft-deleted
+
+async function withListingUnits(keys: string | null, fn: () => Promise<void>) {
+  await db.query("UPDATE store_listings SET orderable_unit_ids = $1 WHERE global_id = $2", [keys, L1]);
+  try { await fn(); } finally { await db.query("UPDATE store_listings SET orderable_unit_ids = NULL WHERE global_id = $1", [L1]); }
+}
+const unitIds = (row: any) => (row.units as any[]).map((u) => u.unit_id).sort();
+
+test("003: ordering settings default to off / pickup on / delivery off / no minimum", async () => {
+  await db.exec(`UPDATE stores SET settings = '{}' WHERE global_id = '${SA}'`);
+  const g = (await anon("SELECT * FROM store_public_get('retail-shop')"))[0];
+  assert.equal(g.ordering_mode, "off");
+  assert.equal(g.pickup_enabled, true);
+  assert.equal(g.delivery_enabled, false);
+  assert.equal(g.pickup_note, "");
+  assert.equal(g.min_order_usd, null);
+  for (const k of ["settings", "orderable_unit_ids", "tenant_id"]) assert.ok(!(k in g), k);
+});
+
+test("003: ordering settings come through trimmed; unknown modes and bad minimums are neutralised", async () => {
+  const long = "x".repeat(250);
+  try {
+    await db.query("UPDATE stores SET settings = $1 WHERE global_id = $2", [JSON.stringify({
+      ordering_mode: "whatsapp", pickup_enabled: 0, pickup_note: "  Back door  ", delivery_enabled: true, delivery_note: long, min_order_usd: 10.5,
+    }), SA]);
+    let g = (await anon("SELECT * FROM store_public_get('retail-shop')"))[0];
+    assert.equal(g.ordering_mode, "whatsapp");
+    assert.equal(g.pickup_enabled, false);
+    assert.equal(g.pickup_note, "Back door");
+    assert.equal(g.delivery_enabled, true);
+    assert.equal(g.delivery_note.length, 200);
+    assert.equal(Number(g.min_order_usd), 10.5);
+
+    await db.query("UPDATE stores SET settings = $1 WHERE global_id = $2", [JSON.stringify({ ordering_mode: "shop-now", min_order_usd: "10" }), SA]);
+    g = (await anon("SELECT * FROM store_public_get('retail-shop')"))[0];
+    assert.equal(g.ordering_mode, "off");
+    assert.equal(g.min_order_usd, null, "a string is not a minimum");
+    await db.query("UPDATE stores SET settings = $1 WHERE global_id = $2", [JSON.stringify({ min_order_usd: -5 }), SA]);
+    assert.equal((await anon("SELECT * FROM store_public_get('retail-shop')"))[0].min_order_usd, null);
+  } finally {
+    await db.exec(`UPDATE stores SET settings = '{}' WHERE global_id = '${SA}'`);
+  }
+});
+
+test("003: orderable unit keys filter the units; legacy integer ids and NULL keep every unit", async () => {
+  await db.exec(`
+    INSERT INTO product_units (global_id, tenant_id, product_id, name, factor, price, sort_order, deleted_at) VALUES
+      ('${U1}', '${A}', '${P1}', 'Pack', 6, 8, 1, NULL), ('${U2}', '${A}', '${P1}', 'Carton', 24, 30, 2, NULL),
+      ('${U3}', '${A}', '${P1}', 'Tray', 12, 15, 3, now())
+    ON CONFLICT (global_id) DO NOTHING;
+  `);
+  const one = async () => (await anon("SELECT * FROM store_public_listing('retail-shop', $1)", [L1]))[0];
+  const inList = async () => (await anon("SELECT * FROM store_public_listings('retail-shop')")).find((r: any) => r.listing_id === L1);
+
+  for (const keys of [null, "[3,5]", "[]", "not json"]) {
+    await withListingUnits(keys, async () => {
+      for (const r of [await one(), await inList()]) {
+        assert.equal(r.base_orderable, true, String(keys));
+        assert.deepEqual(unitIds(r), [U1, U2], `${keys}: every live unit, deleted tray excluded`);
+      }
+    });
+  }
+  await withListingUnits(JSON.stringify(["base"]), async () => {
+    for (const r of [await one(), await inList()]) { assert.equal(r.base_orderable, true); assert.deepEqual(unitIds(r), []); }
+  });
+  await withListingUnits(JSON.stringify([U2]), async () => {
+    for (const r of [await one(), await inList()]) { assert.equal(r.base_orderable, false); assert.deepEqual(unitIds(r), [U2]); }
+  });
+  await withListingUnits(JSON.stringify(["base", U1, U3]), async () => {
+    const r = await one();
+    assert.equal(r.base_orderable, true);
+    assert.deepEqual(unitIds(r), [U1], "a deleted unit's key is ignored");
+  });
+});
+
+test("003: a preview token returns the ordering fields; non-public stores still return nothing", async () => {
+  await db.query("UPDATE stores SET settings = $1 WHERE global_id = $2", [JSON.stringify({ ordering_mode: "whatsapp" }), SD]);
+  try {
+    assert.equal((await anon("SELECT * FROM store_public_get('draft-shop')")).length, 0);
+    const [{ token }] = await user(A, "SELECT * FROM create_store_preview_token($1)", [SD]);
+    const g = (await anon("SELECT * FROM store_public_get('draft-shop', $1)", [token]))[0];
+    assert.equal(g.ordering_mode, "whatsapp");
+    assert.equal(g.is_preview, true);
+  } finally {
+    await db.exec(`UPDATE stores SET settings = '{}' WHERE global_id = '${SD}'`);
+  }
+});
+
+test("003: privileges — the new helpers are internal; the public functions keep anon access", async () => {
+  for (const f of ["public._store_orderable_keys(text)", "public._store_setting_on(jsonb)"]) {
+    assert.equal((await canExec("anon", f)).ok, false, f);
+    assert.equal((await canExec("authenticated", f)).ok, false, f);
+  }
+  await assert.rejects(anon("SELECT * FROM store_listings"));
+});
+
+test("supabase/checks/2026-10-21_retail_ordering_s1_checks.sql runs and every check shows its expected result", async () => {
+  const sql = fs.readFileSync(path.join(root, "supabase", "checks", "2026-10-21_retail_ordering_s1_checks.sql"), "utf8");
+  const statements = sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n").split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
+  assert.equal(statements.length, 4);
+  const r = [] as any[][];
+  for (const s of statements) r.push((await db.query(s)).rows as any[]);
+  for (const f of r[0]) {
+    assert.equal(f.exists, true, f.function_name);
+    const isPublic = f.function_name.includes(".store_public_");
+    assert.equal(f.anon, isPublic, f.function_name);
+    assert.equal(f.authenticated, isPublic, f.function_name);
+  }
+  assert.equal(r[1].length, 3);
+  for (const row of r[1]) assert.deepEqual([row.has_ordering_mode, row.has_min_order, row.has_base_orderable], [true, true, true], row.function_name);
+  assert.deepEqual(r[2][0], { strings: ["base", "abc"], legacy_ids: null, empty_array: null, invalid: null, no_value: null });
+  assert.equal(r[3].length, 0, "allow-list");
 });

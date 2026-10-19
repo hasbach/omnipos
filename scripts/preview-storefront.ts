@@ -3,7 +3,12 @@
 // Mirrors the cloud public catalog (supabase/migrations/2026-10-19_storefront.sql): same gates (open,
 // retail/hybrid, commerce on), same visible-listing rule and the same field allow-list.
 import { isCommerceEnabled, listListings, listStores } from '../server/commerce.js';
-import type { DataSource, ListingPage, ListingQuery, PublicListing, PublicStore } from '../storefront/src/data.js';
+import { normalizeStore, type DataSource, type ListingPage, type ListingQuery, type PublicListing, type PublicStore } from '../storefront/src/data.js';
+
+/** 003 unit keys ("base" / unit global ids) as the cloud reads them: only a non-empty array of strings restricts. */
+function orderableKeys(v: unknown): string[] | null {
+  return Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
+}
 
 type LocalListing = PublicListing & { barcode: string | null; sort_order: number };
 
@@ -34,6 +39,7 @@ export class LocalDbSource implements DataSource {
           units: (v.units || []).map((u: any) => ({ unit_id: String(u.id), name: u.name, factor: u.factor, price: u.price, price_lbp: u.price_lbp ?? null })),
           stock_state: v.stock_state, stock: store.settings.show_exact_stock === 1 ? (v.product?.stock ?? null) : null,
           min_quantity: v.min_quantity ?? null, barcode: v.product?.barcode ?? null, sort_order: v.sort_order ?? 0,
+          base_orderable: (() => { const k = orderableKeys(v.orderable_unit_keys ?? v.orderable_unit_ids); return !k || k.includes('base'); })(),
         });
       }
       if (offset + 500 >= page.total) break;
@@ -65,6 +71,16 @@ export class LocalDbSource implements DataSource {
       show_local_price: s.settings.show_local_price === 1, hide_out_of_stock: s.settings.hide_out_of_stock === 1, show_exact_stock: s.settings.show_exact_stock === 1,
       local_currency_code: cur?.code ?? null, local_currency_symbol: cur?.symbol ?? null, local_rate: cur ? Number(cur.rate) : null,
       categories, is_preview: s.previewing,
+      // 003 ordering settings, with the same defaults and clean-up as the cloud (store_public_get).
+      ...(({ ordering_mode, pickup_enabled, pickup_note, delivery_enabled, delivery_note, min_order_usd }) =>
+        ({ ordering_mode, pickup_enabled, pickup_note, delivery_enabled, delivery_note, min_order_usd }))(normalizeStore({
+        slug: s.slug, ordering_mode: s.settings.ordering_mode,
+        pickup_enabled: s.settings.pickup_enabled === undefined ? true : [1, '1', true].includes(s.settings.pickup_enabled),
+        pickup_note: String(s.settings.pickup_note ?? '').trim().slice(0, 200),
+        delivery_enabled: [1, '1', true].includes(s.settings.delivery_enabled),
+        delivery_note: String(s.settings.delivery_note ?? '').trim().slice(0, 200),
+        min_order_usd: typeof s.settings.min_order_usd === 'number' ? s.settings.min_order_usd : null,
+      })),
     };
   }
 

@@ -8,6 +8,7 @@ import { t } from '../i18n.js';
 import { contactButtons } from '../contact.js';
 import { summary } from '../seo.js';
 import { imgUrl, type PageMeta } from './layout.js';
+import { canOrder, isMeasuredUnit, orderableUnits } from '../ordering.js';
 
 function gallery(ctx: PageContext, l: PublicListing): string {
   const srcs = l.images.length ? l.images.map(imgUrl) : [`/placeholder.svg?v=${ctx.assetVersion}`];
@@ -35,7 +36,29 @@ ${l.units.map((u) => row(u.name, t(ctx.lang, 'unit_contains', { count: u.factor,
 </ul></section>`;
 }
 
-export function renderProduct(ctx: PageContext, l: PublicListing): { meta: PageMeta; body: string } {
+/** 003: unit picker + quantity + "Add to cart". Hidden until cart.js runs (no JS = no ordering). The data
+ *  attributes are listing-level, so the page stays the same for every visitor. */
+export function orderForm(ctx: PageContext, l: PublicListing): string {
+  const units = orderableUnits(l);
+  const dec = isMeasuredUnit(l.unit);
+  const options = units.map((u) => {
+    const label = u.key === 'base' ? u.name : `${u.name} (${t(ctx.lang, 'unit_contains', { count: u.factor, unit: l.unit })})`;
+    return `<option value="${attr(u.key)}" data-unit="${attr(u.key)}" data-name="${attr(u.name)}" data-factor="${u.factor}" data-price="${u.price}" data-price-lbp="${u.price_lbp ?? ''}">${html(label)}</option>`;
+  }).join('');
+  const onlyBase = units.length === 1 && units[0].key === 'base';
+  const min = l.min_quantity && l.min_quantity > 0 ? l.min_quantity : null;
+  const start = onlyBase && min ? min : 1;
+  const step = dec && units[0]?.key === 'base' ? '0.001' : '1';
+  return `<form class="sf-order" data-id="${attr(l.listing_id)}" data-title="${attr(l.title)}" data-img="${attr(l.images[0] || '')}" data-min="${min ?? ''}" data-base="${attr(l.unit)}" data-dec="${dec ? 1 : 0}" hidden>
+<label class="sf-field"><span>${html(t(ctx.lang, 'unit'))}</span><select name="unit"${units.length === 1 ? ' disabled' : ''}>${options}</select></label>
+<label class="sf-field"><span>${html(t(ctx.lang, 'quantity'))}</span><input name="qty" type="number" inputmode="${dec ? 'decimal' : 'numeric'}" min="${step}" max="999" step="${step}" value="${start}"></label>
+<button class="sf-button" type="submit">${html(t(ctx.lang, 'add_to_cart'))}</button>
+${min ? `<p class="sf-note">${html(t(ctx.lang, 'minimum_note', { min, unit: l.unit }))}</p>` : ''}
+<p class="sf-order-status" role="status"></p>
+</form>`;
+}
+
+export function renderProduct(ctx: PageContext, l: PublicListing, ordering = false): { meta: PageMeta; body: string } {
   const { lang, store } = ctx;
   const canonical = `${ctx.canonicalHome}p/${l.listing_id}`;
   const shareUrl = ctx.params.lang ? `${canonical}?lang=${ctx.params.lang}` : canonical;
@@ -54,6 +77,7 @@ ${category}
 <p class="sf-stock sf-stock-${l.stock_state}">${html(stockLabel(lang, l.stock_state, l.stock))}</p>
 <p class="sf-note">${html(t(lang, 'availability_note'))}</p>
 ${units(ctx, l)}
+${ordering && canOrder(l) ? orderForm(ctx, l) : ''}
 ${l.description ? `<p class="sf-description">${html(l.description)}</p>` : ''}
 ${contactButtons(lang, store, { whatsapp: t(lang, 'wa_product', { product: l.title, url: shareUrl }), subject: l.title })}
 </div>
