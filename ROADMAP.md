@@ -32,8 +32,12 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 Other items: _(add fixes and ideas here)_
 - [x] Cloud migration (commerce) `2026-10-18_commerce_store_foundation.sql` applied 2026-10-18 and verified read-only
       (tables, RLS with no anon policy, slug index, sync triggers, 6 functions with the intended grants, allow-list clean).
-- [ ] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`) on a copy of a real customer database with
-      settled days.
+- [x] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`, v1.9.0 code) on a copy of a real customer
+      database (3 tenants, 44 products, 32 parties, 39 open + 106 settled invoices, 10 day closings, no commerce tables
+      yet) on 2026-10-20: all 98 measured values unchanged (counts, stock, invoice totals, payments, 32 balances).
+- [ ] Startup log noise (since 1.7.7): the sync-metadata loop in `server/db.ts` tries `ADD COLUMN created_at ... DEFAULT
+      CURRENT_TIMESTAMP` on `_migrations` and `cloud_session` at every start and logs "Cannot add a column with
+      non-constant default" (caught, harmless). Skip local-only tables there.
 - [x] Cloud migrations (002) `2026-10-19_storefront.sql` + `2026-10-19b_storefront_storage.sql` applied 2026-10-19 and verified
       read-only (all 9 functions with the intended grants, Wholesale gate, allow-list clean, preview-token table closed,
       `store-images` bucket public / 2 MB / WebP, 3 owner-only storage policies, new reserved list).
