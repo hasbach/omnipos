@@ -36,11 +36,18 @@ both migrations, gates incl. Wholesale, preview tokens, single-listing RPC, rese
 | Text audit (rendered pages, 7 kinds × ar/fr) | no untranslated text (only shop data, language names, brand names) |
 | Burst (dev server, fixture, 300 requests) | all 200, p50 9 ms, p95 24 ms (no CDN locally, so no cache figures) |
 
+## 3. Cloud (live project, 2026-10-19)
+
+Migrations `2026-10-19_storefront.sql` and `2026-10-19b_storefront_storage.sql` applied by the user and verified
+read-only with `supabase/checks/2026-10-19_storefront_checks.sql`: all nine functions exist with the intended grants
+(anon: the three `store_public_*` only; authenticated also `claim_store_slug` and `create_store_preview_token`;
+helpers closed), old 001 signatures gone, Wholesale gate present, allow-list clean, `store_preview_tokens` RLS on with
+no policies, bucket `store-images` public / 2 MB / WebP, three owner-only storage policies, reserved list updated.
+(The first apply showed no change; after re-running both files everything is in place.)
+
 ## 3–4. Still to do (needs the user / deployment)
 
-1. Apply `supabase/migrations/2026-10-19_storefront.sql`, then `2026-10-19b_storefront_storage.sql` (storage tables are
-   owned by `supabase_storage_admin`; if refused, use the dashboard steps in that file), then run
-   `supabase/checks/2026-10-19_storefront_checks.sql` (each query lists its expected result).
+1. ~~Apply the 002 migrations and run the checks~~ — done 2026-10-19 (section 3).
 2. Buy the storefront domain; create the Vercel project (Root Directory `storefront`, commercial plan, env vars,
    apex + wildcard domains) — see `storefront/README.md`.
 3. A register on these branches, signed into a **test** business, opens a store, uploads photos; check the live
