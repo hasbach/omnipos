@@ -46,9 +46,11 @@ Back office on the preview server (demo data):
 
 ## 3. Still to do (needs the user / deployment)
 
-- [ ] Apply `supabase/migrations/2026-10-21_retail_ordering_s1.sql` in the Supabase SQL editor, then run
-      `supabase/checks/2026-10-21_retail_ordering_s1_checks.sql` (expected results are in the file). Don't re-run
-      `2026-10-19_storefront.sql` afterwards.
+- [x] Applied `supabase/migrations/2026-10-21_retail_ordering_s1.sql` and its checks file (user, 2026-10-20). Verified
+      read-only afterwards: the three public functions return the new columns (`ordering_mode` … `min_order_usd`,
+      `base_orderable`) and stay anon-callable; `_store_public_settings`, `_store_setting_on`, `_store_orderable_keys`
+      are not callable by anon/authenticated; one version of each function; allow-list clean; the live storefront
+      (pre-003 code) renders `teststore` uncached (200, 12 products). Don't re-run `2026-10-19_storefront.sql` afterwards.
 - [ ] Deploy the storefront (Render service tracks its branch; safe before or after the migration — ordering simply
       stays off until the fields exist).
 - [ ] Desktop release with the back-office changes (Ordering card, orderable units, startup conversion of unit ids).
