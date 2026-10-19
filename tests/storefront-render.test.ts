@@ -531,3 +531,19 @@ test("003: WhatsApp message strings follow the store's language, page strings th
   assert.equal(p.msg.msg_new_order, "طلب جديد — {store}");
   assert.equal(p.msg.msg_prices_confirmed, "الأسعار بانتظار تأكيد المتجر.");
 });
+
+test("003: Arabic and French cart pages carry no untranslated English cart or checkout labels", async () => {
+  const { get } = setupOrdering();
+  const english = ["Your details", "Order on WhatsApp", "Pickup from the shop", "Delivery address", "Note for the shop",
+    "Remember my details", "Did you send the order", "Continue shopping", "Your cart is empty", "Minimum order",
+    "Prices and availability", "You pay on pickup", "Any delivery charge"];
+  for (const lang of ["ar", "fr"]) {
+    const html = (await get(`/cart?lang=${lang}`)).html;
+    for (const s of english) assert.ok(!html.includes(s), `${lang}: "${s}" untranslated`);
+    const p = orderJson(html);
+    for (const [k, v] of Object.entries(p.ui)) assert.notEqual(v, k, `${lang}: ui.${k} missing`);
+  }
+  const ar = (await get("/cart?lang=ar")).html;
+  assert.match(ar, /<html lang="ar" dir="rtl">/);
+  assert.match(ar, /اطلب عبر واتساب/);
+});

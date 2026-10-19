@@ -18,7 +18,7 @@ Each feature gets its own Spec Kit folder under `specs/` (spec → plan → task
 |---|------|------|--------|
 | 001 | Commerce domain foundation (relationships, orders, shipments, receipts, posting rules — no storefront) | [spec](specs/001-commerce-domain-foundation/spec.md) · [plan A](specs/001-commerce-domain-foundation/plan.md) | **Slice A implemented** on branch `001-commerce-domain-foundation` (not merged; [validation](specs/001-commerce-domain-foundation/validation.md)): commerce on/off, store + web address, listings, store.* permissions, sync, public catalog functions. Slice B (relationships, orders, posting) not planned |
 | 002 | Tenant online store (activation, slug, branding, product publishing) | [spec](specs/002-tenant-online-store/spec.md) · [plan](specs/002-tenant-online-store/plan.md) · [validation](specs/002-tenant-online-store/validation.md) | **Implemented** on branch `002-tenant-online-store` (on top of 001, not merged; 44/44 tasks): server-rendered storefront (`storefront/`, own Render web service, edge-cached), store home / product pages, WhatsApp-phone-email contact, en/ar/fr + RTL, up to 4 photos + logo/cover, owner preview, Wholesale stores never public. Cloud migration applied 2026-10-19; **deployed** 2026-10-19 at `myomnipos.com` (Render, from this branch; live test store checked). Before merge: customer-DB dry run |
-| 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | [spec](specs/003-retail-ordering/spec.md) · [plan S1](specs/003-retail-ordering/plan.md) · [tasks S1](specs/003-retail-ordering/tasks.md) | **Slice 1 planned + tasked** (37 tasks) (WhatsApp order; Slice 2 outlined), spec written on branch `003-retail-ordering` (2026-10-20): browser-only cart, guest checkout, cash on pickup/delivery; Slice 1 "order on WhatsApp", Slice 2 online orders → accept/reject in the back office → POS sale. Clarified: both slices (WhatsApp first), no delivery fee, no phone verification. Next: implement Slice 1 |
+| 003 | B2C retail ordering (cart, checkout, sales order, pickup/delivery) | [spec](specs/003-retail-ordering/spec.md) · [plan S1](specs/003-retail-ordering/plan.md) · [tasks S1](specs/003-retail-ordering/tasks.md) · [validation](specs/003-retail-ordering/validation.md) | **Slice 1 implemented** on branch `003-retail-ordering` (not merged; 37/37 tasks, 2026-10-21): browser-only cart on the storefront (pages still cached per URL), checkout → pre-filled WhatsApp message to the shop in its language, nothing stored; back office: Ordering card (WhatsApp mode, pickup/delivery notes, minimum order) and orderable units as unit keys (startup conversion of local ids). Pending: cloud migration `2026-10-21_retail_ordering_s1.sql`, real-phone check, desktop release. Slice 2 (online orders → back office → POS sale) outlined in the plan, not planned in detail |
 | 004 | Business-to-business relationships (request, approve, terms) | | Not started |
 | 005 | B2B wholesale storefront (customer pricing, units, minimums, reorder) | | Not started |
 | 006 | B2B order confirmation & fulfillment (partial, backorder, cancel) | | Not started |
@@ -46,8 +46,11 @@ Other items: _(add fixes and ideas here)_
 - [ ] 002 storefront: stock online lags the registers (≈ 60 s online, longer offline) — label it as indicative and
       re-check at order time (003). Supabase is already over the Free-plan egress quota: serve the catalog from the
       storefront with ~60 s edge caching per store/page, and long cache headers or a CDN for images.
-- [ ] 003 ordering: `store_listings.orderable_unit_ids` holds the authoring register's local unit ids; switch to unit
-      global ids before enforcing it (the cloud catalog ignores it today).
+- [x] 003 ordering: `store_listings.orderable_unit_ids` now holds unit keys ("base" / unit global id), the same on
+      every register and in the cloud; legacy local ids are converted at startup (003 Slice 1, research R5).
+- [ ] 003 Slice 1 before release: apply cloud migration `2026-10-21_retail_ordering_s1.sql` + its checks file
+      (don't re-run `2026-10-19_storefront.sql` after it); send a 50-line Arabic cart on Android, iPhone and
+      WhatsApp Web (validation.md §3).
 - [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
 - [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.

@@ -147,6 +147,43 @@ test("page weight: home with 48 cards ≤ 60 KB, stylesheet ≤ 20 KB, script �
   assert.ok(fs.statSync("storefront/public/storefront.js").size <= LIMITS.jsBytes);
 });
 
+test("003 page weight: home with 48 cards and ordering on ≤ 60 KB; cart.js ≤ 16 KB; checkout.js ≤ 10 KB", async () => {
+  const fs = await import("fs");
+  const { LIMITS } = await import("../storefront/src/limits.js");
+  const data = new FixtureSource(demoFixture(200, { ordering: true }));
+  const r = await handle({ host: "beirut-market.myomnipos.com", url: "/" }, { config, data, assetVersion: "0123456789" });
+  const html = body(r);
+  assert.equal((html.match(/class="sf-card"/g) || []).length, 48);
+  assert.ok(html.includes("/cart.js?v="), "ordering is on");
+  assert.ok(Buffer.byteLength(html) <= LIMITS.homeHtmlBytes, `home is ${Buffer.byteLength(html)} bytes`);
+  // Sizes as deployed (LF line endings), whatever the checkout's line endings are.
+  const size = (f: string) => Buffer.byteLength(fs.readFileSync(`storefront/public/${f}`, "utf8").replace(/\r\n/g, "\n"));
+  assert.ok(size("cart.js") <= LIMITS.cartJsBytes, `cart.js is ${size("cart.js")} bytes`);
+  assert.ok(size("checkout.js") <= LIMITS.checkoutJsBytes, `checkout.js is ${size("checkout.js")} bytes`);
+  assert.ok(size("storefront.css") <= LIMITS.cssBytes, `storefront.css is ${size("storefront.css")} bytes`);
+});
+
+test("003 cart route: same answer in host and path form; previews never cached; unknown store neutral", async () => {
+  const data = new FixtureSource(demoFixture(60, { ordering: true }));
+  data.fx.previewTokens.push("tok_123");
+  const get = (host: string, url: string) => handle({ host, url }, { config, data, assetVersion: "test" });
+  const hostForm = await get("beirut-market.myomnipos.com", "/cart");
+  const pathForm = await get("myomnipos.com", "/s/beirut-market/cart");
+  for (const r of [hostForm, pathForm]) {
+    assert.equal(r.status, 200);
+    assert.equal(r.headers["Cache-Control"], "public, s-maxage=240, stale-while-revalidate=60");
+    assert.equal(r.headers["Set-Cookie"], undefined);
+  }
+  assert.match(body(pathForm), /href="\/s\/beirut-market\/cart" hidden>/, "path form links to its own cart");
+  const preview = await get("beirut-market.myomnipos.com", "/cart?preview=tok_123");
+  assert.equal(preview.headers["Cache-Control"], "private, no-store");
+  assert.equal(preview.headers["X-Robots-Tag"], "noindex");
+  const unknown = await get("nobody-here.myomnipos.com", "/cart");
+  assert.equal(unknown.status, 404);
+  assert.equal(unknown.headers["Cache-Control"], "public, s-maxage=60");
+  assert.equal((await get("beirut-market.myomnipos.com", "/cart/extra")).status, 404);
+});
+
 test("a burst on one page costs one data-source call per render, and the CDN header lets the edge absorb the rest", async () => {
   const { data, get } = make();
   const before = data.calls;

@@ -106,11 +106,11 @@ with integer unit ids are converted once and keep their meaning.
 
 ## Phase 6: Polish & cross-cutting
 
-- [ ] T033 [P] Update `tests/storefront-routing.test.ts` budgets and `storefront/src/limits.ts`: home HTML with 48 cards (ordering on) ≤ 70 KB, `storefront.js` ≤ 10 KB, `cart.js` ≤ 16 KB, CSS ≤ 24 KB; cart route cache headers (public/redirect/preview/unavailable); asset-version test passes
-- [ ] T034 [P] Confirm the i18n key-parity test in `tests/storefront-render.test.ts` covers the new keys (en/ar/fr same keys and placeholders) and add an Arabic cart-page render check (`dir="rtl"`, no untranslated English labels)
-- [ ] T035 [P] Update `storefront/README.md` (cart.js, ordering settings, deploy order: migration `2026-10-21_retail_ordering_s1.sql` before or after the storefront is safe) and `specs/003-retail-ordering/quickstart.md` if any step changed
-- [ ] T036 Run the full gate: `npm test`, `npx tsc --noEmit` (no new errors vs T001), `npm run build`, `npm run build:server`; fix anything red
-- [ ] T037 Create `specs/003-retail-ordering/validation.md` with quickstart §1–2 results (and placeholders for §3 devices / §4 cloud, to be filled after deployment), and update `ROADMAP.md` row 003 (Slice 1 implemented, not merged; pending: apply migration, device check, live test) plus a To-do line for the migration
+- [X] T033 [P] Update `tests/storefront-routing.test.ts` budgets and `storefront/src/limits.ts`: home HTML with 48 cards (ordering on) ≤ 70 KB, `storefront.js` ≤ 10 KB, `cart.js` ≤ 16 KB, CSS ≤ 24 KB; cart route cache headers (public/redirect/preview/unavailable); asset-version test passes — Done note: home stays ≤ 60 KB with ordering on (36 KB) and CSS ≤ 20 KB, so those budgets were not raised; new `cartJsBytes` 16 KB and `checkoutJsBytes` 10 KB, measured with LF line endings.
+- [X] T034 [P] Confirm the i18n key-parity test in `tests/storefront-render.test.ts` covers the new keys (en/ar/fr same keys and placeholders) and add an Arabic cart-page render check (`dir="rtl"`, no untranslated English labels) — Done note: the existing parity test covers every new key; added an ar/fr cart-page check for untranslated English labels and missing `ui` strings.
+- [X] T035 [P] Update `storefront/README.md` (cart.js, ordering settings, deploy order: migration `2026-10-21_retail_ordering_s1.sql` before or after the storefront is safe) and `specs/003-retail-ordering/quickstart.md` if any step changed
+- [X] T036 Run the full gate: `npm test`, `npx tsc --noEmit` (no new errors vs T001), `npm run build`, `npm run build:server`; fix anything red — Done note: 493/493, tsc 0 errors, `npm run build` and `npm run build:server` succeed, `node --check dist-server/server.js` OK.
+- [X] T037 Create `specs/003-retail-ordering/validation.md` with quickstart §1–2 results (and placeholders for §3 devices / §4 cloud, to be filled after deployment), and update `ROADMAP.md` row 003 (Slice 1 implemented, not merged; pending: apply migration, device check, live test) plus a To-do line for the migration
 
 ---
 

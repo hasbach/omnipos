@@ -4,4 +4,7 @@ export const LIMITS = {
   homeHtmlBytes: 60 * 1024,
   cssBytes: 20 * 1024,
   jsBytes: 10 * 1024,
+  /** 003: loaded only on stores that take orders (cart.js) and only on the cart page (checkout.js). */
+  cartJsBytes: 16 * 1024,
+  checkoutJsBytes: 10 * 1024,
 } as const;

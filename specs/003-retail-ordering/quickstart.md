@@ -6,6 +6,9 @@
 npm test
 ```
 
+In a `.claude/worktrees/*` checkout `npm test` can't switch the native module: run `npm rebuild better-sqlite3` in the
+main checkout, then `npx tsx --test tests/*.test.ts` here, then `npm run rebuild` in the main checkout.
+
 Expect green, including `storefront-cart`, `storefront-render`, `storefront-routing`, `commerce-store`,
 `commerce-listings` and `commerce-sql` (migration `2026-10-21_retail_ordering_s1.sql` on PGlite). Also
 `npx tsc --noEmit` (no new errors), `npm run build`, `npm run build:server`.
@@ -13,10 +16,11 @@ Expect green, including `storefront-cart`, `storefront-render`, `storefront-rout
 ## 2. Local storefront (no cloud)
 
 ```bash
-npx tsx storefront/dev-server.ts --source=fixture
+npx tsx storefront/dev-server.ts --source=fixture --ordering
 ```
 
-Open `http://localhost:3200/s/<fixture store with ordering on>` at 360 px wide and in ar/fr/en:
+(or the `storefront-fixture-ordering` launch configuration). Open `http://localhost:3200/s/beirut-market` at 360 px
+wide and in ar/fr/en:
 
 1. Add a product from a card and another in a pack unit from its product page → badge counts, confirmation shown.
 2. Open `/s/<address>/cart` → lines, totals in USD + LL, notes; change quantities, remove a line; reload and restart the
@@ -25,7 +29,7 @@ Open `http://localhost:3200/s/<fixture store with ordering on>` at 360 px wide a
    message of [storefront-routes.md](contracts/storefront-routes.md#whatsapp-message-store-default-language-example-in-english).
 4. Come back → "Did you send the order?" → No keeps the cart, Yes empties it.
 5. Below the minimum order / below a listing minimum → submit disabled with the remaining amount.
-6. Fixture store with ordering off → pages identical to 002 (no cart link, no controls, no `cart.js`); `/cart` → 302
+6. Fixture store with ordering off (run without `--ordering`) → pages identical to 002 (no cart link, no controls, no `cart.js`); `/cart` → 302
    to the home.
 7. Disable JavaScript → controls hidden, cart page shows the `noscript` message and contact buttons.
 
