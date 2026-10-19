@@ -17,6 +17,7 @@ const ASSETS: Record<string, string> = {
   '/storefront.js': 'text/javascript; charset=utf-8',
   '/placeholder.svg': 'image/svg+xml',
   '/cart.js': 'text/javascript; charset=utf-8',
+  '/checkout.js': 'text/javascript; charset=utf-8',
 };
 
 export interface NodeServerOptions {

@@ -20,7 +20,7 @@ export interface LayoutInput {
   /** Same page in each language (store pages only). */
   langLinks?: { lang: Lang; href: string }[];
   /** 003: the store takes orders — cart link in the header, the sf-order JSON block and cart.js. */
-  order?: { cartHref: string; json: string };
+  order?: { cartHref: string; json: string; checkout?: boolean };
 }
 
 export const imgUrl = (path: string) => `/img/${path.split('/').map(encodeURIComponent).join('/')}`;
@@ -68,7 +68,8 @@ ${i.body}
 <footer class="sf-footer">${languageSwitcher(lang, i.langLinks)}<a href="${attr(i.websiteUrl)}" rel="noopener">${html(t(lang, 'powered_by'))}</a></footer>
 <script src="/storefront.js?v=${attr(i.assetVersion)}" defer></script>${i.order ? `
 ${i.order.json}
-<script src="/cart.js?v=${attr(i.assetVersion)}" defer></script>` : ''}
+<script src="/cart.js?v=${attr(i.assetVersion)}" defer></script>${i.order.checkout ? `
+<script src="/checkout.js?v=${attr(i.assetVersion)}" defer></script>` : ''}` : ''}
 </body>
 </html>`;
 }

@@ -43,7 +43,7 @@ All values are store- or listing-level, identical for every visitor of the URL.
   "msg": { "...": "WhatsApp message strings in the store's default language" } }
 ```
 
-- `<script src="/cart.js?v=<asset version>" defer>` after `storefront.js`.
+- `<script src="/cart.js?v=<asset version>" defer>` after `storefront.js`. The cart page also loads `/checkout.js` (form, message, "sent?" dialog) after `cart.js`; no other page does.
 
 ## Cart page (`render/cart.ts`)
 
@@ -99,4 +99,4 @@ one WhatsApp message — please split it".
 
 ## Budgets (tests/storefront-routing.test.ts)
 
-Home HTML with 48 cards ≤ 70 KB; `storefront.js` ≤ 10 KB; `cart.js` ≤ 16 KB; CSS ≤ 24 KB. Bump `ASSET_VERSION`.
+Home HTML with 48 cards ≤ 60 KB (36 KB measured with ordering on — the planned raise to 70 KB wasn't needed); `storefront.js` ≤ 10 KB; `cart.js` ≤ 16 KB; `checkout.js` ≤ 10 KB; CSS ≤ 24 KB. Bump `ASSET_VERSION`.

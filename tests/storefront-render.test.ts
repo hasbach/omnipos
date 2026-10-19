@@ -504,3 +504,30 @@ test("003: cart page — store shell, notes, noscript contact, cacheable and noi
   assert.equal(closed.status, 404);
   assert.match(closed.html, /This store isn’t available/);
 });
+
+test("003: cart page checkout form — fields checkout.js reads, methods the store offers, checkout.js only here", async () => {
+  const { get } = setupOrdering();
+  const cart = (await get("/cart")).html;
+  const expected = ['<form id="sf-checkout"', 'name="name" maxlength="80"', 'name="phone" type="tel" maxlength="30"',
+    'name="fulfilment" value="pickup"', 'name="fulfilment" value="delivery"', 'id="sf-address-field" hidden', 'name="address" maxlength="300"',
+    'name="note" maxlength="300"', 'data-counter="note"', 'name="remember"', 'id="sf-checkout-block"', 'class="sf-button sf-wa sf-submit"',
+    'id="sf-wa-fallback"', 'id="sf-sent"', 'data-sent="yes"', 'data-sent="no"', 'data-for="name"', 'data-for="address"',
+    "Minimum order: $10.00", "Back door after 4 pm", "Hamra and Ras Beirut only", "Order on WhatsApp"];
+  for (const s of expected) assert.ok(cart.includes(s), s);
+  assert.match(cart, /<script src="\/checkout\.js\?v=test" defer><\/script>/);
+  assert.doesNotMatch((await get("/")).html, /checkout\.js/, "only the cart page loads checkout.js");
+
+  // A single method is preselected; with delivery only, the address field starts visible.
+  const deliveryOnly = (await setupOrdering((fx) => { fx.store.pickup_enabled = false; }).get("/cart")).html;
+  assert.match(deliveryOnly, /value="delivery" checked/);
+  assert.doesNotMatch(deliveryOnly, /value="pickup"/);
+  assert.match(deliveryOnly, /<label class="sf-field" id="sf-address-field">/);
+});
+
+test("003: WhatsApp message strings follow the store's language, page strings the visitor's", async () => {
+  const { get } = setupOrdering((fx) => { fx.store.default_language = "ar"; });
+  const p = orderJson((await get("/cart?lang=fr")).html);
+  assert.equal(p.ui.field_required, "Obligatoire.");
+  assert.equal(p.msg.msg_new_order, "طلب جديد — {store}");
+  assert.equal(p.msg.msg_prices_confirmed, "الأسعار بانتظار تأكيد المتجر.");
+});

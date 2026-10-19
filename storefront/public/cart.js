@@ -358,6 +358,7 @@
       b.textContent = String(c.lines.length);
       b.hidden = c.lines.length === 0;
     });
+    if (window.OmniCart && typeof window.OmniCart.onChange === 'function') window.OmniCart.onChange();
     var list = document.getElementById('sf-cart-lines');
     if (!list) return;
     var note = document.getElementById('sf-cart-storage-note');

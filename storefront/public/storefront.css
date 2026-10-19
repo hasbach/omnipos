@@ -193,3 +193,38 @@ img { max-inline-size: 100%; display: block; }
 .sf-cart-issues { margin-block: 10px; }
 .sf-cart-total { font-size: 1.15rem; font-weight: 700; margin-block: 16px 8px; }
 .sf-cart-notes { margin: 0; padding-inline-start: 18px; color: var(--sf-muted); font-size: 0.85rem; }
+
+/* 003 checkout (WhatsApp order) */
+.sf-checkout {
+  display: flex; flex-direction: column; gap: 10px; margin-block-start: 20px; padding: 16px;
+  background: var(--sf-surface); border: 1px solid var(--sf-border); border-radius: var(--sf-radius);
+}
+.sf-checkout h2 { font-size: 1.1rem; margin: 0; }
+.sf-field textarea {
+  min-block-size: 64px; padding: 10px; border: 1px solid var(--sf-border); border-radius: 10px;
+  font: inherit; color: var(--sf-text); background: var(--sf-surface); resize: vertical;
+}
+.sf-field[hidden] { display: none; }
+.sf-field small, .sf-choice small { color: var(--sf-muted); font-size: 0.8rem; }
+.sf-counter { align-self: flex-end; }
+.sf-choices { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sf-choices legend { color: var(--sf-muted); font-size: 0.9rem; margin-block-end: 6px; padding: 0; }
+.sf-choice {
+  display: flex; align-items: flex-start; gap: 10px; padding: 12px; min-block-size: 44px;
+  border: 1px solid var(--sf-border); border-radius: 10px; cursor: pointer;
+}
+.sf-choice:has(input:checked) { border-color: var(--sf-accent); box-shadow: inset 0 0 0 1px var(--sf-accent); }
+.sf-choice span { display: flex; flex-direction: column; }
+.sf-choice input, .sf-check input { inline-size: 20px; block-size: 20px; margin: 2px 0 0; accent-color: var(--sf-accent); flex: none; }
+.sf-check { display: flex; align-items: center; gap: 10px; min-block-size: 44px; }
+.sf-error { color: var(--sf-bad); font-size: 0.85rem; margin: -4px 0 0; }
+.sf-error[hidden], .sf-checkout [hidden], .sf-dialog[hidden] { display: none; }
+.sf-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.sf-dialog {
+  position: fixed; inset-inline: 16px; inset-block-end: 16px; z-index: 30; max-inline-size: 480px; margin-inline: auto;
+  padding: 16px; background: var(--sf-surface); border: 1px solid var(--sf-border); border-radius: var(--sf-radius);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.18);
+}
+.sf-dialog p { margin-block: 0 12px; font-weight: 600; }
+.sf-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sf-dialog-actions .sf-button { flex: 1 1 10rem; }

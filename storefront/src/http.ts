@@ -77,7 +77,7 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
   }
 
   const shell = (lang: Lang, meta: PageMeta, body: string, store: PublicStore | null = null, homeHref = '/', noindex = false,
-    langLinks?: { lang: Lang; href: string }[], order?: { cartHref: string; json: string }) =>
+    langLinks?: { lang: Lang; href: string }[], order?: { cartHref: string; json: string; checkout?: boolean }) =>
     layout({ lang, meta, body, store, homeHref, assetVersion: deps.assetVersion, websiteUrl: config.websiteUrl, noindex, langLinks, order });
 
   if (r.kind === 'notFound') {
@@ -129,7 +129,7 @@ export async function handle(req: StoreRequest, deps: Deps): Promise<StoreRespon
         return { status: 302, body: '', headers: { ...BASE_HEADERS, Location: homeHref, 'Cache-Control': preview ? CACHE_PREVIEW : CACHE_SHORT } };
       }
       const out = renderCart(ctx);
-      return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, true, langLinks, order), cache, extra);
+      return htmlResponse(200, shell(lang, out.meta, out.body, store, homeHref, true, langLinks, { ...order!, checkout: true }), cache, extra);
     }
 
     if (r.kind === 'home') {

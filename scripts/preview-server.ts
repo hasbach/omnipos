@@ -156,7 +156,7 @@ await call("POST", "/api/cash-flow", { type: "out", amount: 45, currency: "USD",
   });
   const sfData = new LocalDbSource(db, tenantId, (store, token) => { const p = previewTokens.get(token); return !!p && p.store === store && p.until > Date.now(); });
   const { IMG_PATH } = await import("../storefront/src/img.js");
-  const assets: Record<string, string> = { "/storefront.css": "text/css; charset=utf-8", "/storefront.js": "text/javascript; charset=utf-8", "/placeholder.svg": "image/svg+xml", "/cart.js": "text/javascript; charset=utf-8" };
+  const assets: Record<string, string> = { "/storefront.css": "text/css; charset=utf-8", "/storefront.js": "text/javascript; charset=utf-8", "/placeholder.svg": "image/svg+xml", "/cart.js": "text/javascript; charset=utf-8", "/checkout.js": "text/javascript; charset=utf-8" };
   app.use(async (req: any, res: any, next: any) => {
     if (assets[req.path]) {
       res.type(assets[req.path]).set("Cache-Control", "no-cache").send(fs.readFileSync(path.join(root, "storefront", "public", req.path.slice(1))));

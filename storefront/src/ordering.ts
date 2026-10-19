@@ -39,9 +39,13 @@ export function isMeasuredUnit(name: string | null | undefined): boolean {
 export const UI_KEYS = [
   'added_to_cart', 'cart_limit_lines', 'cart_limit_qty', 'invalid_quantity', 'minimum_qty', 'unavailable_line',
   'remove', 'increase', 'decrease', 'total', 'quantity', 'each',
+  // checkout (cart page)
+  'amount_to_minimum', 'minimum_blocks', 'order_too_long', 'field_required', 'invalid_phone',
 ] as const;
-/** Strings of the WhatsApp message (store language — the shop reads it). Filled by US2. */
-export const MSG_KEYS: readonly string[] = [];
+/** Strings of the WhatsApp message (store language — the shop reads it). */
+export const MSG_KEYS = [
+  'msg_new_order', 'msg_total', 'msg_pickup', 'msg_delivery', 'msg_name', 'msg_phone', 'msg_note', 'msg_prices_confirmed',
+] as const;
 
 export interface OrderPayload {
   address: string;

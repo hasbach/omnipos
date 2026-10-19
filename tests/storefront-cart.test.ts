@@ -7,6 +7,7 @@ import fs from "fs";
 import vm from "vm";
 
 const SOURCE = fs.readFileSync("storefront/public/cart.js", "utf8");
+const CHECKOUT = fs.readFileSync("storefront/public/checkout.js", "utf8");
 
 // ---- a very small DOM -----------------------------------------------------------------------------------
 
@@ -77,12 +78,20 @@ const CONFIG = {
   placeholder: "/placeholder.svg?v=t", storeName: "Beirut Market", wa: "96170123456",
   local: { show: true, code: "LBP", symbol: "LL", rate: 89500 },
   pickup: { on: true, note: "Back door" }, delivery: { on: true, note: "Hamra only" }, minOrderUsd: 10,
-  ui: { added_to_cart: "Added", minimum_qty: "{product}: minimum {min} {unit}.", total: "Total", each: "{price} each" }, msg: {},
+  ui: {
+    added_to_cart: "Added", minimum_qty: "{product}: minimum {min} {unit}.", total: "Total", each: "{price} each",
+    amount_to_minimum: "Add {price} more to reach the minimum order.", minimum_blocks: "Some products are below their minimum quantity.",
+    order_too_long: "Too long — split it.", field_required: "Required.", invalid_phone: "Enter a phone number.",
+  },
+  msg: {
+    msg_new_order: "New order — {store}", msg_total: "Total: {total}", msg_pickup: "Pickup", msg_delivery: "Delivery: {address}",
+    msg_name: "Name: {name}", msg_phone: "Phone: {phone}", msg_note: "Note: {note}", msg_prices_confirmed: "Prices to be confirmed by the shop.",
+  },
 };
 
 interface Page { body: FakeEl; byId: Record<string, FakeEl> }
 
-function run(opts: { storage?: ReturnType<typeof memoryStorage>; config?: any; page?: Page } = {}) {
+function run(opts: { storage?: ReturnType<typeof memoryStorage>; config?: any; page?: Page; checkout?: boolean } = {}) {
   const storage = opts.storage || memoryStorage();
   const page = opts.page || { body: new FakeEl("body"), byId: {} };
   const cfgEl = new FakeEl("script");
@@ -94,11 +103,17 @@ function run(opts: { storage?: ReturnType<typeof memoryStorage>; config?: any; p
     querySelectorAll: (sel: string) => [...page.body.querySelectorAll(sel), ...Object.values(page.byId).filter((e) => !e.parentNode && sel.split(",").some((s) => matches(e, s.trim())))],
     querySelector: (sel: string) => document.querySelectorAll(sel)[0] || null,
     createElement: (tag: string) => new FakeEl(tag),
+    visibilityState: "visible",
+    listeners: {} as Record<string, (() => void)[]>,
+    addEventListener(type: string, fn: () => void) { (this.listeners[type] ||= []).push(fn); },
   };
-  const window: any = { localStorage: storage, addEventListener() {} };
+  const opened: string[] = [];
+  const window: any = { localStorage: storage, addEventListener() {}, open: (url: string) => { opened.push(url); return null; } };
   const ctx = vm.createContext({ window, document, Intl, JSON, Math, Number, String, Object, Array, Date, isFinite, encodeURIComponent, setTimeout: () => 0, clearTimeout: () => {} });
   vm.runInContext(SOURCE, ctx);
-  return { cart: window.OmniCart, storage, document, page };
+  if (opts.checkout) vm.runInContext(CHECKOUT, ctx);
+  const returnToPage = () => { for (const fn of document.listeners.visibilitychange || []) fn(); };
+  return { cart: window.OmniCart, checkout: window.OmniCheckout, storage, document, page, opened, returnToPage };
 }
 
 const item = (over: Partial<any> = {}) => ({
@@ -262,4 +277,185 @@ test("cart page: lines, total and minimum message drawn from the stored cart; em
 
 test("cart.js never talks to the network", () => {
   assert.doesNotMatch(SOURCE, /fetch\(|XMLHttpRequest|sendBeacon|navigator\.|document\.cookie/);
+});
+
+// ---- checkout (US2) ------------------------------------------------------------------------------------
+
+function checkoutPage(methods: ("pickup" | "delivery")[] = ["pickup", "delivery"]) {
+  const form = new FakeEl("form", { id: "sf-checkout", class: "sf-checkout" });
+  const add = (e: FakeEl) => form.appendChild(e);
+  const name = add(new FakeEl("input", { name: "name" }));
+  add(new FakeEl("p", { class: "sf-error", "data-for": "name", hidden: "" }));
+  const phone = add(new FakeEl("input", { name: "phone" }));
+  add(new FakeEl("p", { class: "sf-error", "data-for": "phone", hidden: "" }));
+  const radios = methods.map((m) => add(new FakeEl("input", { type: "radio", name: "fulfilment", value: m })));
+  if (methods.length === 1) radios[0].checked = true;
+  add(new FakeEl("p", { class: "sf-error", "data-for": "fulfilment", hidden: "" }));
+  const addressField = new FakeEl("label", { id: "sf-address-field", hidden: "" });
+  const address = addressField.appendChild(new FakeEl("textarea", { name: "address" }));
+  add(addressField);
+  add(new FakeEl("p", { class: "sf-error", "data-for": "address", hidden: "" }));
+  const note = add(new FakeEl("textarea", { name: "note" }));
+  const counter = add(new FakeEl("small", { class: "sf-counter", "data-counter": "note" }));
+  const remember = add(new FakeEl("input", { type: "checkbox", name: "remember" }));
+  const block = add(new FakeEl("p", { id: "sf-checkout-block", hidden: "" }));
+  const submit = add(new FakeEl("button", { class: "sf-button sf-wa sf-submit", type: "submit" }));
+  const fallback = add(new FakeEl("p", { id: "sf-wa-fallback", hidden: "" }));
+  fallback.appendChild(new FakeEl("a"));
+  const sent = new FakeEl("div", { id: "sf-sent", hidden: "" });
+  const yes = sent.appendChild(new FakeEl("button", { "data-sent": "yes" }));
+  const no = sent.appendChild(new FakeEl("button", { "data-sent": "no" }));
+  const byId: Record<string, FakeEl> = {
+    "sf-checkout": form, "sf-checkout-block": block, "sf-address-field": addressField, "sf-wa-fallback": fallback, "sf-sent": sent,
+  };
+  return { page: { body: new FakeEl("body"), byId }, form, name, phone, radios, address, addressField, note, counter, remember, block, submit, fallback, sent, yes, no };
+}
+
+function fullCart(storage = memoryStorage()) {
+  const { cart } = run({ storage });
+  cart.add(item({ id: "halloumi", title: "Halloumi 250g", unit: "u-pack", name: "Pack of 6", factor: 6, price: 12.5 }), 2);
+  cart.add(item({ id: "water", title: "Water 1.5L", name: "Piece", price: 0.75 }), 1);
+  return storage;
+}
+
+test("checkout: form rules — name required, phone optional but plausible, a fulfilment method, address for delivery", () => {
+  const p = checkoutPage();
+  const { checkout } = run({ storage: fullCart(), page: p.page, checkout: true });
+  const v = () => checkout.values();
+  assert.deepEqual(plain(checkout.validate(v())), { name: "field_required", fulfilment: "field_required" });
+  p.name.value = "  Rana  ";
+  p.phone.value = "71 315 744";
+  p.radios[1].checked = true; // delivery
+  assert.deepEqual(plain(checkout.validate(v())), { address: "field_required" });
+  p.address.value = "Hamra, Bliss street";
+  assert.deepEqual(plain(checkout.validate(v())), {});
+  assert.equal(v().name, "Rana");
+  p.phone.value = "call me";
+  assert.deepEqual(plain(checkout.validate(v())), { phone: "invalid_phone" });
+  p.phone.value = "+961 (71) 315-744";
+  assert.deepEqual(plain(checkout.validate(v())), {});
+  p.name.value = "x".repeat(120);
+  assert.equal(v().name.length, 80, "trimmed to the field limit");
+});
+
+test("checkout: only one method → preselected; the address field follows the delivery choice", () => {
+  const only = checkoutPage(["delivery"]);
+  const a = run({ storage: fullCart(), page: only.page, checkout: true });
+  assert.equal(a.checkout.values().fulfilment, "delivery");
+  assert.equal(only.addressField.hidden, false);
+  const both = checkoutPage();
+  run({ storage: fullCart(), page: both.page, checkout: true });
+  assert.equal(both.addressField.hidden, true);
+  both.radios[1].checked = true;
+  both.form.dispatch("change");
+  assert.equal(both.addressField.hidden, false);
+  both.note.value = "ring twice";
+  both.form.dispatch("input");
+  assert.equal(both.counter.textContent, "10/300");
+});
+
+test("checkout: the WhatsApp message lists every line, totals, fulfilment, contact and the confirmation note", () => {
+  const p = checkoutPage();
+  const { checkout } = run({ storage: fullCart(), page: p.page, checkout: true });
+  const base = { name: "Rana", phone: "71 315 744", fulfilment: "pickup", address: "", note: "ring the bell twice", remember: false };
+  assert.equal(checkout.buildMessage(base), [
+    "New order — Beirut Market", "https://beirut-market.myomnipos.com/", "",
+    "2 × Halloumi 250g (Pack of 6) — $25.00", "1 × Water 1.5L (Piece) — $0.75", "",
+    "Total: $25.75 · 2,304,625 LL", "Pickup — Back door", "Name: Rana", "Phone: 71 315 744", "Note: ring the bell twice", "",
+    "Prices to be confirmed by the shop.",
+  ].join("\n"));
+  const delivery = checkout.buildMessage({ ...base, fulfilment: "delivery", address: "Hamra", phone: "", note: "" });
+  assert.match(delivery, /\nDelivery: Hamra\nName: Rana\n\nPrices/);
+  assert.doesNotMatch(delivery, /Phone:|Note:/, "empty optional fields are left out");
+  assert.equal(checkout.waUrl("a b&c"), "https://wa.me/96170123456?text=a%20b%26c");
+});
+
+test("checkout: fractional quantities show up to 3 decimals; unavailable lines are left out", () => {
+  const storage = memoryStorage();
+  const { cart } = run({ storage });
+  cart.add(item({ id: "labneh", title: "Labneh", name: "kg", dec: true, price: 6.5 }), 1.25);
+  const saved = plain(cart.load());
+  saved.lines.push({ ...saved.lines[0], id: "gone", unit: "u-x", title: "Old pack", unavailable: true });
+  storage.data.set(KEY, JSON.stringify(saved));
+  const { checkout } = run({ storage, page: checkoutPage().page, checkout: true });
+  const text = checkout.buildMessage({ name: "R", phone: "", fulfilment: "pickup", address: "", note: "", remember: false });
+  assert.match(text, /^1\.25 × Labneh \(kg\) — \$8\.13$/m);
+  assert.doesNotMatch(text, /Old pack/);
+});
+
+test("checkout: blocked below the minimum order, below a listing minimum, with an empty cart, or when the message is too long", () => {
+  const small = memoryStorage();
+  run({ storage: small }).cart.add(item({ price: 2 }), 1);
+  const p = checkoutPage();
+  const { cart } = run({ storage: small, page: p.page, checkout: true });
+  assert.equal(p.submit.disabled, true);
+  assert.equal(p.block.hidden, false);
+  assert.equal(p.block.textContent, "Add $8.00 more to reach the minimum order.");
+  cart.add(item({ id: "bread", title: "Arabic Bread", min: 12, price: 1 }), 10);
+  assert.equal(p.submit.disabled, true, "cart changes re-check the form");
+  assert.equal(p.block.textContent, "Some products are below their minimum quantity.");
+  cart.setQty("bread", "base", 12);
+  assert.equal(p.submit.disabled, false);
+  assert.equal(p.block.hidden, true);
+  cart.clear();
+  assert.equal(p.submit.disabled, true, "empty cart");
+
+  const big = memoryStorage();
+  const filler = run({ storage: big });
+  for (let i = 0; i < 50; i++) filler.cart.add(item({ id: `id-${i}`, title: "حليب كامل الدسم بالفانيليا ".repeat(3) + i, price: 1 }), 1);
+  const q = checkoutPage();
+  const r = run({ storage: big, page: q.page, checkout: true });
+  assert.ok(r.checkout.tooLong(r.checkout.buildMessage(r.checkout.values())));
+  assert.equal(q.block.textContent, "Too long — split it.");
+  assert.equal(q.submit.disabled, true);
+});
+
+test("checkout: sending opens wa.me in a new tab, shows the fallback link, then asks 'did you send it?' on return", () => {
+  const storage = fullCart();
+  const p = checkoutPage();
+  const r = run({ storage, page: p.page, checkout: true });
+  p.form.dispatch("submit");
+  assert.equal(r.opened.length, 0, "invalid form: nothing opened");
+  assert.equal(p.form.querySelector('.sf-error[data-for="name"]')!.hidden, false);
+  p.name.value = "Rana";
+  p.radios[0].checked = true;
+  p.form.dispatch("submit");
+  assert.equal(r.opened.length, 1);
+  assert.match(r.opened[0], /^https:\/\/wa\.me\/96170123456\?text=New%20order/);
+  assert.equal(p.fallback.hidden, false);
+  assert.equal(p.fallback.children[0].href, r.opened[0]);
+  assert.equal(p.sent.hidden, true);
+  r.returnToPage();
+  assert.equal(p.sent.hidden, false);
+  p.no.dispatch("click");
+  assert.equal(p.sent.hidden, true);
+  assert.equal(r.cart.load().lines.length, 2, "No keeps the cart");
+  p.form.dispatch("submit");
+  r.returnToPage();
+  p.yes.dispatch("click");
+  assert.equal(r.cart.load().lines.length, 0, "Yes empties the cart");
+  assert.equal(JSON.parse(storage.data.get(KEY)!).lines.length, 0);
+});
+
+test("checkout: 'remember my details' saves them for the next checkout; unticking forgets them", () => {
+  const storage = fullCart();
+  const p = checkoutPage();
+  run({ storage, page: p.page, checkout: true });
+  p.name.value = "Rana";
+  p.phone.value = "71315744";
+  p.radios[1].checked = true;
+  p.address.value = "Hamra";
+  p.remember.checked = true;
+  p.form.dispatch("submit");
+  assert.deepEqual(JSON.parse(storage.data.get("sf-buyer:v1:beirut-market")!), { name: "Rana", phone: "71315744", address: "Hamra", fulfilment: "delivery" });
+  const next = checkoutPage();
+  run({ storage, page: next.page, checkout: true });
+  assert.deepEqual([next.name.value, next.phone.value, next.address.value, next.radios[1].checked, next.remember.checked], ["Rana", "71315744", "Hamra", true, true]);
+  next.remember.checked = false;
+  next.form.dispatch("submit");
+  assert.equal(storage.data.has("sf-buyer:v1:beirut-market"), false);
+});
+
+test("checkout.js never talks to the network or sets cookies", () => {
+  assert.doesNotMatch(CHECKOUT, /fetch\(|XMLHttpRequest|sendBeacon|navigator\.|document\.cookie/);
 });
