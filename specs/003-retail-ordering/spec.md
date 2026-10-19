@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-20
 
-**Status**: Draft — 3 open decisions (marked [NEEDS CLARIFICATION]) before planning
+**Status**: Clarified 2026-10-20 — ready for planning
 
 **Input**: User description: "Feature 003 — B2C retail ordering, per ROADMAP row 003 and
 OmniPOS_Marketplace_Supply_Chain_Master_Blueprint.md §11 and §34 Phase 2. Builds on 002 (public, read-only,
@@ -39,8 +39,11 @@ in the visitor's browser.
 
 ### Session 2026-10-20
 
-_Open — see the three [NEEDS CLARIFICATION] markers (scope slicing FR-001, abuse protection FR-041, delivery fee
-FR-023). Answers will be recorded here by `/speckit-clarify`._
+- Q: Which slices does 003 deliver? → A: Both — Slice 1 "WhatsApp order" first, then Slice 2 "Online orders" (FR-001).
+- Q: Is there a delivery fee in 003? → A: No. No fee is shown, charged or added to orders; the shop tells the customer
+  about any delivery charge as today. Fees and zones stay in 010 (FR-023).
+- Q: Must customers verify their phone number? → A: No. The abuse limits of FR-041 (per-phone and per-network limits,
+  cart and field limits, bot trap, expiry, blocked-phone list) are enough; no one-time code (FR-041).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -287,8 +290,8 @@ and that a shop that never opens these settings sees no change at all.
 
 - **FR-001**: This feature MUST deliver two slices sharing the same cart and checkout: Slice 1 "WhatsApp order" (no
   order is stored by OmniPOS) and Slice 2 "Online orders" (stored sales orders handled in the back office). Each store
-  chooses one ordering mode: Off (default), WhatsApp, or Online orders. [NEEDS CLARIFICATION: ship both slices (Slice
-  1 first, then Slice 2), only Slice 2, or only Slice 1 for now?]
+  chooses one ordering mode: Off (default), WhatsApp, or Online orders. Slice 1 ships first and MUST be usable on its
+  own; Slice 2 follows on the same cart and checkout.
 - **FR-002**: Ordering MUST be offered only on stores that are publicly visible under 002's rules (open, Retail or
   Hybrid, commerce on, valid online license, not deleted) and whose ordering mode is not Off.
 
@@ -352,9 +355,9 @@ and that a shop that never opens these settings sees no change at all.
   link, never listed or indexed, and never stored in a shared cache.
 - **FR-022**: If submission fails because the cloud is unreachable, the visitor MUST be told and, when the store has a
   WhatsApp number, offered to send the same order on WhatsApp (Slice 1 message); the cart MUST be kept.
-- **FR-023**: Delivery fees: [NEEDS CLARIFICATION: no fee in 003 (the shop tells the customer, as today), one flat
-  delivery fee per store shown at checkout and added to the order, or a fee the shop sets when accepting?] Delivery
-  zones, drivers and fee rules per area remain in Feature 010.
+- **FR-023**: This feature MUST NOT compute, show, charge or add any delivery fee to a cart, message or order. When
+  delivery is chosen, checkout MUST show the store's delivery-area text and state that any delivery charge is agreed
+  with the shop. Delivery zones, drivers and fee rules remain in Feature 010.
 
 **Order lifecycle (Slice 2)**
 
@@ -418,9 +421,8 @@ and that a shop that never opens these settings sees no change at all.
 - **FR-041**: The public order submission MUST be protected against abuse by: per-phone and per-network limits (at most
   5 orders per phone per store per hour and at most 3 orders per phone per store in state New), the cart limits
   (FR-007), field length limits, a bot trap invisible to people, the store's expiry time, and a per-store blocked-phone
-  list managed by users with orders.manage. [NEEDS CLARIFICATION: is this enough, or must the customer prove they own
-  the phone number before the order reaches the shop (one-time code by SMS or WhatsApp, which needs a paid messaging
-  provider)?]
+  list managed by users with orders.manage. Customers MUST NOT be asked to verify their phone number (no one-time
+  code); the shop's review at acceptance is the final check.
 - **FR-042**: Order submission, customer cancellation and status reads MUST be the only storefront operations that read
   or write order data; they MUST be limited to the single order concerned and MUST NOT reveal other orders, stock
   quantities, costs or any data beyond 002's allow-list.
@@ -441,7 +443,7 @@ and that a shop that never opens these settings sees no change at all.
 **Scope boundary**
 
 - **FR-047**: This feature MUST NOT include online payment or a payment gateway, customer accounts or passwords,
-  delivery zones, drivers or proof of delivery (010), B2B or customer-specific pricing (004–006), stock reservation,
+  phone verification codes, delivery fees, delivery zones, drivers or proof of delivery (010), B2B or customer-specific pricing (004–006), stock reservation,
   marketplace discovery (011), or custom domains (012).
 
 ### Key Entities

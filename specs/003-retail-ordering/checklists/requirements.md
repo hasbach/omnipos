@@ -13,8 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 3 open: FR-001 (which slices), FR-023 (delivery fee), FR-041 (phone
-      verification)
+- [x] No [NEEDS CLARIFICATION] markers remain (FR-001, FR-023, FR-041 answered 2026-10-20)
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -34,4 +33,5 @@
 
 - Mentions of "browser storage", "cached per URL" and "the cloud" describe constraints inherited from 002 (privacy, cost)
   rather than a technology choice; kept because they are what the stakeholder must agree to.
-- Run `/speckit-clarify` (or answer the 3 questions) before `/speckit-plan`.
+- Clarified 2026-10-20: both slices (WhatsApp first), no delivery fee in 003, no phone verification. Ready for
+  `/speckit-plan`.
