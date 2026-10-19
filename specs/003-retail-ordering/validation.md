@@ -1,7 +1,7 @@
 # Validation — B2C Retail Ordering, Slice 1 (WhatsApp order)
 
 Results of [quickstart.md](quickstart.md) §1–2 for branch `003-retail-ordering` (tasks T001–T037). Recorded
-2026-10-21 on the dev PC. §3–4 (real phones, cloud, deployment) are still to do — see the end.
+2026-10-20 on the dev PC. §3–4 (real phones, cloud, deployment) are still to do — see the end.
 
 ## 1. Automated suite and gates
 
