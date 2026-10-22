@@ -165,6 +165,8 @@ See [research.md](research.md): R1–R10 settle every Slice 1 unknown; R11 recor
 
 ## Slice 2 outline (online orders — planned later)
 
+**Superseded by [plan-s2.md](plan-s2.md) (2026-10-22, research R12–R25).** Kept as the original outline.
+
 Follows research R11. Ordered work, each step independently testable:
 
 1. **Order model subset from 001 Slice B** — cloud tables `orders`, `order_lines`, `order_events`,
