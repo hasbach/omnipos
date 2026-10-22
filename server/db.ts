@@ -414,6 +414,7 @@ try { db.exec("ALTER TABLE stakeholders ADD COLUMN local_rate REAL;"); } catch {
 // Every column added to a live transactional table must also exist on its archived twin and be
 // copied by /api/tenant/settlement — settlement moves rows between them.
 for (const t of ['transactions', 'archived_transactions']) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN order_global_id TEXT;`); } catch {}
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN price_level TEXT;`); } catch {}
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN notes TEXT;`); } catch {}
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN reference TEXT;`); } catch {}
@@ -631,6 +632,75 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_store_listings_tenant ON store_listings(tenant_id);
   CREATE INDEX IF NOT EXISTS idx_store_listings_product ON store_listings(product_id);
+`);
+
+// No foreign-key constraints: cloud mirror rows may arrive in any order.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY,
+    tenant_id INTEGER,
+    store_id INTEGER,
+    number INTEGER,
+    state TEXT,
+    cancelled_by TEXT,
+    reason TEXT,
+    customer_name TEXT,
+    customer_phone TEXT,
+    fulfilment TEXT,
+    address TEXT,
+    note TEXT,
+    local_currency TEXT,
+    local_rate REAL,
+    total_usd REAL,
+    total_local REAL,
+    confirmed_total_usd REAL,
+    confirmed_total_local REAL,
+    sale_global_id TEXT,
+    sale_total_usd REAL,
+    submitted_at DATETIME,
+    expires_at DATETIME,
+    confirmed_at DATETIME,
+    ready_at DATETIME,
+    closed_at DATETIME
+  );
+  CREATE TABLE IF NOT EXISTS order_lines (
+    id INTEGER PRIMARY KEY,
+    tenant_id INTEGER,
+    order_id INTEGER,
+    line_no INTEGER,
+    listing_id TEXT,
+    product_id INTEGER,
+    product_name TEXT,
+    unit_key TEXT,
+    unit_name TEXT,
+    unit_factor REAL,
+    ordered_qty REAL,
+    confirmed_qty REAL,
+    shortfall_reason TEXT,
+    unit_price_usd REAL,
+    unit_price_local REAL,
+    line_total_usd REAL,
+    line_total_local REAL
+  );
+  CREATE TABLE IF NOT EXISTS order_events (
+    id INTEGER PRIMARY KEY,
+    tenant_id INTEGER,
+    order_id INTEGER,
+    at DATETIME,
+    kind TEXT,
+    from_state TEXT,
+    to_state TEXT,
+    actor_kind TEXT,
+    actor_name TEXT,
+    terminal TEXT,
+    reason TEXT,
+    detail TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_orders_tenant_state ON orders(tenant_id, state);
+  CREATE INDEX IF NOT EXISTS idx_orders_store ON orders(store_id);
+  CREATE INDEX IF NOT EXISTS idx_order_lines_order ON order_lines(order_id);
+  CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_global_id) WHERE order_global_id IS NOT NULL;
 `);
 
 // Sync Metadata Migration (for Supabase Offline-First Sync)

@@ -4,12 +4,18 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestApp, seedTenant } from "./helpers/testApp.js";
-import { ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, findRule, roleAllows } from "../server/permissions.js";
+let ALL_PERMISSIONS: typeof import("../server/permissions.js").ALL_PERMISSIONS;
+let DEFAULT_ROLE_PERMISSIONS: typeof import("../server/permissions.js").DEFAULT_ROLE_PERMISSIONS;
+let findRule: typeof import("../server/permissions.js").findRule;
+let roleAllows: typeof import("../server/permissions.js").roleAllows;
 
 let app: Awaited<ReturnType<typeof createTestApp>>;
 let n = 0;
 
-before(async () => { app = await createTestApp(); });
+before(async () => {
+  app = await createTestApp();
+  ({ ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, findRule, roleAllows } = await import("../server/permissions.js"));
+});
 after(async () => { await app.close(); });
 
 function setup() {
@@ -324,7 +330,7 @@ test("migration v2: roles that could close or correct get settlement.view once; 
   assert.ok(!(await who(s.staff)).includes("settlement.view"));
   assert.equal((await who(s.cashier)).filter((k) => k === "settlement.view").length, 1);
   const ver = app.db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'role_permissions_version'").get(s.tenantId) as any;
-  assert.equal(ver.value, "2");
+  assert.equal(ver.value, "3");
 
   // The admin later removes it on purpose: the version stamp keeps the migration from re-adding it.
   const saved = await app.api("POST", "/api/permissions", { tenantId: s.tenantId, body: { role_permissions: { manager: ["settlement.close"] } } });
@@ -520,4 +526,33 @@ test("client mirror (src/lib/permissions.ts) matches the server catalogue and de
   const client = await import("../src/lib/permissions.js");
   assert.deepEqual(client.PERMISSION_GROUPS, server.PERMISSION_GROUPS);
   assert.deepEqual(client.DEFAULT_ROLE_PERMISSIONS, server.DEFAULT_ROLE_PERMISSIONS);
+  assert.deepEqual(client.PAGE_PERMISSIONS.onlineOrders, ['orders.view']);
+});
+
+test('order permissions have the chosen defaults for every role', async () => {
+  const { permissionsForRole, ROLES } = await import('../server/permissions.js');
+  const { tenantId } = setup();
+  for (const role of ROLES) {
+    const expected = role === 'admin' || role === 'manager' ? ['orders.view', 'orders.manage'] : ['orders.view'];
+    assert.deepEqual(DEFAULT_ROLE_PERMISSIONS[role].filter((k) => k.startsWith('orders.')), expected);
+    assert.deepEqual(permissionsForRole(tenantId, role).filter((k) => k.startsWith('orders.')), expected);
+  }
+});
+
+test('stored role maps gain order defaults once without granting commerce permissions', async () => {
+  const { permissionsForRole, EDITABLE_ROLES } = await import('../server/permissions.js');
+  const { tenantId } = setup();
+  const stored = Object.fromEntries(EDITABLE_ROLES.map((role) => [role, ['daily_sales.view']]));
+  app.db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(stored));
+  app.db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions_version', '2')").run(tenantId);
+  for (const role of EDITABLE_ROLES) {
+    const expected = role === 'manager' ? ['orders.view', 'orders.manage'] : ['orders.view'];
+    const permissions = permissionsForRole(tenantId, role);
+    assert.deepEqual(permissions, ['daily_sales.view', ...expected]);
+    assert.ok(!permissions.some((key) => key.startsWith('store.')));
+  }
+  const row = app.db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'role_permissions'").get(tenantId) as any;
+  assert.ok(JSON.parse(row.value).manager.includes('orders.manage'));
+  app.db.prepare("UPDATE settings SET value = ? WHERE tenant_id = ? AND key = 'role_permissions'").run(JSON.stringify(stored), tenantId);
+  assert.deepEqual(permissionsForRole(tenantId, 'manager'), ['daily_sales.view']);
 });

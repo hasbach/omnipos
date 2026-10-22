@@ -38,16 +38,17 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm the baseline on branch `003-retail-ordering-s2`. Record both results in the commit message of T002:
+- [X] T001 Confirm the baseline on branch `003-retail-ordering-s2`. Record both results in the commit message of T002:
   - `npm test` is green (expected 497/497);
   - the `npx tsc --noEmit` error count.
-- [ ] T002 [P] Create `scripts/gateway-key.mjs` (plain Node, no dependencies).
+  - **Done note:** baseline = the 2026-10-22 run on the same code (`f4d9adb` + docs only): 497/497, `tsc` 0 errors.
+- [X] T002 [P] Create `scripts/gateway-key.mjs` (plain Node, no dependencies).
   - It prints a new key, `crypto.randomBytes(32).toString('base64url')`.
   - It prints the key's SHA-256 as lowercase hex.
   - It prints a one-line reminder: "paste the key into Render ORDER_GATEWAY_KEY; insert only the hash into
     storefront_gateway_keys".
   - It writes nothing to disk, reads no env vars, and has no network access.
-- [ ] T003 [P] Create `tests/helpers/fakeSupabase.ts`, a reusable fake Supabase client for the new tests. Existing tests
+- [X] T003 [P] Create `tests/helpers/fakeSupabase.ts`, a reusable fake Supabase client for the new tests. Existing tests
   keep their own fakes.
   - `from(table)` returns a chainable, thenable query builder: `select`, `eq`, `gte`, `gt`, `or`, `order`, `limit`,
     `in`, `is`, `not`, `upsert`, `update`, `delete`. It records every request and returns programmable rows per table.
@@ -59,7 +60,7 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
 
 ## Phase 2: Foundational — cloud model, shared helpers, permissions, local mirrors (blocks every story)
 
-- [ ] T004 Create `supabase/migrations/2026-10-23_retail_ordering_s2.sql` (part 1: tables).
+- [X] T004 Create `supabase/migrations/2026-10-23_retail_ordering_s2.sql` (part 1: tables).
   - **Structure:** inside `BEGIN; … COMMIT;`, and safe to run twice (`IF NOT EXISTS`, `DROP POLICY IF EXISTS` before
     `CREATE POLICY`). Header comment: it runs after `2026-10-21_retail_ordering_s1.sql`, and the gateway key hash is
     inserted separately by the owner.
@@ -89,7 +90,8 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
     - `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS order_global_id uuid`.
     - Replace `_store_public_settings` so its defaults also contain `"order_expiry_hours":24`. Keep every Slice 1
       default byte-identical.
-- [ ] T005 Migration part 2: internal helpers in `supabase/migrations/2026-10-23_retail_ordering_s2.sql`, all revoked
+  - **Done note:** hashes use the core `sha256()` function, so the migration needs no extension (pgcrypto not required). Table privileges are also revoked on top of RLS: anon has none; authenticated has SELECT only on the three synced tables and nothing on the private ones.
+- [X] T005 Migration part 2: internal helpers in `supabase/migrations/2026-10-23_retail_ordering_s2.sql`, all revoked
   from `PUBLIC`, `anon` and `authenticated`.
   - `_gateway_ok(text)`: sha256 hex matched against non-revoked `storefront_gateway_keys`.
   - `_order_phone(text)`: digits only, `00` prefix dropped, 7–8 digits → `961` + digits, `+<digits>` when 8–15 digits,
@@ -108,7 +110,8 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
   - Also `_order_event(...)`, `_order_owner(p_order uuid)` (`FOR UPDATE`, tenant = `auth.uid()`) and
     `_order_public(orders)` (public view fields exactly as in contracts/cloud-api-s2.md: first name only, no phone,
     note or hashes).
-- [ ] T006 Migration part 3: public functions `order_quote`, `order_submit`, `order_status`, `order_cancel`, with the
+  - **Done note:** extra internal helpers `_order_sha256`, `_order_measured`, `_order_lines_json`, `_order_owner_result`, `_order_owner_check`, `_order_lock` (shared preamble of the owner functions). An empty cart gives the order-level problem `empty`.
+- [X] T006 Migration part 3: public functions `order_quote`, `order_submit`, `order_status`, `order_cancel`, with the
   signatures and step order from contracts/cloud-api-s2.md.
   - **`order_submit` check order:** gateway → store gate + `ordering_mode='online'` + pickup or delivery on → expire →
     idempotency replay (hash match → `existing`, else `refused`) → trap → fields (`status_key` must match
@@ -120,7 +123,7 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
   - **Storage:** `status_key_hash` = sha256 hex of `p_status_key`; `expires_at = now() + order_expiry_hours`.
   - **Races:** a unique violation on the idempotency key becomes `existing`.
   - **Results:** every function returns `jsonb` with `ok` and `code`, and never raises for expected refusals.
-- [ ] T007 Migration part 4: owner functions per contracts/cloud-api-s2.md: `order_accept`, `order_reject`,
+- [X] T007 Migration part 4: owner functions per contracts/cloud-api-s2.md: `order_accept`, `order_reject`,
   `order_ready`, `order_cancel_by_shop`, `order_complete`, `order_complete_undo`, `orders_sweep`,
   `order_blocked_phones`, `order_block_phone` and `order_unblock_phone`.
   - **Every function:** calls `_orders_expire(auth.uid())`, locks the order, and checks `state = p_expected_state AND
@@ -132,13 +135,14 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
   - **`order_complete_undo`:** only when `sale_global_id` matches. It restores the pre-completion state (from the last
     event's `from_state`) and writes `completion_undone`.
   - **No money effects:** none of these functions writes to `transactions`, `products` or any money table (FR-038).
-- [ ] T008 Migration part 5: grants exactly as in the contract table.
+  - **Done note:** `order_accept` also returns `invalid` (with `line_no`) for a non-numeric or negative quantity; `order_complete` returns `invalid` without a sale id.
+- [X] T008 Migration part 5: grants exactly as in the contract table.
   - Every function: `REVOKE ALL … FROM PUBLIC`.
   - Public functions: `GRANT EXECUTE` to `anon, authenticated`.
   - Owner functions: `authenticated` only.
   - Helpers: revoked from all.
   - Tables: no anon grants. Confirm that the default privileges don't leak, as the 2026-10-18 file does.
-- [ ] T009 Write `tests/orders-sql.test.ts` on PGlite.
+- [X] T009 Write `tests/orders-sql.test.ts` on PGlite.
   - **Setup:** reuse the stub schema and role/`auth.uid()` emulation of `tests/commerce-sql.test.ts` (copy the helper
     or extract it to `tests/helpers/pgliteCommerce.ts`), add `transactions` to the stubs, and apply every migration
     through `2026-10-23` twice.
@@ -161,10 +165,12 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
     own rows; anon sees nothing.
   - **Grants:** `has_function_privilege` matrix.
   - **No money effects:** order functions never change `transactions` or `products`.
-- [ ] T010 [P] Write `supabase/checks/2026-10-23_retail_ordering_s2_checks.sql` per the contract's checks list. All
+  - **Done note:** 14 tests, all green (runs on PGlite only; no native module needed, so `npx tsx --test tests/orders-sql.test.ts` works on its own). The stub schema is inlined instead of extracted to a helper.
+- [X] T010 [P] Write `supabase/checks/2026-10-23_retail_ordering_s2_checks.sql` per the contract's checks list. All
   queries are read-only; the gateway keys are reported as a count only. Run it in `tests/orders-sql.test.ts` the way
   the Slice 1 checks file is run.
-- [ ] T011 [P] Create `server/cloudCall.ts`.
+  - **Done note:** every check returns `ok = true`; the gateway-key row is a count only.
+- [X] T011 [P] Create `server/cloudCall.ts`.
   - `withTimeout<T>(p, ms)` rejects with `CloudTimeoutError` after `ms`.
   - `callRpc(tenantId, fn, args, { timeoutMs = 10000 })` returns `CloudResult<T> = { ok: true, value } | { ok: false,
     reason: 'offline' | 'failed', error? }`, using `getActiveSession()`. These count as `offline`: no session, a
@@ -172,7 +178,7 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
   - Test seam `__setRpcCaller(fn | null)`.
   - Tests in `tests/cloud-call.test.ts` (with T003's fake): ok, RPC error → failed, throw → offline, hang → offline
     after the timeout (use a 50 ms timeout in the test), wrong tenant → offline.
-- [ ] T012 [P] Add the permissions.
+- [X] T012 [P] Add the permissions.
   - **Keys:** `server/permissions.ts` `PERMISSION_GROUPS` gets `{ area: 'orders', keys: ['orders.view',
     'orders.manage'] }`.
   - **Role defaults** (research R23): admin and manager get both; cashier, staff and accountant get `orders.view`.
@@ -183,7 +189,7 @@ hash, and set `ORDER_GATEWAY_KEY` on Render (quickstart-s2 §1). Agents never to
   - **Roles matrix:** shows the new area (`src/pages/settings/RolesSection.tsx`).
   - **Tests** in `tests/permissions.test.ts`: the defaults per role; stored maps gain the keys with the defaults; the
     client mirror deep-equals the server.
-- [ ] T013 Add the local mirrors in `server/db.ts`.
+- [X] T013 Add the local mirrors in `server/db.ts`.
   - **Tables:** create `orders`, `order_lines` and `order_events` before the sync-metadata loop, with the columns from
     data-model-s2's "Local SQLite mirrors" section: local `id INTEGER PK`, `tenant_id`, `store_id`, `order_id` and
     `product_id` as local ids, the global-id text fields `sale_global_id`, `unit_key` and `listing_id`, and no FK

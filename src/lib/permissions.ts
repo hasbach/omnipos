@@ -11,6 +11,7 @@ export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
   { area: 'admin', keys: ['users.manage', 'logs.view', 'import.run', 'settings.manage', 'data.reset'] },
   { area: 'pos', keys: ['pos.discount', 'pos.price_override', 'pos.refund', 'pos.open_dashboard'] },
   { area: 'commerce', keys: ['store.view', 'store.manage', 'store.publish'] },
+  { area: 'orders', keys: ['orders.view', 'orders.manage'] },
 ];
 
 // Online-store keys: admin only until granted (mirror of server/permissions.ts).
@@ -31,13 +32,13 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'live_monitor.view', 'purchases.view', 'parties.view',
     'cash_flow.view', 'cash_flow.add', 'cash_flow.edit',
     'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct',
-    'reports.view', 'logs.view', 'pos.open_dashboard',
+    'reports.view', 'logs.view', 'pos.open_dashboard', 'orders.view',
   ],
   staff: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'products.view', 'stock.view', 'parties.view',
-    'pos.discount', 'pos.refund', 'pos.open_dashboard',
+    'pos.discount', 'pos.refund', 'pos.open_dashboard', 'orders.view',
   ],
-  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard'],
+  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard', 'orders.view'],
 };
 
 /** i18n key of a permission's label: 'cash_flow.edit' -> 'perm_cash_flow_edit' (description: `${key}_desc`). */
@@ -61,6 +62,7 @@ export const PAGE_PERMISSIONS: Record<string, string[] | null> = {
   'cash-flow': ['cash_flow.view'],
   'settlement': ['settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct'],
   'logs': ['logs.view'],
+  onlineOrders: ['orders.view'],
   // Open to everyone: appearance / language are personal; Settings.tsx hides the other sections by permission.
   'settings': null,
   'ui-kit': ['settings.manage'],

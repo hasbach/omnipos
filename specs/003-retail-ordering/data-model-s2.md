@@ -131,8 +131,9 @@ completed ──complete_undo(same sale id)──▶ previous state (confirmed o
   - `order_events.tenant_id → tenants`, `order_events.order_id → orders`.
 - These stay as global-id text: `sale_global_id`, `unit_key`, `listing_id`.
 - No local foreign-key constraints, because rows may arrive in any order.
-- `network_hash`, `idempotency_key` and `status_key_hash` are cloud-only and never pulled: they are not selected, and
-  even if they were, `dropUnknownLocalColumns` would drop them.
+- `network_hash`, `idempotency_key` and `status_key_hash` are cloud-only. The pull selects `*`, so they arrive with
+  the row, but they have no local column and `dropUnknownLocalColumns` drops them, so they are never stored locally.
+  Owner RPC results already exclude them.
 
 The mirrors are written only by the pull and by applying rows returned from an owner RPC. They are members of
 `CLOUD_AUTHORITATIVE`, so the cloud row always overwrites the local one.
