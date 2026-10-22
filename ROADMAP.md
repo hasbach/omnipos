@@ -35,9 +35,9 @@ Other items: _(add fixes and ideas here)_
 - [x] Commerce before release: upgrade dry run (`scripts/commerce-dryrun.ts`, v1.9.0 code) on a copy of a real customer
       database (3 tenants, 44 products, 32 parties, 39 open + 106 settled invoices, 10 day closings, no commerce tables
       yet) on 2026-10-20: all 98 measured values unchanged (counts, stock, invoice totals, payments, 32 balances).
-- [ ] Startup log noise (since 1.7.7): the sync-metadata loop in `server/db.ts` tries `ADD COLUMN created_at ... DEFAULT
-      CURRENT_TIMESTAMP` on `_migrations` and `cloud_session` at every start and logs "Cannot add a column with
-      non-constant default" (caught, harmless). Skip local-only tables there.
+- [x] Startup log noise (since 1.7.7): the sync-metadata loop in `server/db.ts` tried `ADD COLUMN created_at ... DEFAULT
+      CURRENT_TIMESTAMP` on `_migrations` and `cloud_session` at every start and logged "Cannot add a column with
+      non-constant default". Fixed 2026-10-22 (branch `fix/1.9.1-small-fixes`): local-only tables are skipped.
 - [x] Cloud migrations (002) `2026-10-19_storefront.sql` + `2026-10-19b_storefront_storage.sql` applied 2026-10-19 and verified
       read-only (all 9 functions with the intended grants, Wholesale gate, allow-list clean, preview-token table closed,
       `store-images` bucket public / 2 MB / WebP, 3 owner-only storage policies, new reserved list).
@@ -58,8 +58,16 @@ Other items: _(add fixes and ideas here)_
 - [ ] 003 Slice 1 before release: send a 50-line Arabic cart on Android, iPhone and WhatsApp Web (validation.md §3).
 - [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or
       duplicate-name parties fall into the "Opening balance & earlier adjustments" line.
-- [ ] Checkout (PaymentModal) product search: add the arrow-key selection the cart search has.
-- [ ] Sync: product deletes are hard deletes locally, so they never reach the cloud.
+- [x] Checkout (PaymentModal) product search: closed 2026-10-22, nothing to fix. The only product search in
+      PaymentModal is an old "price checker" overlay that nothing opens (`isPriceChecker` is never set to true); the
+      real Price Checker window (`src/PriceChecker.tsx`) is barcode-only. Housekeeping: remove that dead overlay.
+- [x] Sync: product deletes never reached the cloud (local hard delete), so other registers kept the product and its
+      online listing stayed visible. Fixed 2026-10-22 (branch `fix/1.9.1-small-fixes`): the delete leaves a
+      `products` tombstone and the sync soft-deletes the cloud row (sales still reference it); other registers delete
+      it locally on pull and never re-insert it; the storefront already hides products with `deleted_at`. Listings
+      stay ("product deleted" in the back office). No cloud migration. Known gap: a register that edits the product
+      offline and pushes before pulling the deletion clears the cloud `deleted_at` again. Products deleted before
+      the fix stay live in the cloud.
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —

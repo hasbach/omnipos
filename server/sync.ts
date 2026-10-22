@@ -468,6 +468,20 @@ export function addTombstones(tenantId: number, rows: TombstoneRow[]) {
   const ins = db.prepare('INSERT OR IGNORE INTO sync_tombstones (table_name, global_id, tenant_id, parent_global_id) VALUES (?, ?, ?, ?)');
   for (const r of rows) if (r.globalId) ins.run(r.table, r.globalId, tenantId, r.parentGlobalId || null);
 }
+// Products are hard-deleted locally; the tombstone makes purgeTombstonedFromCloud soft-delete the
+// cloud copy (sales still reference it), kept atomic with the local delete. Listings are left as
+// they are: the back office shows them as "product deleted", and the storefront's cloud functions
+// already skip products whose deleted_at is set.
+export function deleteProductLocally(tenantId: number, productId: number) {
+  db.transaction(() => {
+    const product = db.prepare('SELECT global_id FROM products WHERE id = ? AND tenant_id = ?').get(productId, tenantId) as any;
+    if (!product) return;
+    db.prepare('UPDATE product_units SET deleted_at = CURRENT_TIMESTAMP WHERE product_id = ? AND tenant_id = ? AND deleted_at IS NULL').run(productId, tenantId);
+    db.prepare('DELETE FROM product_barcodes WHERE product_id = ?').run(productId);
+    db.prepare('DELETE FROM products WHERE id = ? AND tenant_id = ?').run(productId, tenantId);
+    addTombstones(tenantId, [{ table: 'products', globalId: product.global_id }]);
+  })();
+}
 export function isTombstoned(table: string, globalId: string): boolean {
   if (!globalId) return false;
   ensureTombstoneTable();
@@ -510,6 +524,23 @@ export async function purgeTombstonedFromCloud(client: SupabaseClient, tenantId:
         console.warn(`⏳ [SYNC] Could not delete tombstoned ${table} rows from the cloud yet (will retry):`, err?.message || JSON.stringify(err));
         return;
       }
+    }
+  }
+  // Products remain as cloud FK targets for sales and other children.
+  const ids = (db.prepare("SELECT global_id FROM sync_tombstones WHERE tenant_id = ? AND table_name = 'products' AND cloud_purged_at IS NULL").all(tenantId) as any[]).map(r => r.global_id);
+  for (let i = 0; i < ids.length; i += TOMBSTONE_CHUNK) {
+    if (syncPaused) return;
+    const chunk = ids.slice(i, i + TOMBSTONE_CHUNK);
+    try {
+      const now = new Date().toISOString();
+      requestCounts.push++;
+      const { error } = await client.from('products').update({ deleted_at: now, updated_at: now }).in('global_id', chunk);
+      if (error) throw error;
+      markTombstonesPurged(chunk.map(g => ({ table: 'products', globalId: g })));
+    } catch (err: any) {
+      lastSyncErrorAt = Date.now();
+      console.warn('[SYNC] Could not soft-delete tombstoned products from the cloud yet (will retry):', err?.message || JSON.stringify(err));
+      return;
     }
   }
 }
@@ -574,6 +605,17 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
     let droppedOrphans = 0;
     const data = rawData.filter(record => {
       if (isTombstoned(tableName, record.global_id)) return false;
+      if (tableName === 'products' && record.deleted_at) {
+        const product = db.prepare('SELECT id FROM products WHERE global_id = ? AND tenant_id = ?').get(record.global_id, localId) as any;
+        if (product) {
+          // A cloud deletion wins even when this register has an unpushed edit.
+          db.transaction(() => {
+            deleteProductLocally(localId, product.id);
+            markTombstonesPurged([{ table: 'products', globalId: record.global_id }]);
+          })();
+        }
+        return false;
+      }
       if (!isChild) return true;
       if (isTombstoned('transactions', record.transaction_id)) return false;
       if (getLocalId('transactions', record.transaction_id)) return true;
