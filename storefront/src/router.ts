@@ -22,6 +22,10 @@ export type Route =
   | { kind: 'home'; address: string; form: 'host' | 'path'; params: PageParams }
   | { kind: 'product'; address: string; form: 'host' | 'path'; listingId: string; params: PageParams }
   | { kind: 'cart'; address: string; form: 'host' | 'path'; params: PageParams }
+  | { kind: 'orderQuote'; address: string; form: 'host' | 'path'; params: PageParams }
+  | { kind: 'orderStatus'; key: string; address: string; form: 'host' | 'path'; params: PageParams }
+  | { kind: 'orderSubmit'; address: string; form: 'host' | 'path'; params: PageParams }
+  | { kind: 'orderCancel'; key: string; address: string; form: 'host' | 'path'; params: PageParams }
   | { kind: 'img'; path: string }
   | { kind: 'apexRoot' }
   | { kind: 'reservedRedirect' }
@@ -53,6 +57,12 @@ export function parseParams(q: URLSearchParams): PageParams {
 function storeRoute(address: string, rest: string[], form: 'host' | 'path', params: PageParams): Route {
   if (!ADDRESS.test(address) || address.length > 40) return { kind: 'notFound', params };
   const parts = rest.filter(Boolean);
+  if (parts.join('/') === 'order/quote') return { kind: 'orderQuote', address, form, params };
+  if (parts.join('/') === 'order') return { kind: 'orderSubmit', address, form, params };
+  if (parts[0] === 'o' && /^[A-Za-z0-9_-]{32}$/.test(parts[1] || '')) {
+    if (parts.length === 2) return { kind: 'orderStatus', key: parts[1], address, form, params };
+    if (parts.length === 3 && parts[2] === 'cancel') return { kind: 'orderCancel', key: parts[1], address, form, params };
+  }
   if (parts.length === 0) return { kind: 'home', address, form, params };
   if (parts.length === 1 && parts[0] === 'cart') return { kind: 'cart', address, form, params };
   if (parts[0] === 'p' && parts[1] && UUID.test(parts[1]) && parts.length <= 3) {

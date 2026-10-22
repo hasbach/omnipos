@@ -121,7 +121,7 @@
     var counter = form.querySelector('[data-counter="note"]');
     if (note && counter) counter.textContent = String(note.value || '').length + '/' + LIMITS.note;
     var reasons = blockers().filter(function (r) { return r !== 'empty'; });
-    if (!reasons.length && C.totals().count && tooLong(buildMessage(v))) reasons.push(ui('order_too_long'));
+    if (cfg.mode !== 'online' && !reasons.length && C.totals().count && tooLong(buildMessage(v))) reasons.push(ui('order_too_long'));
     if (block) { block.textContent = reasons.join(' '); block.hidden = !reasons.length; }
     if (submit) submit.disabled = reasons.length > 0 || C.totals().count === 0;
     return reasons;
@@ -175,12 +175,12 @@
     return url;
   }
 
-  form.addEventListener('submit', function (ev) { ev.preventDefault(); send(); });
+  form.addEventListener('submit', function (ev) { ev.preventDefault(); if (cfg.mode !== 'online') send(); });
   form.addEventListener('input', update);
   form.addEventListener('change', update);
   C.onChange = update;
 
-  window.OmniCheckout = { values: values, validate: validate, blockers: blockers, buildMessage: buildMessage, waUrl: waUrl, tooLong: tooLong, send: send, update: update, MAX_ENCODED: MAX_ENCODED };
+  window.OmniCheckout = { values: values, validate: validate, blockers: blockers, buildMessage: buildMessage, waUrl: waUrl, tooLong: tooLong, send: send, update: update, saveBuyer: saveBuyer, showErrors: showErrors, MAX_ENCODED: MAX_ENCODED };
 
   prefill();
   update();

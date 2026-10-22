@@ -228,3 +228,22 @@ img { max-inline-size: 100%; display: block; }
 .sf-dialog p { margin-block: 0 12px; font-weight: 600; }
 .sf-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .sf-dialog-actions .sf-button { flex: 1 1 10rem; }
+
+/* Online orders wrap long customer and catalog text on narrow phones. */
+.sf-trap { position: absolute; inset-inline-start: -10000px; inline-size: 1px; block-size: 1px; overflow: hidden; }
+.sf-review-lines { list-style: none; padding-inline-start: 0; margin-block: 16px; }
+.sf-review-lines li { padding-block: 12px; border-block-end: 1px solid var(--sf-border); overflow-wrap: anywhere; }
+.sf-review-lines p { margin-block: 6px; }
+.sf-review-lines del { color: var(--sf-muted); margin-inline-end: 8px; }
+.sf-new-price { color: var(--sf-accent); }
+.sf-line-unavailable { color: var(--sf-muted); background: var(--sf-bg); }
+.sf-confirm { padding: 16px; border: 1px solid var(--sf-accent); border-radius: var(--sf-radius); }
+.sf-confirm[hidden] { display: none; }
+.sf-confirm a, .sf-confirm button { display: inline-block; margin-block: 8px; margin-inline-end: 12px; }
+.sf-confirm input { display: block; inline-size: 100%; min-inline-size: 0; box-sizing: border-box; }
+.sf-myorder { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-block: 8px; border-block-end: 1px solid var(--sf-border); }
+.sf-myorder span { flex: 1 1 12rem; }
+.sf-myorder button { min-block-size: 44px; padding-inline: 12px; }
+.sf-order-status, .sf-confirm, #sf-quote, #sf-myorders { min-inline-size: 0; overflow-wrap: anywhere; }
+.sf-order-status form { display: grid; gap: 12px; }
+.sf-state { display: inline-block; max-inline-size: 100%; padding: 6px 12px; border-radius: 12px; background: var(--sf-surface); border: 1px solid var(--sf-border); }

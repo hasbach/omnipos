@@ -33,3 +33,5 @@ services:
       # Where the bare domain redirects (the OmniPOS website).
       - key: OMNIPOS_WEBSITE_URL
         sync: false
+      - key: ORDER_GATEWAY_KEY
+        sync: false

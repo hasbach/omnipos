@@ -215,7 +215,7 @@ when the cloud is down.
 response (same order), status page headers, cancel, unavailable → WhatsApp fallback. Off and WhatsApp stores render
 unchanged.
 
-- [ ] T014 [P] [US3] Write `tests/storefront-orders.test.ts`, calling `handle()` with the fixture gateway.
+- [X] T014 [P] [US3] Write `tests/storefront-orders.test.ts`, calling `handle()` with the fixture gateway.
   - **Methods and bodies:** POST only on `order/quote`, `order` and `o/<key>/cancel`; any other method → 405 with
     `Allow`; a body over 16 KB → 413; a JSON route without `application/json` → 415; malformed JSON → 400
     `bad_request`.
@@ -230,7 +230,7 @@ unchanged.
   - **Network id:** `network.ts` picks `CF-Connecting-IP` > `True-Client-IP` > last `X-Forwarded-For` hop > socket,
     the hash changes with the date and the key, and the raw IP never appears in the output.
   - **Unchanged stores:** off and WhatsApp stores render byte-identical pages, apart from the asset version.
-- [ ] T015 [P] [US3] Write `tests/storefront-order-js.test.ts`, extending the `vm` harness of
+- [X] T015 [P] [US3] Write `tests/storefront-order-js.test.ts`, extending the `vm` harness of
   `tests/storefront-cart.test.ts` with a programmable `fetch` stub, `crypto.getRandomValues` / `randomUUID` and
   `AbortController`.
   - **Review:** posts available lines with the shown prices, renders changed / unavailable / below-minimum markings,
@@ -244,22 +244,22 @@ unchanged.
     a network error or a 15 s abort → the cart is kept and the WhatsApp fallback is offered only when `wa` is set
     (reusing `OmniCheckout`'s message).
   - **Privacy:** no cookies; no request other than the two order endpoints.
-- [ ] T016 [P] [US3] Read `ORDER_GATEWAY_KEY` (optional) in `storefront/src/config.ts`, and declare it in
+- [X] T016 [P] [US3] Read `ORDER_GATEWAY_KEY` (optional) in `storefront/src/config.ts`, and declare it in
   `render.yaml` with `sync: false` (no value). Log one warning at startup when it is missing; that is not an error.
-- [ ] T017 [P] [US3] Create `storefront/src/network.ts`. `visitorNetwork(headers, socketAddress, key, now)` takes the
+- [X] T017 [P] [US3] Create `storefront/src/network.ts`. `visitorNetwork(headers, socketAddress, key, now)` takes the
   address from `CF-Connecting-IP`, then `True-Client-IP`, then the last `X-Forwarded-For` entry, then the socket, and
   returns `{ hash: sha256hex(utcDate + '|' + address + '|' + key), source }`. Log the `source` once per process ("network
   source: …") for quickstart-s2 §1.5. The address itself is never logged.
-- [ ] T018 [US3] Extend `storefront/src/node-server.ts`.
+- [X] T018 [US3] Extend `storefront/src/node-server.ts`.
   - `handle()` receives `method`, the body (POST only, read with a 16 KB cap → 413 `no-store`) and `network` from T017.
   - Methods other than GET, HEAD and POST → 405.
   - Add `order.js` to `ASSETS`.
   - Add cases to `tests/storefront-node-server.test.ts`: a real POST through the HTTP server, the size cap, and that a
     client-sent `X-Forwarded-Host` is still ignored.
-- [ ] T019 [US3] Add route kinds `orderQuote`, `orderSubmit`, `orderStatus` (`o/<key>`) and `orderCancel`
+- [X] T019 [US3] Add route kinds `orderQuote`, `orderSubmit`, `orderStatus` (`o/<key>`) and `orderCancel`
   (`o/<key>/cancel`) under both store-root forms in `storefront/src/router.ts`. The key regex is
   `^[A-Za-z0-9_-]{32}$`; `lang` is kept.
-- [ ] T020 [US3] Add the gateway in `storefront/src/data.ts` and `storefront/src/fixture.ts`.
+- [X] T020 [US3] Add the gateway in `storefront/src/data.ts` and `storefront/src/fixture.ts`.
   - **Interface:** `OrderGateway` with `quote`, `submit`, `status` and `cancel`.
   - **`SupabaseOrderGateway`:** calls the four RPCs with `p_gateway = ORDER_GATEWAY_KEY` and maps network or non-2xx
     errors to `UpstreamError`.
@@ -268,26 +268,28 @@ unchanged.
     quickstart-s2 §3.
   - **Fixture store:** `demoFixture(n, { ordering: 'online' })` gives an online-mode store.
   - **Dev server:** `storefront/dev-server.ts` accepts `--ordering=online` (and keeps `--ordering` meaning WhatsApp).
-- [ ] T021 [US3] Implement the order route handlers in `storefront/src/http.ts` exactly as in
+- [X] T021 [US3] Implement the order route handlers in `storefront/src/http.ts` exactly as in
   contracts/storefront-routes-s2.md.
   - JSON in and out, content-type and body checks, the headers listed in T014, and `status_url` =
     `<root>/o/<status_key>` on `created` and `existing`.
   - The status page renders through T024. Cancel posts to the gateway and redirects with 303.
   - A gateway `UpstreamError` → 503 JSON with `Retry-After: 30`.
-- [ ] T022 [US3] Update `storefront/src/ordering.ts`.
+  - **Done note:** `render/status.ts` already existed for neutral pages; preserved that helper and added the minimal `renderStatusPage` placeholder there. T024 content assertions remain TODO tests.
+  - **Done note:** review fixes: order handling moved into `handleOrderRoute()`; status and customer cancel no longer require the store gate (they keep working after a store is paused or stops taking orders, spec edge case); a status key opened under another store address is a 404; cloud outage on the status/cancel pages shows the HTML "temporarily unavailable" page; the cancel redirect keeps `?lang=`; the visitor network is hashed only for POSTs.
+- [X] T022 [US3] Update `storefront/src/ordering.ts`.
   - `orderingEnabled()` also returns true for `ordering_mode === 'online'` with pickup or delivery on and the gateway
     key configured. Add `onlineOrdering(store)`.
   - `orderPayload` adds `mode`, `api: { quote, submit }`, and `ui` order strings from a new `ORDER_UI_KEYS`
     allow-list.
   - The WhatsApp rule for Slice 1 is unchanged.
-- [ ] T023 [US3] Add the online-mode cart page to `storefront/src/render/cart.ts`.
+- [X] T023 [US3] Add the online-mode cart page to `storefront/src/render/cart.ts`.
   - Phone `required` with `inputmode="tel"` and maxlength 30.
   - The trap field `website` sits in an off-screen container with `tabindex="-1"` and `autocomplete="off"`.
   - The "Review order" / "Place order" button and the payment note.
   - Containers `#sf-quote`, `#sf-confirm` and `#sf-myorders`.
   - Load `<script src="/order.js?v=…" defer>` after `checkout.js`, only when `onlineOrdering(store)`.
   - WhatsApp-mode output stays byte-identical.
-- [ ] T024 [US3] Create `storefront/src/render/status.ts`, the status page per contracts/storefront-routes-s2.md.
+- [X] T024 [US3] Create `storefront/src/render/status.ts`, the status page per contracts/storefront-routes-s2.md.
   - It shows the store header and logo, the number and state badge, a sentence per state (with the shop's reason for
     rejected or shop-cancelled), the lines with ordered and confirmed quantities and shortfall reasons, and the totals
     (confirmed totals once accepted).
@@ -296,14 +298,16 @@ unchanged.
   - `<meta http-equiv="refresh" content="60">` while open; a cancel form only in `submitted`; it works without
     JavaScript; `order.js` is included only to update My orders.
   - The HTML must stay ≤ 30 KB.
-- [ ] T025 [US3] Create `storefront/public/order.js` (plain ES2017, IIFE, `window.OmniOrder`) implementing the
+  - **Done note:** review fixes: amounts wrapped in `<bdi>` (Arabic showed "10.50$" and scrambled price lines); local amounts formatted with thousands separators and the shop's symbol ("LL") via new `formatLocalAmount`.
+- [X] T025 [US3] Create `storefront/public/order.js` (plain ES2017, IIFE, `window.OmniOrder`) implementing the
   "`order.js` behaviour" section of contracts/storefront-routes-s2.md.
   - Review, place, the attempt and status keys in `sf-attempt:v1:<address>`, and My orders in
     `sf-orders:v1:<address>` (≤ 20).
   - The FR-022 fallback through `OmniCheckout`.
   - `fetch` with a 15 s `AbortController` timeout, and `try/catch` around every storage call.
   - It must stay ≤ 12 KB (LF).
-- [ ] T026 [US3] Add order strings to `storefront/src/i18n.ts` in en/ar/fr, with identical keys and placeholders.
+  - **Done note:** review fixes: "quote changed" note only when the quote has problems; local amounts formatted with `C.fmtLocal`; "Copy link" and "Back to the store" built from the current page (they mixed the subdomain with the `/s/<address>` path); empty "My orders" heading hidden. Size 12,194 of 12,288 bytes (LF) — little headroom left.
+- [X] T026 [US3] Add order strings to `storefront/src/i18n.ts` in en/ar/fr, with identical keys and placeholders.
   - UI keys: `review_order`, `place_order`, `phone_required`, `quote_changed`, `price_was`, `line_unavailable`,
     `order_placed`, `order_number`, `status_link`, `copy_link`, `my_orders`, `forget_order`, `too_many_orders`,
     `order_failed`, `cloud_unreachable`, `send_whatsapp_instead`, `pay_on_handover_note`.
@@ -312,7 +316,7 @@ unchanged.
   - Status-page keys: `cancel_order`, `cancel_confirm`, `cannot_cancel_contact`, `ordered_qty`, `confirmed_qty`,
     `shortfall_out_of_stock`, `shortfall_damaged`, `shortfall_customer_request`, `shortfall_other`.
   - Wire the client subset through `ORDER_UI_KEYS`.
-- [ ] T027 [US3] Styles and budgets.
+- [X] T027 [US3] Styles and budgets.
   - **Styles:** review list, changed-price marking, confirmation, My orders and the status page in
     `storefront/public/storefront.css`. Logical properties only, RTL-safe, no horizontal scroll at 360 px, CSS
     ≤ 24 KB.

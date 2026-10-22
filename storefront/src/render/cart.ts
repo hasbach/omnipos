@@ -11,7 +11,7 @@ const error = (name: string) => `<p class="sf-error" data-for="${name}" hidden><
 
 /** Checkout form (US2): name, phone, pickup / delivery, address, note, remember. Read only by checkout.js,
  *  which turns it into a WhatsApp message; nothing is submitted to OmniPOS. */
-function checkoutForm(ctx: PageContext): string {
+function checkoutForm(ctx: PageContext, online: boolean): string {
   const { lang, store } = ctx;
   const methods = [
     ...(store.pickup_enabled ? [{ value: 'pickup', label: t(lang, 'pickup'), note: store.pickup_note }] : []),
@@ -24,8 +24,8 @@ function checkoutForm(ctx: PageContext): string {
 <h2>${html(t(lang, 'checkout'))}</h2>
 <label class="sf-field"><span>${html(t(lang, 'your_name'))}</span><input name="name" maxlength="80" autocomplete="name" required></label>
 ${error('name')}
-<label class="sf-field"><span>${html(t(lang, 'your_phone'))} <small>(${html(t(lang, 'optional'))})</small></span><input name="phone" type="tel" maxlength="30" autocomplete="tel" inputmode="tel"></label>
-${error('phone')}
+<label class="sf-field"><span>${html(t(lang, online ? 'phone_required' : 'your_phone'))}${online ? '' : ` <small>(${html(t(lang, 'optional'))})</small>`}</span><input name="phone" type="tel" maxlength="30" autocomplete="tel" inputmode="tel"${online ? ' required' : ''}></label>
+${error('phone')}${online ? '<div class="sf-trap" aria-hidden="true"><input name="website" tabindex="-1" autocomplete="off"></div>' : ''}
 <fieldset class="sf-choices"><legend>${html(t(lang, 'fulfilment'))}</legend>
 ${choices}
 </fieldset>
@@ -33,10 +33,10 @@ ${error('fulfilment')}
 <label class="sf-field" id="sf-address-field"${only === 'delivery' ? '' : ' hidden'}><span>${html(t(lang, 'delivery_address'))}</span><textarea name="address" maxlength="300" rows="2" autocomplete="street-address"></textarea></label>
 ${error('address')}
 <label class="sf-field"><span>${html(t(lang, 'note'))} <small>(${html(t(lang, 'optional'))})</small></span><textarea name="note" maxlength="300" rows="2"></textarea><small class="sf-counter" data-counter="note">0/300</small></label>
-<label class="sf-check"><input type="checkbox" name="remember"> <span>${html(t(lang, 'remember_details'))}</span></label>
+${online ? error('note') : ''}<label class="sf-check"><input type="checkbox" name="remember"> <span>${html(t(lang, 'remember_details'))}</span></label>
 ${store.min_order_usd ? `<p class="sf-note">${html(t(lang, 'minimum_order', { price: formatUsd(store.min_order_usd) }))}</p>` : ''}
 <p id="sf-checkout-block" class="sf-cart-warn" role="alert" hidden></p>
-<button class="sf-button sf-wa sf-submit" type="submit">${html(t(lang, 'order_on_whatsapp'))}</button>
+<button class="sf-button sf-wa sf-submit" type="submit">${html(t(lang, online ? 'review_order' : 'order_on_whatsapp'))}</button>
 <p id="sf-wa-fallback" class="sf-note" hidden><a target="_blank" rel="noopener">${html(t(lang, 'open_whatsapp'))}</a></p>
 </form>`;
 }
@@ -51,7 +51,7 @@ function sentDialog(ctx: PageContext): string {
 </div>`;
 }
 
-export function renderCart(ctx: PageContext): { meta: PageMeta; body: string } {
+export function renderCart(ctx: PageContext, online = false): { meta: PageMeta; body: string } {
   const { lang, store } = ctx;
   const notes = [
     t(lang, 'prices_confirmed_note'),
@@ -69,9 +69,10 @@ export function renderCart(ctx: PageContext): { meta: PageMeta; body: string } {
 <div id="sf-cart-issues" class="sf-cart-issues" role="alert"></div>
 <p id="sf-cart-total" class="sf-cart-total"></p>
 <ul class="sf-cart-notes">${notes.map((n) => `<li>${html(n)}</li>`).join('')}</ul>
-${checkoutForm(ctx)}
+${online ? '<div id="sf-quote" aria-live="polite"></div>\n' : ''}${checkoutForm(ctx, online)}
 </div>
-${sentDialog(ctx)}
+${sentDialog(ctx)}${online ? `<div id="sf-confirm" class="sf-confirm" aria-live="polite" hidden></div><section id="sf-myorders"></section>
+${contactButtons(lang, store, { whatsapp: t(lang, 'wa_store', { store: store.name, url: ctx.canonicalHome }), subject: store.name })}` : ''}
 <noscript><p class="sf-empty">${html(t(lang, 'needs_javascript'))}</p>
 ${contactButtons(lang, store, { whatsapp: t(lang, 'wa_store', { store: store.name, url: ctx.canonicalHome }), subject: store.name })}</noscript>
 </section>`;
