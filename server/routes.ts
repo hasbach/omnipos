@@ -6,7 +6,7 @@ import { renderStatementHtml } from "./statementHtml.js";
 import { recomputeStakeholderBalance, adjustStakeholderBaseline, stakeholderTxEffect, transactionBalanceEffect, writeBalanceLog } from "./balance.js";
 import bcrypt from "bcryptjs";
 import { anonSupabase } from "./supabase.js";
-import { forceInitialSync, forcePushToCloud, getSyncTimes, countPendingPush, getRequestCounts, notifyLocalChange, addTombstones, markTombstonesPurged } from "./sync.js";
+import { forceInitialSync, forcePushToCloud, getSyncTimes, countPendingPush, getRequestCounts, notifyLocalChange, deleteProductLocally, addTombstones, markTombstonesPurged } from "./sync.js";
 import {
   setActiveSession,
   getActiveSession,
@@ -1045,10 +1045,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
   app.delete("/api/products/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    // Units are soft-deleted (so the deletion syncs); barcodes and the product row are removed as before.
-    db.prepare("UPDATE product_units SET deleted_at = CURRENT_TIMESTAMP WHERE product_id IN (SELECT id FROM products WHERE id = ? AND tenant_id = ?) AND deleted_at IS NULL").run(req.params.id, tenantId);
-    db.prepare("DELETE FROM product_barcodes WHERE product_id IN (SELECT id FROM products WHERE id = ? AND tenant_id = ?)").run(req.params.id, tenantId);
-    db.prepare("DELETE FROM products WHERE id = ? AND tenant_id = ?").run(req.params.id, tenantId);
+    deleteProductLocally(tenantId, Number(req.params.id));
     logAction(tenantId, 1, 'Product Deleted', `ID: ${req.params.id}`);
     res.json({ success: true });
     broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);

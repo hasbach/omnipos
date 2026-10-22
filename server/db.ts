@@ -634,9 +634,13 @@ db.exec(`
 `);
 
 // Sync Metadata Migration (for Supabase Offline-First Sync)
+// Local-only tables are never synced, so they get no sync columns or triggers (adding created_at
+// to them failed with "non-constant default" at every start). sync_tombstones' global_id is the
+// TOMBSTONED row's id, not its own.
+const localOnlyTables = new Set(['sync_tombstones', '_migrations', 'cloud_session', 'sync_cursor']);
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
 for (const table of allTables) {
-  if (table.name === 'sync_tombstones') continue; // local-only sync bookkeeping (server/sync.ts); its global_id is the TOMBSTONED row's id
+  if (localOnlyTables.has(table.name)) continue;
   const tableCols = db.prepare(`PRAGMA table_info(${table.name})`).all() as { name: string }[];
   const colNames = tableCols.map(c => c.name);
   
