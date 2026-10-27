@@ -201,6 +201,28 @@ __setSlugClaimer(async (_tenantId, storeGlobalId, slug) => {
     db.prepare("UPDATE orders SET state = ?, sale_global_id = NULL, closed_at = NULL, updated_at = ? WHERE id = ?").run(back, stamp, o.id);
     return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
   });
+  // Blocked phones live only in the cloud: keep them in memory here, normalised the simple way.
+  const blocked: { store: string; phone: string; note: string | null; created_at: string }[] = [];
+  const normalisePhone = (p: any) => {
+    const digits = String(p ?? '').replace(/[^\d+]/g, '');
+    return /^\+?\d{6,15}$/.test(digits) ? (digits.startsWith('+') ? digits : '+961' + digits.replace(/^0/, '')) : null;
+  };
+  fake.onRpc('order_blocked_phones', (args: any) => ({ ok: true, code: 'ok',
+    rows: blocked.filter(b => b.store === args.p_store).map(({ store: _s, ...b }) => b) }));
+  fake.onRpc('order_block_phone', (args: any) => {
+    const phone = normalisePhone(args.p_phone);
+    if (!phone) return { ok: false, code: 'invalid', field: 'phone' };
+    const row = blocked.find(b => b.store === args.p_store && b.phone === phone);
+    if (row) row.note = args.p_note || null;
+    else blocked.unshift({ store: args.p_store, phone, note: args.p_note || null, created_at: new Date().toISOString() });
+    return { ok: true, code: 'ok', phone };
+  });
+  fake.onRpc('order_unblock_phone', (args: any) => {
+    const phone = normalisePhone(args.p_phone) ?? args.p_phone;
+    const i = blocked.findIndex(b => b.store === args.p_store && b.phone === phone);
+    if (i >= 0) blocked.splice(i, 1);
+    return { ok: true, code: 'ok' };
+  });
   session.__setClientFactory(() => fake as any);
   await session.setActiveSession(tenantId, tenantGid, "preview@omnipos.test", { access_token: "preview", refresh_token: "preview" });
 }

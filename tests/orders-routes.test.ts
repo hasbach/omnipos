@@ -37,6 +37,103 @@ beforeEach(async () => {
   await session.setActiveSession(tenant, one('SELECT global_id FROM tenants WHERE id = ?', tenant).global_id, 'orders@example.com', { access_token: 'test', refresh_token: 'test' });
   cloud.__setRpcCaller(null);
 });
+
+test('blocked phones list, add and remove use the store global id and cloud normalization', async () => {
+  const rows = [{ phone: '+96171123456', note: 'W-1042', created_at: '2026-10-20T12:00:00Z' }];
+  const calls: { name: string; args: Record<string, unknown> }[] = [];
+  cloud.__setRpcCaller(async (name, args) => {
+    calls.push({ name, args });
+    return { data: { ok: true, code: 'ok', rows, phone: '+96171123456' }, error: null };
+  });
+  const url = `/api/commerce/stores/${store}/blocked-phones`;
+  const listed = await request('GET', url);
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body, { rows });
+  const added = await request('POST', url, { phone: '71 123 456', note: 'W-1042' });
+  assert.equal(added.status, 200);
+  assert.deepEqual(added.body, { phone: '+96171123456' });
+  const removed = await request('DELETE', url + '/%2B96171123456');
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.body, { ok: true });
+  const globalId = one('SELECT global_id FROM stores WHERE id = ?', store).global_id;
+  assert.deepEqual(calls, [
+    { name: 'order_blocked_phones', args: { p_store: globalId } },
+    { name: 'order_block_phone', args: { p_store: globalId, p_phone: '71 123 456', p_note: 'W-1042' } },
+    { name: 'order_unblock_phone', args: { p_store: globalId, p_phone: '+96171123456' } },
+  ]);
+});
+
+test('blocked phones validate inputs before cloud calls', async () => {
+  let calls = 0;
+  cloud.__setRpcCaller(async () => {
+    calls++;
+    return { data: { ok: true }, error: null };
+  });
+  const url = `/api/commerce/stores/${store}/blocked-phones`;
+  for (const phone of ['', '   ', 'x'.repeat(41), null, 123]) {
+    const r = await request('POST', url, { phone });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.code, 'ORDER_PHONE_INVALID');
+    assert.equal(r.body.field, 'phone');
+  }
+  for (const note of ['x'.repeat(121), null, 12]) {
+    const r = await request('POST', url, { phone: '+96171123456', note });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.code, 'ORDER_PHONE_INVALID');
+    assert.equal(r.body.field, 'note');
+  }
+  assert.equal((await request('DELETE', url + '/' + 'x'.repeat(41))).status, 400);
+  assert.equal(calls, 0);
+});
+
+test('blocked phones enforce permissions, tenant scope and online session for every method', async () => {
+  let calls = 0;
+  cloud.__setRpcCaller(async () => {
+    calls++;
+    return { data: { ok: true }, error: null };
+  });
+  const foreign = Number(app.db.prepare("INSERT INTO stores (tenant_id, name) VALUES (?, 'Foreign')").run(other).lastInsertRowid);
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    const suffix = '/blocked-phones' + (method === 'DELETE' ? '/%2B96171123456' : '');
+    const body = method === 'POST' ? { phone: '+96171123456' } : undefined;
+    assert.equal((await request(method, `/api/commerce/stores/${store}${suffix}`, body, cashier)).status, 403);
+    const foreignResult = await request(method, `/api/commerce/stores/${foreign}${suffix}`, body);
+    assert.equal(foreignResult.status, 404);
+    assert.equal(foreignResult.body.code, 'STORE_NOT_FOUND');
+  }
+  assert.equal(calls, 0);
+  session.clearActiveSession();
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    const url = `/api/commerce/stores/${store}/blocked-phones` + (method === 'DELETE' ? '/%2B96171123456' : '');
+    const r = await request(method, url, method === 'POST' ? { phone: '+96171123456' } : undefined);
+    assert.equal(r.status, 503);
+    assert.equal(r.body.code, 'ORDER_NEEDS_ONLINE');
+  }
+  assert.equal(calls, 0);
+});
+
+test('blocked phones map cloud refusals and transport failures', async () => {
+  const url = `/api/commerce/stores/${store}/blocked-phones`;
+  for (const [code, status, mapped] of [
+    ['invalid', 400, 'ORDER_PHONE_INVALID'],
+    ['not_owner', 404, 'STORE_NOT_FOUND'],
+    ['unexpected', 502, 'ORDER_CLOUD_FAILED'],
+  ] as const) {
+    cloud.__setRpcCaller(async () => ({ data: { ok: false, code }, error: null }));
+    const r = await request('POST', url, { phone: '+96171123456' });
+    assert.equal(r.status, status);
+    assert.equal(r.body.code, mapped);
+    if (code === 'invalid') assert.equal(r.body.field, 'phone');
+  }
+  cloud.__setRpcCaller(async () => ({ data: null, error: new Error('Cloud failed') }));
+  const failed = await request('GET', url);
+  assert.equal(failed.status, 502);
+  assert.equal(failed.body.code, 'ORDER_CLOUD_FAILED');
+  cloud.__setRpcCaller(async () => { throw new Error('Disconnected'); });
+  const offline = await request('GET', url);
+  assert.equal(offline.status, 503);
+  assert.equal(offline.body.code, 'ORDER_NEEDS_ONLINE');
+});
 test('list sorting, effective-state filters, search, dates and summary', async () => {
   const late = order('submitted', { submitted_at: '2026-10-03T12:00:00Z' });
   const early = order('submitted'); const ready = order('ready', { submitted_at: '2026-10-05T12:00:00Z' });

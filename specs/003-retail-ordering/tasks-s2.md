@@ -530,21 +530,22 @@ one sale. Settlement and refunds are unchanged.
 **Independent test**: set the expiry to 1 hour and check that an unanswered order expires; block a phone and check
 that its next order is refused; invalid hours are refused with the field error.
 
-- [ ] T048 [P] [US6] Extend the tests.
+- [X] T048 [P] [US6] Extend the tests.
   - `tests/commerce-store.test.ts`: `order_expiry_hours` is an integer 1–72 (0, 73, 1.5 and text →
     `STORE_ORDER_EXPIRY_INVALID`), the default is 24, and stores created before the slice return 24.
   - `tests/orders-routes.test.ts`: the blocked-phone routes (list, add with normalisation, `ORDER_PHONE_INVALID`,
     remove, `orders.manage` required, offline → `ORDER_NEEDS_ONLINE`).
-- [ ] T049 [US6] Implement the settings and routes in `server/commerce.ts`.
+- [X] T049 [US6] Implement the settings and routes in `server/commerce.ts`.
   - `order_expiry_hours` joins the settings allow-list and `STORE_SETTING_DEFAULTS` (24), with its validation.
   - Blocked-phone routes `GET` / `POST /api/commerce/stores/:id/blocked-phones` and `DELETE …/:phone` go through
     `cloudCall` to `order_blocked_phones`, `order_block_phone` and `order_unblock_phone`, with `ROUTE_RULES`
     (`orders.manage`).
-- [ ] T050 [US6] Add the UI.
+- [X] T050 [US6] Add the UI.
   - In `src/pages/settings/OnlineStoreSection.tsx` (Ordering card): "Orders expire after (hours)" when the mode is
     online, and a "Blocked phones" list with add and remove, online only, hidden without `orders.manage`.
   - In `OrderDetailDrawer`, a "Block this phone" action with a confirmation dialog.
   - Strings in en/ar/fr.
+  - **Done note:** blocked phones are per store, online only, and need `orders.manage` (hidden otherwise); the cloud normalises the phone. Review fixes: the expiry field sits under the minimum order (not above the mode selector that switches online on), and "Block this phone" sits with the WhatsApp/Call buttons instead of the accept/reject row; the drawer guards a missing store. Preview: the fake cloud keeps blocked phones in memory; checked add (`70 555 123` → `+96170555123`), remove with confirmation, block from order W-1001 (note `W-1001`), Arabic RTL.
 
 ---
 

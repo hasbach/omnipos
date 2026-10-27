@@ -90,7 +90,19 @@ export interface ConfirmLine {
   reason?: ShortfallReason;
 }
 
+export interface BlockedPhone {
+  phone: string;
+  note: string | null;
+  created_at: string;
+}
+
 export const ordersApi = {
+  blockedPhones: (storeId: number) =>
+    api.get<{ rows: BlockedPhone[] }>(`/api/commerce/stores/${storeId}/blocked-phones`),
+  blockPhone: (storeId: number, phone: string, note?: string) =>
+    api.post<{ phone: string }>(`/api/commerce/stores/${storeId}/blocked-phones`, { phone, note }),
+  unblockPhone: (storeId: number, phone: string) =>
+    api.del<{ ok: true }>(`/api/commerce/stores/${storeId}/blocked-phones/${encodeURIComponent(phone)}`),
   list: (query?: { state?: string; store?: string; from?: string; to?: string; q?: string }) =>
     api.get<{ rows: OrderRow[]; online: boolean; last_pull_at: string | null }>('/api/orders', query),
   summary: () => api.get<{ submitted: number; open: number }>('/api/orders/summary'),

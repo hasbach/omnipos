@@ -4,23 +4,31 @@
 import React, { useEffect, useState } from 'react';
 import { Copy, Eye, ExternalLink, Globe, ImagePlus, ShoppingCart, Store as StoreIcon, Trash2 } from 'lucide-react';
 import {
-  Badge, Button, Card, CardBody, CardHeader, EmptyState, Field, Input, MoneyInput, Select, Switch, Textarea, useConfirm, useToast,
+  Badge, Button, Card, CardBody, CardHeader, EmptyState, Field, Input, MoneyInput, NumberInput,
+  Select, Switch, Textarea, useConfirm, useToast,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { commerceApi, photoUrl, type CommerceStatus, type Store, type StoreInput, type StoreSettings } from '../../lib/commerceApi';
 import { ImageError, PHOTO_ACCEPT, resizeToWebp } from '../../lib/imageResize';
 import { translateServerError } from '../../lib/serverErrors';
 import { usePermissions } from '../../lib/usePermissions';
+import { ordersApi, type BlockedPhone } from '../../lib/ordersApi';
+import { formatDateTime } from '../../lib/format';
 
 const STATUS_VARIANT = { draft: 'neutral', active: 'success', paused: 'warning' } as const;
 
 type Details = Required<Pick<StoreInput, 'name' | 'mode' | 'description' | 'contact_phone' | 'contact_whatsapp' | 'contact_email' | 'address' | 'primary_color' | 'default_language'>>;
 
-type Ordering = Pick<StoreSettings, 'ordering_mode' | 'pickup_note' | 'delivery_note'> & { pickup_enabled: boolean; delivery_enabled: boolean; min_order_usd: number | '' };
+type Ordering = Pick<StoreSettings, 'ordering_mode' | 'pickup_note' | 'delivery_note' | 'order_expiry_hours'> & {
+  pickup_enabled: boolean;
+  delivery_enabled: boolean;
+  min_order_usd: number | '';
+};
 
 function orderingOf(s: Store): Ordering {
   const st = s.settings;
   return {
+    order_expiry_hours: st.order_expiry_hours ?? 24,
     ordering_mode: st.ordering_mode || 'off', pickup_enabled: st.pickup_enabled !== 0, pickup_note: st.pickup_note || '',
     delivery_enabled: st.delivery_enabled === 1, delivery_note: st.delivery_note || '', min_order_usd: st.min_order_usd ?? '',
   };
@@ -34,11 +42,12 @@ function detailsOf(s: Store): Details {
 }
 
 export function OnlineStoreSection() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
   const { can } = usePermissions();
   const canManage = can('store.manage');
+  const canManageOrders = can('orders.manage');
 
   const [status, setStatus] = useState<CommerceStatus | null>(null);
   const [store, setStore] = useState<Store | null>(null);
@@ -51,6 +60,59 @@ export function OnlineStoreSection() {
   const [details, setDetails] = useState<Details | null>(null);
   const [ordering, setOrdering] = useState<Ordering | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [blocked, setBlocked] = useState<BlockedPhone[]>([]);
+  const [phone, setPhone] = useState('');
+  const [phoneNote, setPhoneNote] = useState('');
+  const [phonesOffline, setPhonesOffline] = useState(false);
+  const [phonesBusy, setPhonesBusy] = useState(false);
+  const [phonesLoading, setPhonesLoading] = useState(true);
+  const storeId = store?.id;
+  const onlineOrdering = ordering?.ordering_mode === 'online';
+
+  useEffect(() => {
+    let active = true;
+    setBlocked([]);
+    setPhone('');
+    setPhoneNote('');
+    setPhonesOffline(false);
+    if (!storeId || !canManageOrders || !onlineOrdering) return;
+    setPhonesLoading(true);
+    ordersApi.blockedPhones(storeId).then((result) => {
+      if (active) setBlocked(result.rows);
+    }).catch((e) => {
+      if (!active) return;
+      if (e.code === 'ORDER_NEEDS_ONLINE') setPhonesOffline(true);
+      else toast.error(translateServerError(e, t));
+    }).finally(() => {
+      if (active) setPhonesLoading(false);
+    });
+    return () => { active = false; };
+  }, [storeId, canManageOrders, onlineOrdering, t, toast]);
+
+  const changePhone = async (remove?: string) => {
+    if (!storeId || phonesBusy || phonesOffline || !canManageOrders) return;
+    if (remove && !await confirm({
+      title: t('orders_unblock_phone'),
+      description: t('orders_unblock_confirm').replace('{phone}', remove),
+      confirmLabel: t('orders_unblock_phone'),
+      variant: 'danger',
+    })) return;
+    setPhonesBusy(true);
+    try {
+      if (remove) await ordersApi.unblockPhone(storeId, remove);
+      else await ordersApi.blockPhone(storeId, phone, phoneNote);
+      setBlocked((await ordersApi.blockedPhones(storeId)).rows);
+      if (!remove) {
+        setPhone('');
+        setPhoneNote('');
+      }
+    } catch (e: any) {
+      if (e.code === 'ORDER_NEEDS_ONLINE') setPhonesOffline(true);
+      else toast.error(translateServerError(e, t));
+    } finally {
+      setPhonesBusy(false);
+    }
+  };
 
   const load = async () => {
     try {
@@ -139,6 +201,7 @@ export function OnlineStoreSection() {
       if (!store || !ordering) return;
       applyStore(await commerceApi.updateStore(store.id, {
         settings: {
+          order_expiry_hours: ordering.order_expiry_hours,
           ordering_mode: ordering.ordering_mode, pickup_enabled: ordering.pickup_enabled ? 1 : 0, pickup_note: ordering.pickup_note,
           delivery_enabled: ordering.delivery_enabled ? 1 : 0, delivery_note: ordering.delivery_note,
           min_order_usd: ordering.min_order_usd === '' || ordering.min_order_usd === 0 ? null : ordering.min_order_usd,
@@ -457,10 +520,83 @@ export function OnlineStoreSection() {
                   <Field label={t('commerce_ordering_min_order')} helper={t('commerce_ordering_min_helper')} error={err('settings.min_order_usd')} className="sm:max-w-xs">
                     <MoneyInput value={ordering.min_order_usd} currencySymbol="$" min={0} disabled={!editable} invalid={!!err('settings.min_order_usd')} onChange={(v) => setOrder({ min_order_usd: v })} />
                   </Field>
+                  {onlineOrdering && (
+                    <Field
+                      label={t('orders_expiry_hours')}
+                      error={err('settings.order_expiry_hours')}
+                      className="sm:max-w-xs"
+                    >
+                      <NumberInput
+                        min={1}
+                        max={72}
+                        step={1}
+                        value={ordering.order_expiry_hours}
+                        disabled={!editable}
+                        onChange={(value) => setOrder({ order_expiry_hours: value })}
+                      />
+                    </Field>
+                  )}
                   <div className="flex justify-end">
                     <Button type="submit" disabled={!editable}>{t('commerce_save')}</Button>
                   </div>
                 </form>
+                {onlineOrdering && canManageOrders && store.id && (
+                  <div className="mt-4 space-y-3 border-t border-border pt-4">
+                    <h4 className="text-sm font-semibold">{t('orders_blocked_phones')}</h4>
+                    {phonesOffline ? (
+                      <p role="status" className="text-sm text-accent">{t('orders_needs_internet')}</p>
+                    ) : phonesLoading ? (
+                      <p className="text-sm text-text-3">{t('commerce_loading')}</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {blocked.map((row) => (
+                          <li key={row.phone} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                            <div>
+                              <span dir="ltr" className="num">{row.phone}</span>
+                              {row.note && <p>{row.note}</p>}
+                              <p className="text-xs text-text-3">{formatDateTime(row.created_at, lang)}</p>
+                            </div>
+                            <Button
+                              variant="secondary"
+                              disabled={phonesBusy}
+                              onClick={() => void changePhone(row.phone)}
+                            >
+                              {t('orders_unblock_phone')}
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <form
+                      className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void changePhone();
+                      }}
+                    >
+                      <Field label={t('orders_phone')}>
+                        <Input
+                          dir="ltr"
+                          maxLength={40}
+                          value={phone}
+                          disabled={phonesOffline || phonesBusy || phonesLoading}
+                          onChange={(e) => setPhone(e.target.value)}
+                        />
+                      </Field>
+                      <Field label={t('orders_optional_note')}>
+                        <Input
+                          maxLength={120}
+                          value={phoneNote}
+                          disabled={phonesOffline || phonesBusy || phonesLoading}
+                          onChange={(e) => setPhoneNote(e.target.value)}
+                        />
+                      </Field>
+                      <Button type="submit" disabled={phonesOffline || phonesBusy || phonesLoading || !phone.trim()}>
+                        {t('orders_add_phone')}
+                      </Button>
+                    </form>
+                  </div>
+                )}
               </CardBody>
             </Card>
           )}

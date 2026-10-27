@@ -20,6 +20,7 @@ export interface StoreSettings {
   delivery_enabled: 0 | 1;
   delivery_note: string;
   min_order_usd: number | null;
+  order_expiry_hours: number;
 }
 
 export interface Store {

@@ -294,6 +294,9 @@ export const ROUTE_RULES: RouteRule[] = [
   // --- online store (specs/001-commerce-domain-foundation/contracts/backoffice-api.md) ---
   { method: 'GET', pattern: '/api/commerce/status', need: 'store.view' },
   { method: 'PUT', pattern: '/api/commerce/status', need: 'store.manage' },
+  { method: 'GET', pattern: '/api/commerce/stores/:id/blocked-phones', need: 'orders.manage' },
+  { method: 'POST', pattern: '/api/commerce/stores/:id/blocked-phones', need: 'orders.manage' },
+  { method: 'DELETE', pattern: '/api/commerce/stores/:id/blocked-phones/:phone', need: 'orders.manage' },
   { method: 'GET', pattern: '/api/commerce/stores', need: 'store.view' },
   { method: 'POST', pattern: '/api/commerce/stores', need: 'store.manage' },
   { method: 'POST', pattern: '/api/commerce/stores/:id/slug', need: 'store.manage' },

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Drawer, Modal, Badge, Button, Field, NumberInput, Select, Textarea, DataTable, SkeletonTable,
-  useToast, type DataTableColumn,
+  useConfirm, useToast, type DataTableColumn,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { ordersApi, shortfallReasons, orderBadge, type OrderDetail, type OrderLine, type ConfirmLine } from '../../lib/ordersApi';
@@ -9,6 +9,7 @@ import { formatDateTime, formatMoney } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import type { ApiError } from '../../lib/api';
 import ordersLocale from '../../intl/locales/orders';
+import { usePermissions } from '../../lib/usePermissions';
 
 type Action = 'accept' | 'reject' | 'cancel' | 'ready';
 
@@ -20,6 +21,8 @@ export default function OrderDetailDrawer({ orderId, open, onClose, onChanged }:
 }) {
   const { t, lang } = useI18n();
   const toast = useToast();
+  const confirm = useConfirm();
+  const { can } = usePermissions();
   const [data, setData] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState<Action | null>(null);
@@ -64,6 +67,28 @@ export default function OrderDetailDrawer({ orderId, open, onClose, onChanged }:
     setReason('');
     setLines(data.lines.map((l) => ({ line_no: l.line_no, confirmed_qty: l.ordered_qty })));
     setAction(a);
+  };
+
+  const blockPhone = async () => {
+    if (!data?.online || !data.store || busy || !can('orders.manage')) return;
+    const current = data;
+    const ok = await confirm({
+      title: t('orders_block_phone'),
+      description: t('orders_block_confirm').replace('{phone}', current.order.customer_phone),
+      confirmLabel: t('orders_block_phone'),
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const number = String(current.order.number).replace(/^W-/, '');
+      await ordersApi.blockPhone(current.store!.id, current.order.customer_phone, 'W-' + number);
+      toast.success(t('orders_phone_blocked'));
+    } catch (e) {
+      toast.error(translateServerError(e, t));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submit = async (a: Action) => {
@@ -236,12 +261,20 @@ export default function OrderDetailDrawer({ orderId, open, onClose, onChanged }:
                 </Button>
               ))}
             </div>
-            {data.customer_wa_digits && (
-              <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={() => contact(false)}>{t('orders_whatsapp')}</Button>
-                <Button variant="secondary" onClick={() => contact(true)}>{t('orders_call')}</Button>
-              </div>
-            )}
+            {/* Customer actions: contact, and blocking the phone (kept away from the order decisions above). */}
+            <div className="flex flex-wrap gap-2">
+              {data.customer_wa_digits && (
+                <>
+                  <Button variant="secondary" onClick={() => contact(false)}>{t('orders_whatsapp')}</Button>
+                  <Button variant="secondary" onClick={() => contact(true)}>{t('orders_call')}</Button>
+                </>
+              )}
+              {can('orders.manage') && data.online && data.store && (
+                <Button variant="secondary" disabled={busy || loading} onClick={() => void blockPhone()}>
+                  {t('orders_block_phone')}
+                </Button>
+              )}
+            </div>
             <h3 className="text-sm font-semibold">{t('orders_history')}</h3>
             <ol className="space-y-2 text-sm">
               {data.events.map((e, i) => (
