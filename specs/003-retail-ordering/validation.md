@@ -90,6 +90,13 @@ Branch `003-retail-ordering-s2` (not merged). Steps refer to [quickstart-s2](qui
 | Storefront suites | `storefront-orders`, `storefront-order-js` and the existing `storefront-*` (101 tests, key parity en/ar/fr) |
 | Back-office locale `orders.ts` | 92 keys in each of en/ar/fr; none missing, empty, or left in Latin script in Arabic |
 
+**Upgrade dry run (2026-10-27, `main` b2e2199):** `scripts/commerce-dryrun.ts` on a temp copy of the same real customer
+database used for 1.9.0 (3 tenants, 32 parties). The copied cloud sign-in (1 row) was deleted from the work copy first
+and network calls were disabled, so nothing reached the cloud. Result: all 98 measured values unchanged (counts, stock,
+invoice totals, payments, 32 balances); no commerce rows created; `orders` / `order_lines` / `order_events` created
+empty; `order_global_id` on live and archived sales, unset. The original file's SHA-256 was the same before and after;
+the work copy was deleted.
+
 ## §3. Storefront against the fixture (no cloud)
 
 | Step | Result |
