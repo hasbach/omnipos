@@ -13,6 +13,7 @@
 //    no rule pass. Reads the POS itself needs stay open to every signed-in user.
 //
 // The catalogue / defaults are mirrored on the client in src/lib/permissions.ts — keep them in sync.
+import { orderPricedItems } from './orderSale.js';
 import { db, logAction } from './db.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 
@@ -25,6 +26,7 @@ export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
   { area: 'admin', keys: ['users.manage', 'logs.view', 'import.run', 'settings.manage', 'data.reset'] },
   { area: 'pos', keys: ['pos.discount', 'pos.price_override', 'pos.refund', 'pos.open_dashboard'] },
   { area: 'commerce', keys: ['store.view', 'store.manage', 'store.publish'] },
+  { area: 'orders', keys: ['orders.view', 'orders.manage'] },
 ];
 
 // Online-store keys (specs/001-commerce-domain-foundation): admin only until granted, so upgrading never
@@ -46,22 +48,22 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'live_monitor.view', 'purchases.view', 'parties.view',
     'cash_flow.view', 'cash_flow.add', 'cash_flow.edit',
     'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct',
-    'reports.view', 'logs.view', 'pos.open_dashboard',
+    'reports.view', 'logs.view', 'pos.open_dashboard', 'orders.view',
   ],
   staff: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'products.view', 'stock.view', 'parties.view',
-    'pos.discount', 'pos.refund', 'pos.open_dashboard',
+    'pos.discount', 'pos.refund', 'pos.open_dashboard', 'orders.view',
   ],
-  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard'],
+  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard', 'orders.view'],
 };
 
 // ---- storage -------------------------------------------------------------------------------------
 
-const ROLE_PERMISSIONS_VERSION = 2;
+const ROLE_PERMISSIONS_VERSION = 3;
 
 /**
- * v2 introduced settlement.view (history & closed-day detail). Roles that could already close or
- * correct a day keep seeing history: grant it to them once, then stamp the version. Idempotent and
+ * v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
+ * correct a day. Grant each once, then stamp the version. Idempotent and
  * lazy — runs the first time a tenant's stored map is read. Tenants without a stored map use the
  * defaults (which already include the new key) and are stamped without a rewrite.
  */
@@ -72,9 +74,15 @@ function migrateStoredMap(tenantId: number | string, map: Record<string, string[
   if (map) {
     out = { ...map };
     for (const [role, list] of Object.entries(map)) {
-      if (Array.isArray(list) && (list.includes('settlement.close') || list.includes('settlement.correct')) && !list.includes('settlement.view')) {
+      if (Number(ver?.value || 0) < 2 && Array.isArray(list) && (list.includes('settlement.close') || list.includes('settlement.correct')) && !list.includes('settlement.view')) {
         out[role] = [...list, 'settlement.view'];
       }
+    }
+    // Grant order defaults once so later role edits can remove them.
+    for (const [role, list] of Object.entries(out)) {
+      if (!Array.isArray(list)) continue;
+      const defaults = (DEFAULT_ROLE_PERMISSIONS[role] || []).filter((key) => key.startsWith('orders.'));
+      out[role] = Array.from(new Set([...list, ...defaults]));
     }
     db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(out));
   }
@@ -141,6 +149,9 @@ function txType(req: any): string | null {
 
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
+  { method: 'GET', pattern: '/api/orders', need: 'orders.view' },
+  { method: 'GET', pattern: '/api/orders/*', need: 'orders.view' },
+  { method: 'POST', pattern: '/api/orders/:id/*', need: 'orders.manage' },
   // --- roles matrix itself ---
   { method: 'GET', pattern: '/api/permissions', need: 'settings.manage' },
   { method: 'POST', pattern: '/api/permissions', need: 'settings.manage' },
@@ -162,11 +173,14 @@ export const ROUTE_RULES: RouteRule[] = [
         (Array.isArray(body.items) && body.items.some((it: any) => Number(it?.discount?.value) > 0));
       if (type === 'sale') {
         // The back-office invoice editor (source 'backoffice') is invoice editing, whatever the lines hold.
-        if (body.source === 'backoffice') return 'invoices.edit';
+        if (body.source === 'backoffice') return typeof body.order_global_id === 'string' ? { allOf: ['invoices.edit', 'orders.view'] } : 'invoices.edit';
         // The POS only puts a finite `unit_price` on a cart line when the cashier overrode it.
+        const orderPrices = typeof body.order_global_id === 'string'
+          ? orderPricedItems(req.session.tenantId, body.order_global_id, body.items) : new Map();
         const overridesPrice = Array.isArray(body.items) &&
-          body.items.some((it: any) => it && it.unit_price != null && Number.isFinite(Number(it.unit_price)));
+          body.items.some((it: any, index: number) => !orderPrices.has(index) && it && it.unit_price != null && Number.isFinite(Number(it.unit_price)));
         const needs: Need[] = [];
+        if (typeof body.order_global_id === 'string') needs.push('orders.view');
         if (overridesPrice) needs.push('pos.price_override');
         if (hasDiscount) needs.push(['pos.discount', 'invoices.edit']);
         if (needs.length === 1) return needs[0];
@@ -280,6 +294,9 @@ export const ROUTE_RULES: RouteRule[] = [
   // --- online store (specs/001-commerce-domain-foundation/contracts/backoffice-api.md) ---
   { method: 'GET', pattern: '/api/commerce/status', need: 'store.view' },
   { method: 'PUT', pattern: '/api/commerce/status', need: 'store.manage' },
+  { method: 'GET', pattern: '/api/commerce/stores/:id/blocked-phones', need: 'orders.manage' },
+  { method: 'POST', pattern: '/api/commerce/stores/:id/blocked-phones', need: 'orders.manage' },
+  { method: 'DELETE', pattern: '/api/commerce/stores/:id/blocked-phones/:phone', need: 'orders.manage' },
   { method: 'GET', pattern: '/api/commerce/stores', need: 'store.view' },
   { method: 'POST', pattern: '/api/commerce/stores', need: 'store.manage' },
   { method: 'POST', pattern: '/api/commerce/stores/:id/slug', need: 'store.manage' },

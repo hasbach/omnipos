@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { useI18n } from '../../intl/index';
 import { usePermissions } from '../../lib/usePermissions';
+import { Badge } from '../ui';
+import { useOrderBadge } from '../../hooks/useOrderNotifications';
 import { pagePermissions } from '../../lib/permissions';
 
 export interface NavItem {
@@ -39,6 +41,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     key: 'shell_group_sales',
     items: [
+      { key: 'orders_title', icon: ShoppingCart, path: '/dashboard/online-orders' },
       { key: 'shell_nav_invoices', icon: FileText, path: '/dashboard/invoices' },
       { key: 'shell_nav_daily_sales', icon: BarChart3, path: '/dashboard/daily-sales' },
       { key: 'shell_nav_live_monitor', icon: Activity, path: '/dashboard/live' },
@@ -100,6 +103,7 @@ export function Sidebar() {
   const visibleGroups = NAV_GROUPS
     .map((group) => ({ ...group, items: group.items.filter((item) => canAny(pagePermissions(item.path))) }))
     .filter((group) => group.items.length > 0);
+  const orderCount = useOrderBadge();
   const [collapsed, setCollapsed] = useState<boolean>(() => readCollapsed());
 
   useEffect(() => {
@@ -149,6 +153,9 @@ export function Sidebar() {
                   >
                     <item.icon size={18} aria-hidden="true" />
                     {!collapsed && <span className="truncate">{t(item.key)}</span>}
+                    {item.key === 'orders_title' && orderCount > 0 && (
+                      <Badge variant="warning">{orderCount}</Badge>
+                    )}
                   </Link>
                 );
               })}

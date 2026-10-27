@@ -2,6 +2,7 @@
 export { RESERVED_SLUGS as RESERVED_SUBDOMAINS } from './reserved.js';
 
 export interface StorefrontConfig {
+  orderGatewayKey?: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
   /** e.g. "myomnipos.com" — stores live at <address>.<domain> and <domain>/s/<address>. */
@@ -17,6 +18,7 @@ const DEFAULT_SUPABASE_ANON_KEY =
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): StorefrontConfig {
   return {
+    orderGatewayKey: env.ORDER_GATEWAY_KEY || undefined,
     supabaseUrl: (env.SUPABASE_URL || DEFAULT_SUPABASE_URL).replace(/\/+$/, ''),
     supabaseAnonKey: env.SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY,
     storefrontDomain: (env.STOREFRONT_DOMAIN || 'myomnipos.com').toLowerCase(),

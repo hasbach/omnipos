@@ -81,6 +81,8 @@ export interface Discount {
 }
 
 export interface CartItem extends Product {
+  /** USD price per selected unit, including an online order quote. */
+  unit_price?: number;
   /** `${productId}:${uomId ?? 'base'}` - identifies the cart line. */
   line_key: string;
   /** Selected unit of measure (null/undefined = base piece). */

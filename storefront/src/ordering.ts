@@ -7,8 +7,8 @@ import { LANGS, type Lang } from './router.js';
 import { t } from './i18n.js';
 
 /** Ordering is offered: WhatsApp mode, a usable WhatsApp number and at least one way to receive the goods. */
-export function orderingEnabled(store: PublicStore): boolean {
-  return store.ordering_mode === 'whatsapp' && !!whatsappDigits(store.contact_whatsapp) && (store.pickup_enabled || store.delivery_enabled);
+export function orderingEnabled(store: PublicStore, key: string | undefined = process.env.ORDER_GATEWAY_KEY): boolean {
+  return onlineOrdering(store, key) || store.ordering_mode === 'whatsapp' && !!whatsappDigits(store.contact_whatsapp) && (store.pickup_enabled || store.delivery_enabled);
 }
 
 export interface OrderUnit { key: string; name: string; factor: number; price: number; price_lbp: number | null }
@@ -42,6 +42,15 @@ export const UI_KEYS = [
   // checkout (cart page)
   'amount_to_minimum', 'minimum_blocks', 'order_too_long', 'field_required', 'invalid_phone',
 ] as const;
+/** Online checkout and device-history strings (page language). */
+export const ORDER_UI_KEYS = [
+  'review_order', 'place_order', 'phone_required', 'quote_changed', 'price_was', 'line_unavailable',
+  'order_placed', 'order_number', 'status_link', 'copy_link', 'my_orders', 'forget_order', 'too_many_orders',
+  'order_failed', 'cloud_unreachable', 'send_whatsapp_instead', 'pay_on_handover_note', 'back_to_store',
+  'listing_unavailable', 'unit_not_orderable', 'out_of_stock',
+  'badge_submitted', 'badge_confirmed', 'badge_ready', 'badge_completed', 'badge_rejected', 'badge_cancelled', 'badge_expired',
+] as const;
+
 /** Strings of the WhatsApp message (store language — the shop reads it). */
 export const MSG_KEYS = [
   'msg_new_order', 'msg_total', 'msg_pickup', 'msg_delivery', 'msg_name', 'msg_phone', 'msg_note', 'msg_prices_confirmed',
@@ -54,7 +63,10 @@ export interface OrderPayload {
   product: string;
   placeholder: string;
   storeName: string;
-  wa: string;
+  wa?: string;
+  mode?: 'online';
+  lang?: Lang;
+  api?: { quote: string; submit: string };
   local: { show: boolean; code: string | null; symbol: string | null; rate: number | null };
   pickup: { on: boolean; note: string };
   delivery: { on: boolean; note: string };
@@ -71,12 +83,16 @@ export interface PayloadInput {
   /** Link builder of the page (keeps ?lang= and an active preview token). */
   link: (path: string) => string;
   assetVersion: string;
+  gatewayKey?: string;
 }
 
 export function orderPayload(i: PayloadInput): OrderPayload {
   const { store, lang } = i;
   const storeLang: Lang = LANGS.includes(store.default_language as Lang) ? (store.default_language as Lang) : 'en';
+  const online = onlineOrdering(store, i.gatewayKey);
   return {
+    // lang: order.js keeps it on the status links it builds ("My orders").
+    ...(online ? { mode: 'online' as const, lang, api: { quote: i.link('/order/quote'), submit: i.link('/order') } } : {}),
     address: i.address,
     home: i.canonicalHome,
     cart: i.link('/cart'),
@@ -84,7 +100,7 @@ export function orderPayload(i: PayloadInput): OrderPayload {
     product: i.link('/p/__ID__'),
     placeholder: `/placeholder.svg?v=${i.assetVersion}`,
     storeName: store.name,
-    wa: whatsappDigits(store.contact_whatsapp) || '',
+    ...(online && !whatsappDigits(store.contact_whatsapp) ? {} : { wa: whatsappDigits(store.contact_whatsapp) || '' }),
     local: {
       show: store.show_local_price && !!store.local_currency_code,
       code: store.local_currency_code, symbol: store.local_currency_symbol, rate: store.local_rate,
@@ -92,7 +108,7 @@ export function orderPayload(i: PayloadInput): OrderPayload {
     pickup: { on: store.pickup_enabled, note: store.pickup_note },
     delivery: { on: store.delivery_enabled, note: store.delivery_note },
     minOrderUsd: store.min_order_usd,
-    ui: Object.fromEntries(UI_KEYS.map((k) => [k, t(lang, k)])),
+    ui: Object.fromEntries([...UI_KEYS, ...(online ? ORDER_UI_KEYS : [])].map((k) => [k, t(lang, k)])),
     msg: Object.fromEntries(MSG_KEYS.map((k) => [k, t(storeLang, k)])),
   };
 }
@@ -100,4 +116,8 @@ export function orderPayload(i: PayloadInput): OrderPayload {
 /** The payload as an inline JSON block; `<` escaped so store text can never close the script element. */
 export function orderJsonScript(p: OrderPayload): string {
   return `<script type="application/json" id="sf-order">${JSON.stringify(p).replace(/</g, '\\u003c')}</script>`;
+}
+
+export function onlineOrdering(store: PublicStore, key: string | undefined = process.env.ORDER_GATEWAY_KEY): boolean {
+  return store.ordering_mode === 'online' && (store.pickup_enabled || store.delivery_enabled) && !!key;
 }

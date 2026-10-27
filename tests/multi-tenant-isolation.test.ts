@@ -12,6 +12,33 @@ let tenantB: number;
 let productA: number;
 let invoiceA: number;
 
+test('tenant B order mirrors are never returned to tenant A', async () => {
+  const id = Number(app.db.prepare("INSERT INTO orders (tenant_id, number, state) VALUES (?, 1042, 'submitted')").run(tenantB).lastInsertRowid);
+  app.db.prepare("INSERT INTO order_lines (tenant_id, order_id, product_name) VALUES (?, ?, 'Private B')").run(tenantB, id);
+  app.db.prepare("INSERT INTO order_events (tenant_id, order_id, kind) VALUES (?, ?, 'submitted')").run(tenantB, id);
+  const list = await app.api('GET', '/api/orders', { tenantId: tenantA });
+  assert.equal(list.status, 200);
+  assert.ok(!list.body.rows.some((o: any) => o.id === id));
+  assert.equal((await app.api('GET', `/api/orders/${id}`, { tenantId: tenantA })).status, 404);
+});
+
+test('order mirrors carry tenant scope and live/archived transactions carry the order link', () => {
+  for (const table of ['orders', 'order_lines', 'order_events']) {
+    const columns = app.db.prepare(`PRAGMA table_info(${table})`).all().map((col: any) => col.name);
+    for (const column of ['id', 'tenant_id', 'global_id', 'created_at', 'updated_at', 'deleted_at', 'last_synced_at']) {
+      assert.ok(columns.includes(column), `${table}.${column}`);
+    }
+    for (const column of ['network_hash', 'idempotency_key', 'status_key_hash']) assert.ok(!columns.includes(column));
+    assert.deepEqual(app.db.prepare(`PRAGMA foreign_key_list(${table})`).all(), []);
+  }
+  for (const table of ['transactions', 'archived_transactions']) {
+    const columns = app.db.prepare(`PRAGMA table_info(${table})`).all();
+    assert.ok(columns.some((col: any) => col.name === 'order_global_id' && col.type === 'TEXT'));
+  }
+  const index = app.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_transactions_order'").get() as any;
+  assert.match(index.sql, /UNIQUE INDEX.*transactions\(order_global_id\) WHERE order_global_id IS NOT NULL/i);
+});
+
 before(async () => {
   app = await createTestApp();
   tenantA = seedTenant(app.db, "Business A", "business-a@example.com");

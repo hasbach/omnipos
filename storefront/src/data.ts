@@ -146,3 +146,31 @@ export class SupabaseRpcSource implements DataSource {
     return rows[0] ? normalizeListing(rows[0]) : null;
   }
 }
+
+export interface OrderSubmitPayload {
+  attempt: string; status_key: string; network?: string;
+  customer: { name: string; phone: string; fulfilment: string; address?: string; note?: string };
+  lines: OrderLine[]; expected_total_usd: number; website?: string;
+}
+export interface OrderLine { listing: string; unit: string; qty: number; price?: number }
+export interface OrderResult { ok: boolean; code?: string; [key: string]: any }
+export interface OrderGateway {
+  quote(slug: string, lines: OrderLine[]): Promise<OrderResult>;
+  submit(slug: string, payload: OrderSubmitPayload): Promise<OrderResult>;
+  status(key: string): Promise<OrderResult>;
+  cancel(key: string): Promise<OrderResult>;
+}
+export class SupabaseOrderGateway implements OrderGateway {
+  constructor(private baseUrl: string, private anonKey: string, private gatewayKey: string, private fetchImpl: Fetch = fetch) {}
+  private async rpc(fn: string, args: Record<string, unknown>): Promise<OrderResult> {
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: this.anonKey, Authorization: `Bearer ${this.anonKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_gateway: this.gatewayKey, ...args }) });
+      if (!res.ok) throw new UpstreamError(`${fn}: HTTP ${res.status}`, res.status);
+      return await res.json();
+    } catch (e) { if (e instanceof UpstreamError) throw e; throw new UpstreamError(`${fn}: unavailable`); }
+  }
+  quote(slug: string, lines: OrderLine[]) { return this.rpc('order_quote', { p_slug: slug, p_lines: lines }); }
+  submit(slug: string, p: OrderSubmitPayload) { return this.rpc('order_submit', { p_slug: slug, p_idempotency: p.attempt, p_status_key: p.status_key, p_network: p.network, p_customer: p.customer, p_lines: p.lines, p_expected_total_usd: p.expected_total_usd, p_trap: p.website || '' }); }
+  status(key: string) { return this.rpc('order_status', { p_status_key: key }); }
+  cancel(key: string) { return this.rpc('order_cancel', { p_status_key: key }); }
+}

@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Fuse from 'fuse.js';
+import type { OrderSaleDraft } from '../lib/ordersApi';
 import { Product, CartItem, Stakeholder, Transaction, Payment, Discount, Tenant, cartLineKey } from '../types';
 import { useTheme } from './useTheme';
 import { getTerminalId } from '../lib/terminal';
 import { useI18n } from '../intl/index';
+import { useOrderNotifications } from './useOrderNotifications';
 import { useToast } from '../components/ui/ToastProvider';
 import { useConfirm } from '../components/ui/ConfirmDialog';
 import {
@@ -30,6 +32,8 @@ export const CURRENCIES = [
 export interface SaleTab {
   id: string;
   number: number;
+  orderGlobalId?: string;
+  orderNumber?: string;
   cart: CartItem[];
   stakeholderId: number;
   globalDiscount: Discount;
@@ -46,6 +50,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const terminalId = getTerminalId();
   const { t: t18n, lang, dir, setLang } = useI18n();
   const toast = useToast();
+  useOrderNotifications();
   const confirm = useConfirm();
 
   // Interpolating translate helper: t('key', 'English fallback {var}', { var: 5 })
@@ -252,13 +257,66 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     loadSale(target);
   };
 
+  const newSaleTabFromOrder = (draft: OrderSaleDraft) => {
+    const existing = saleTabsRef.current.find(tab => tab.orderGlobalId === draft.order_global_id);
+    if (existing) {
+      switchSaleTab(existing.id);
+      return;
+    }
+    const skipped = draft.skipped.map(line => `${line.line_no}: ${line.product_name}`);
+    const orderCart: CartItem[] = [];
+    draft.lines.forEach(line => {
+      const product = products.find(product => product.id === line.product_id);
+      if (!product) {
+        skipped.push(t('orders_missing_product', undefined, { id: line.product_id }));
+        return;
+      }
+      const unit = (product.units || []).find(unit => unit.id === line.uom_id);
+      // Without a local factor, a missing non-base unit cannot be converted safely.
+      if (line.uom_id != null && !unit) {
+        skipped.push(product.name);
+        return;
+      }
+      orderCart.push({
+        ...product,
+        line_key: cartLineKey(product.id, unit ? unit.id : null),
+        uom_id: unit ? unit.id : null,
+        uom_name: unit ? unit.name : null,
+        uom_factor: unit ? unit.factor : null,
+        quantity: line.quantity,
+        unit_price: line.unit_price,
+      });
+    });
+    const tabs = saleTabsRef.current.map(tab => (
+      tab.id === activeTabIdRef.current ? snapshotActive() : tab
+    ));
+    const fresh: SaleTab = {
+      ...makeEmptyTab(Math.max(...tabs.map(tab => tab.number)) + 1, defaultLevelForWalkIn()),
+      orderGlobalId: draft.order_global_id,
+      orderNumber: draft.number,
+      stakeholderId: draft.stakeholder_id,
+      cart: orderCart,
+    };
+    commitTabs(withoutFinished([...tabs, fresh], fresh.id), fresh.id);
+    loadSale(fresh);
+    if (skipped.length) {
+      toast.info(t('orders_skipped_lines', undefined, { lines: skipped.join(', ') }), { duration: 10000 });
+    }
+    if (draft.converted.length) {
+      toast.info(t('orders_converted_lines', undefined, {
+        lines: draft.converted.map(line => line.line_no).join(', '),
+      }), { duration: 10000 });
+    }
+  };
+
   // Remove a tab (no confirmation) and land on its neighbour if it was the active one.
   const removeTab = (id: string) => {
     const tabs = saleTabsRef.current.map(x => (x.id === activeTabIdRef.current ? snapshotActive() : x));
     if (tabs.length <= 1) {
       // Never zero tabs: closing the last one just clears it.
       const cleared: SaleTab = {
-        ...tabs[0], cart: [], stakeholderId: walkInId, globalDiscount: { type: 'percentage', value: 0 },
+        ...tabs[0], orderGlobalId: undefined, orderNumber: undefined,
+        cart: [], stakeholderId: walkInId, globalDiscount: { type: 'percentage', value: 0 },
         payments: [], priceLevel: defaultLevelForWalkIn(), priceLevelManual: false,
       };
       commitTabs([cleared], cleared.id);
@@ -314,6 +372,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     const s = sid !== 1 ? (stakeholders.find((y: any) => y.id === sid) as any) : null;
     return {
       ...x,
+      number: x.orderNumber ?? x.number,
       cart: lines,
       stakeholderId: sid,
       lineCount: lines.length,
@@ -390,6 +449,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         };
 
         switch (data.type) {
+          case 'ORDERS_UPDATED':
+            window.dispatchEvent(new CustomEvent('pos-sync', { detail: data }));
+            break;
           case 'PRODUCTS_UPDATED':
             safeFetch('/api/products', setProducts);
             break;
@@ -1195,7 +1257,10 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     }
 
     setIsProcessing(true);
+    const checkoutTabId = activeTabIdRef.current;
+    const orderGlobalId = saleTabsRef.current.find(tab => tab.id === checkoutTabId)?.orderGlobalId;
     const transaction: any = {
+      order_global_id: orderGlobalId,
       stakeholder_id: selectedStakeholder,
       user_id: currentUser?.id || 1,
       items: cart.map(({ units: _units, ...c }: any) => c),
@@ -1218,6 +1283,12 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       if (res.ok) {
         const data = await res.json();
         finishedTabIdRef.current = activeTabIdRef.current;
+        if (orderGlobalId) {
+          // The order is completed: a lone tab is reused for the next sale, so drop the link now.
+          commitTabs(saleTabsRef.current.map(tab => (
+            tab.id === checkoutTabId ? { ...tab, orderGlobalId: undefined, orderNumber: undefined } : tab
+          )), activeTabIdRef.current);
+        }
         setCart([]);
         setPayments([]); // Reset split payments
         setSelectedStakeholder(walkInId); // Reset to Walk-in default customer
@@ -1249,7 +1320,28 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         }
       } else {
         const err = await res.json().catch(() => ({}));
-        toast.error(translateServerError(err, t) || t('pos_transaction_failed', 'Failed to process transaction.'));
+        if (err.code === 'ORDER_NEEDS_ONLINE' && orderGlobalId) {
+          const sellWithoutOrder = await confirm({
+            title: t('orders_sell_without'),
+            description: t('orders_no_connection'),
+            confirmLabel: t('orders_sell_without'),
+          });
+          if (sellWithoutOrder) {
+            const tabs = saleTabsRef.current.map(tab => {
+              const snapshot = tab.id === activeTabIdRef.current ? snapshotActive() : tab;
+              return tab.id === checkoutTabId
+                ? { ...snapshot, orderGlobalId: undefined, orderNumber: undefined }
+                : snapshot;
+            });
+            commitTabs(tabs, activeTabIdRef.current);
+            // Without the order the server prices lines normally, so drop the order prices too: the
+            // cart then shows the shop's current prices, which is what the plain sale will charge.
+            setCart(prev => prev.map(({ unit_price: _orderPrice, ...line }) => line as CartItem));
+            toast.info(t('orders_pay_again'));
+          }
+        } else {
+          toast.error(translateServerError(err, t) || t('pos_transaction_failed', 'Failed to process transaction.'));
+        }
       }
     } catch (err) {
       console.error(err);
@@ -1498,6 +1590,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     saleTabs: saleTabsView,
     activeTabId,
     newSaleTab,
+    newSaleTabFromOrder,
     switchSaleTab,
     closeSaleTab,
     finishSaleTab,

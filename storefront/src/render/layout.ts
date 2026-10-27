@@ -17,10 +17,12 @@ export interface LayoutInput {
   assetVersion: string;
   websiteUrl: string;
   noindex?: boolean;
+  refresh?: boolean;
+  statusJson?: string;
   /** Same page in each language (store pages only). */
   langLinks?: { lang: Lang; href: string }[];
   /** 003: the store takes orders — cart link in the header, the sf-order JSON block and cart.js. */
-  order?: { cartHref: string; json: string; checkout?: boolean };
+  order?: { cartHref: string; json: string; checkout?: boolean; online?: boolean };
 }
 
 export const imgUrl = (path: string) => `/img/${path.split('/').map(encodeURIComponent).join('/')}`;
@@ -55,7 +57,7 @@ export function layout(i: LayoutInput): string {
 <link rel="icon" href="data:,">
 ${metaTags(i.meta, lang)}
 ${i.noindex ? '<meta name="robots" content="noindex">' : ''}
-${color ? `<meta name="theme-color" content="${attr(color)}">` : ''}
+${i.refresh ? '<meta http-equiv="refresh" content="60">\n' : ''}${color ? `<meta name="theme-color" content="${attr(color)}">` : ''}
 <link rel="stylesheet" href="/storefront.css?v=${attr(i.assetVersion)}">
 ${color ? `<style>:root{--sf-accent:${color}}</style>` : ''}
 </head>
@@ -69,7 +71,10 @@ ${i.body}
 <script src="/storefront.js?v=${attr(i.assetVersion)}" defer></script>${i.order ? `
 ${i.order.json}
 <script src="/cart.js?v=${attr(i.assetVersion)}" defer></script>${i.order.checkout ? `
-<script src="/checkout.js?v=${attr(i.assetVersion)}" defer></script>` : ''}` : ''}
-</body>
+<script src="/checkout.js?v=${attr(i.assetVersion)}" defer></script>` : ''}${i.order.online ? `
+<script src="/order.js?v=${attr(i.assetVersion)}" defer></script>` : ''}` : ''}
+${i.statusJson ? `<script type="application/json" id="sf-order">${i.statusJson}</script>
+<script src="/order.js?v=${attr(i.assetVersion)}" defer></script>
+` : ''}</body>
 </html>`;
 }

@@ -23,6 +23,11 @@ export function formatLocal(store: PublicStore, usd: number, ownLocal: number | 
   return `${wholeFmt.format(amount)} ${symbol}`;
 }
 
+/** A local amount already computed elsewhere (an order's stored totals), formatted like formatLocal. */
+export function formatLocalAmount(amount: number, currency: string): string {
+  return `${wholeFmt.format(Math.round(Number(amount) || 0))} ${currency}`;
+}
+
 export function stockLabel(lang: Lang, state: StockState, exact: number | null): string {
   if (exact !== null && state !== 'out_of_stock') return t(lang, 'stock_exact', { count: wholeFmt.format(Math.max(0, exact)) });
   return t(lang, state);

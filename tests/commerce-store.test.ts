@@ -27,6 +27,35 @@ function setup(enabled = true) {
 
 const okClaimer = async () => ({ ok: true, code: "ok" });
 
+test("order expiry defaults for new and legacy stores and validates integer bounds", async () => {
+  const s = setup();
+  const store = await newStore(s.as);
+  assert.equal(store.settings.order_expiry_hours, 24);
+  const legacyId = Number(app.db.prepare(
+    "INSERT INTO stores (tenant_id, name, settings) VALUES (?, 'Legacy', ?)"
+  ).run(s.tenantId, JSON.stringify({ ordering_mode: 'off' })).lastInsertRowid);
+  const listed = await app.api("GET", "/api/commerce/stores", s.as);
+  assert.equal(listed.body.find((row: any) => row.id === legacyId).settings.order_expiry_hours, 24);
+
+  for (const hours of [1, 72]) {
+    const r = await app.api("PUT", `/api/commerce/stores/${store.id}`, {
+      ...s.as, body: { settings: { order_expiry_hours: hours } },
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.settings.order_expiry_hours, hours);
+  }
+  for (const hours of [0, 73, 1.5, '12', null]) {
+    for (const method of ['POST', 'PUT']) {
+      const r = await app.api(method, method === 'POST' ? '/api/commerce/stores' : `/api/commerce/stores/${store.id}`, {
+        ...s.as, body: { name: 'Shop', settings: { order_expiry_hours: hours } },
+      });
+      assert.equal(r.status, 400, JSON.stringify(r.body));
+      assert.equal(r.body.code, 'STORE_ORDER_EXPIRY_INVALID');
+      assert.equal(r.body.field, 'settings.order_expiry_hours');
+    }
+  }
+});
+
 async function newStore(as: any, body: any = { name: "ABC Market" }) {
   const r = await app.api("POST", "/api/commerce/stores", { ...as, body });
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -44,6 +73,7 @@ test("create: draft, no slug, default settings; listed; audited", async () => {
   assert.deepEqual(store.settings, {
     show_exact_stock: 0, hide_out_of_stock: 0, show_local_price: 1, category_order: [],
     // 003 ordering settings: off by default.
+    order_expiry_hours: 24,
     ordering_mode: "off", pickup_enabled: 1, pickup_note: "", delivery_enabled: 0, delivery_note: "", min_order_usd: null,
   });
   assert.equal(store.tenant_id, undefined, "local tenant id is not exposed");
@@ -331,7 +361,7 @@ test("003 ordering settings: WhatsApp mode needs a WhatsApp number and a way to 
   assert.equal((await put({ contact_whatsapp: "" })).status, 200);
 });
 
-test("003 ordering settings: online orders not yet; field rules for notes and the minimum", async () => {
+test("003 ordering settings: online orders; field rules for notes and the minimum", async () => {
   const s = setup();
   const store = await newStore(s.as, { name: "Shop", contact_whatsapp: "70 123 456" });
   const put = (settings: any) => app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body: { settings } });
@@ -340,7 +370,9 @@ test("003 ordering settings: online orders not yet; field rules for notes and th
     assert.equal(r.status, 400, JSON.stringify(settings));
     assert.deepEqual([r.body.code, r.body.field], [code, field], JSON.stringify(settings));
   };
-  await bad({ ordering_mode: "online" }, "ORDERING_MODE_UNAVAILABLE", "settings.ordering_mode");
+  assert.equal((await put({ ordering_mode: "online" })).status, 200);
+  assert.equal((await app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body: { contact_whatsapp: "" } })).status, 200);
+  await bad({ pickup_enabled: false, delivery_enabled: false }, "STORE_ORDERING_NEEDS_FULFILMENT", "settings.pickup_enabled");
   await bad({ ordering_mode: "shop" }, "STORE_SETTINGS_INVALID", "settings.ordering_mode");
   await bad({ pickup_enabled: "yes" }, "STORE_SETTINGS_INVALID", "settings.pickup_enabled");
   await bad({ pickup_note: "x".repeat(201) }, "STORE_SETTINGS_INVALID", "settings.pickup_note");

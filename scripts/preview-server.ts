@@ -75,6 +75,56 @@ const suppliers = [
   Number(insS.run(tenantId, "Levant Foods Import", "supplier", "01 777 666", "Port of Beirut", "retail", null).lastInsertRowid),
 ]
 
+// Online orders (003 Slice 2): a store in online mode with orders in every state, written straight into the
+// local mirror tables (in production they arrive from the cloud by sync).
+const tenantGid = (db.prepare("SELECT global_id FROM tenants WHERE id = ?").get(tenantId) as any).global_id as string;
+const onlineStoreId = Number(db.prepare(`INSERT INTO stores (tenant_id, name, slug, mode, status, settings) VALUES (?, ?, ?, 'retail', 'active', ?)`)
+  .run(tenantId, "Beirut Market", "beirut-market", JSON.stringify({ ordering_mode: "online", pickup_enabled: 1, pickup_note: "Back door after 4 pm",
+    delivery_enabled: 1, delivery_note: "Hamra and Ras Beirut only", order_expiry_hours: 24 })).lastInsertRowid);
+const onlineStoreGid = (db.prepare("SELECT global_id FROM stores WHERE id = ?").get(onlineStoreId) as any).global_id as string;
+{
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60000).toISOString();
+  const insO = db.prepare(`INSERT INTO orders (global_id, tenant_id, store_id, number, state, reason, cancelled_by, customer_name, customer_phone,
+    fulfilment, address, note, local_currency, local_rate, total_usd, total_local, confirmed_total_usd, confirmed_total_local, submitted_at, expires_at,
+    confirmed_at, ready_at, closed_at) VALUES (@gid, ${tenantId}, ${onlineStoreId}, @number, @state, @reason, @by, @name, @phone, @fulfilment, @address, @note,
+    'LBP', 89500, @total, @totalLocal, @confirmed, @confirmedLocal, @at, @expires, @confirmedAt, @readyAt, @closedAt)`);
+  const insL = db.prepare(`INSERT INTO order_lines (global_id, tenant_id, order_id, line_no, product_id, product_name, unit_key, unit_name, unit_factor,
+    ordered_qty, confirmed_qty, shortfall_reason, unit_price_usd, unit_price_local, line_total_usd, line_total_local)
+    VALUES (?, ${tenantId}, ?, ?, ?, ?, 'base', 'pcs', 1, ?, ?, ?, ?, ?, ?, ?)`);
+  const insE = db.prepare(`INSERT INTO order_events (global_id, tenant_id, order_id, at, kind, from_state, to_state, actor_kind, actor_name, terminal, reason)
+    VALUES (?, ${tenantId}, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const product = (i: number) => db.prepare("SELECT id, name, price, price_lbp FROM products WHERE id = ?").get(productIds[i]) as any;
+  const seedOrder = (o: any, lines: [number, number, number | null, string | null][]) => {
+    const gid = crypto.randomUUID();
+    let total = 0, totalLocal = 0, confirmed = 0, confirmedLocal = 0;
+    const rows = lines.map(([i, qty, conf, reason]) => {
+      const p = product(i);
+      total += Math.round(p.price * qty * 100) / 100; totalLocal += p.price_lbp * qty;
+      if (conf != null) { confirmed += Math.round(p.price * conf * 100) / 100; confirmedLocal += p.price_lbp * conf; }
+      return { p, qty, conf, reason };
+    });
+    const id = Number(insO.run({ gid, by: null, reason: null, address: null, note: null, confirmedAt: null, readyAt: null, closedAt: null, ...o,
+      total, totalLocal, confirmed: o.state === 'submitted' || o.state === 'expired' ? null : confirmed,
+      confirmedLocal: o.state === 'submitted' || o.state === 'expired' ? null : confirmedLocal }).lastInsertRowid);
+    rows.forEach((r, n) => insL.run(crypto.randomUUID(), id, n + 1, r.p.id, r.p.name, r.qty, r.conf, r.reason, r.p.price, r.p.price_lbp,
+      Math.round(r.p.price * r.qty * 100) / 100, r.p.price_lbp * r.qty));
+    insE.run(crypto.randomUUID(), id, o.at, 'submitted', null, 'submitted', 'customer', null, null, null);
+    if (o.confirmedAt) insE.run(crypto.randomUUID(), id, o.confirmedAt, 'confirmed', 'submitted', 'confirmed', 'user', 'Admin', 'POS1', null);
+  };
+  seedOrder({ number: 1001, state: 'submitted', name: "Nadim Haddad", phone: "+96171999888", fulfilment: 'pickup', note: "Ring the bell twice",
+    at: minutesAgo(4), expires: minutesAgo(-1436) }, [[2, 6, null, null], [11, 2, null, null]]);
+  seedOrder({ number: 1002, state: 'submitted', name: "رانيا حداد", phone: "+9613123456", fulfilment: 'delivery', address: "Hamra, Bliss Street, 3rd floor",
+    at: minutesAgo(20), expires: minutesAgo(-1420) }, [[0, 3, null, null], [5, 1, null, null], [14, 2, null, null]]);
+  seedOrder({ number: 1003, state: 'confirmed', name: "Karim Saad", phone: "+96170123456", fulfilment: 'pickup', at: minutesAgo(90), expires: minutesAgo(1350),
+    confirmedAt: minutesAgo(80) }, [[2, 6, 3, 'out_of_stock'], [7, 1, 1, null]]);
+  seedOrder({ number: 1004, state: 'ready', name: "Maya Khoury", phone: "+96176543210", fulfilment: 'pickup', at: minutesAgo(200), expires: minutesAgo(1240),
+    confirmedAt: minutesAgo(190), readyAt: minutesAgo(150) }, [[3, 4, 4, null]]);
+  seedOrder({ number: 1005, state: 'submitted', name: "Late Customer", phone: "+96171000111", fulfilment: 'pickup', at: minutesAgo(1600),
+    expires: minutesAgo(160) }, [[1, 1, null, null]]);
+  seedOrder({ number: 1006, state: 'rejected', name: "Sami Aoun", phone: "+96178111222", fulfilment: 'delivery', address: "Jounieh", reason: "We don't deliver to Jounieh",
+    at: minutesAgo(3000), expires: minutesAgo(1560), closedAt: minutesAgo(2990) }, [[4, 2, null, null]]);
+}
+
 const app = express();
 // See server.ts: the import wizard needs a bigger body limit than the global default, mounted
 // route-scoped and before the global parser (which no-ops once req._body is already set).
@@ -97,6 +147,85 @@ __setSlugClaimer(async (_tenantId, storeGlobalId, slug) => {
   const clash = db.prepare("SELECT 1 FROM stores WHERE lower(slug) = ? AND deleted_at IS NULL AND global_id <> ?").get(slug, storeGlobalId);
   return clash ? { ok: false, code: "taken" } : { ok: true, code: "ok" };
 });
+
+// Online orders: a fake cloud session whose order functions update the local mirror the way the cloud
+// would (state machine only, no limits), so the Online orders page is "online" and its actions work here.
+{
+  const { makeFakeSupabase } = await import("../tests/helpers/fakeSupabase.js");
+  const session = await import("../server/session.js");
+  const fake = makeFakeSupabase();
+  const cloudRows = (gid: string) => {
+    const o = db.prepare("SELECT * FROM orders WHERE global_id = ?").get(gid) as any;
+    const { id, last_synced_at, ...order } = o;
+    const lines = (db.prepare("SELECT * FROM order_lines WHERE order_id = ? ORDER BY line_no").all(id) as any[])
+      .map(({ id: _id, last_synced_at: _s, ...l }) => ({ ...l, tenant_id: tenantGid, order_id: gid }));
+    return { order: { ...order, tenant_id: tenantGid, store_id: onlineStoreGid }, lines };
+  };
+  const act = (to: string, from: string[], extra: (o: any, args: any) => void = () => {}) => (args: any) => {
+    const o = db.prepare("SELECT * FROM orders WHERE global_id = ?").get(args.p_order) as any;
+    if (!o) return { ok: false, code: 'not_found' };
+    if (o.state !== args.p_expected_state) return { ok: false, code: 'handled', ...cloudRows(o.global_id) };
+    if (!from.includes(o.state)) return { ok: false, code: 'invalid_transition', ...cloudRows(o.global_id) };
+    extra(o, args);
+    const stamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    db.prepare("UPDATE orders SET state = ?, reason = coalesce(?, reason), cancelled_by = ?, updated_at = ? WHERE id = ?")
+      .run(to, args.p_reason ?? null, to === 'cancelled' ? 'shop' : o.cancelled_by, stamp, o.id);
+    return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
+  };
+  fake.onRpc('order_accept', act('confirmed', ['submitted'], (o, args) => {
+    for (const l of db.prepare("SELECT * FROM order_lines WHERE order_id = ?").all(o.id) as any[]) {
+      const given = (args.p_lines || []).find((g: any) => g.line_no === l.line_no);
+      db.prepare("UPDATE order_lines SET confirmed_qty = ?, shortfall_reason = ? WHERE id = ?")
+        .run(given ? given.confirmed_qty : l.ordered_qty, given?.reason ?? null, l.id);
+    }
+  }));
+  fake.onRpc('order_reject', act('rejected', ['submitted']));
+  fake.onRpc('order_ready', act('ready', ['confirmed']));
+  fake.onRpc('order_cancel_by_shop', act('cancelled', ['confirmed', 'ready']));
+  // Completion from a POS sale: first sale id wins, the same id again is ok (idempotent), undo only for that id.
+  fake.onRpc('order_complete', (args: any) => {
+    const o = db.prepare("SELECT * FROM orders WHERE global_id = ?").get(args.p_order) as any;
+    if (!o) return { ok: false, code: 'not_found' };
+    if (o.state === 'completed' && o.sale_global_id === args.p_sale_global_id) return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
+    if (!['confirmed', 'ready'].includes(o.state)) return { ok: false, code: 'handled', ...cloudRows(o.global_id) };
+    const stamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    db.prepare("UPDATE orders SET state = 'completed', sale_global_id = ?, closed_at = ?, updated_at = ? WHERE id = ?")
+      .run(args.p_sale_global_id, stamp, stamp, o.id);
+    return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
+  });
+  fake.onRpc('order_complete_undo', (args: any) => {
+    const o = db.prepare("SELECT * FROM orders WHERE global_id = ?").get(args.p_order) as any;
+    if (!o || o.state !== 'completed' || o.sale_global_id !== args.p_sale_global_id) return { ok: false, code: 'handled' };
+    const back = o.ready_at ? 'ready' : 'confirmed';
+    const stamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    db.prepare("UPDATE orders SET state = ?, sale_global_id = NULL, closed_at = NULL, updated_at = ? WHERE id = ?").run(back, stamp, o.id);
+    return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
+  });
+  // Blocked phones live only in the cloud: keep them in memory here, normalised the simple way.
+  const blocked: { store: string; phone: string; note: string | null; created_at: string }[] = [];
+  const normalisePhone = (p: any) => {
+    const digits = String(p ?? '').replace(/[^\d+]/g, '');
+    return /^\+?\d{6,15}$/.test(digits) ? (digits.startsWith('+') ? digits : '+961' + digits.replace(/^0/, '')) : null;
+  };
+  fake.onRpc('order_blocked_phones', (args: any) => ({ ok: true, code: 'ok',
+    rows: blocked.filter(b => b.store === args.p_store).map(({ store: _s, ...b }) => b) }));
+  fake.onRpc('order_block_phone', (args: any) => {
+    const phone = normalisePhone(args.p_phone);
+    if (!phone) return { ok: false, code: 'invalid', field: 'phone' };
+    const row = blocked.find(b => b.store === args.p_store && b.phone === phone);
+    if (row) row.note = args.p_note || null;
+    else blocked.unshift({ store: args.p_store, phone, note: args.p_note || null, created_at: new Date().toISOString() });
+    return { ok: true, code: 'ok', phone };
+  });
+  fake.onRpc('order_unblock_phone', (args: any) => {
+    const phone = normalisePhone(args.p_phone) ?? args.p_phone;
+    const i = blocked.findIndex(b => b.store === args.p_store && b.phone === phone);
+    if (i >= 0) blocked.splice(i, 1);
+    return { ok: true, code: 'ok' };
+  });
+  session.__setClientFactory(() => fake as any);
+  await session.setActiveSession(tenantId, tenantGid, "preview@omnipos.test", { access_token: "preview", refresh_token: "preview" });
+}
 
 // Transactions through the REAL API so every total/stock/balance/cost rule applies, then backdated.
 await new Promise<void>((r) => server.listen(PORT, r));
@@ -156,7 +285,7 @@ await call("POST", "/api/cash-flow", { type: "out", amount: 45, currency: "USD",
   });
   const sfData = new LocalDbSource(db, tenantId, (store, token) => { const p = previewTokens.get(token); return !!p && p.store === store && p.until > Date.now(); });
   const { IMG_PATH } = await import("../storefront/src/img.js");
-  const assets: Record<string, string> = { "/storefront.css": "text/css; charset=utf-8", "/storefront.js": "text/javascript; charset=utf-8", "/placeholder.svg": "image/svg+xml", "/cart.js": "text/javascript; charset=utf-8", "/checkout.js": "text/javascript; charset=utf-8" };
+  const assets: Record<string, string> = { "/storefront.css": "text/css; charset=utf-8", "/storefront.js": "text/javascript; charset=utf-8", "/placeholder.svg": "image/svg+xml", "/cart.js": "text/javascript; charset=utf-8", "/checkout.js": "text/javascript; charset=utf-8", "/order.js": "text/javascript; charset=utf-8" };
   app.use(async (req: any, res: any, next: any) => {
     if (assets[req.path]) {
       res.type(assets[req.path]).set("Cache-Control", "no-cache").send(fs.readFileSync(path.join(root, "storefront", "public", req.path.slice(1))));

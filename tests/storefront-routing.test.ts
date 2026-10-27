@@ -123,11 +123,11 @@ test("identical URLs give identical bodies and cache headers (CDN-cacheable; not
   }
 });
 
-test("asset version matches the files (sha256 of css + js + svg + cart.js, LF-normalised)", async () => {
+test("asset version matches all six assets (sha256, LF-normalised)", async () => {
   const fs = await import("fs");
   const crypto = await import("crypto");
   const { ASSET_VERSION } = await import("../storefront/src/assets.js");
-  const content = ["storefront.css", "storefront.js", "placeholder.svg", "cart.js", "checkout.js"]
+  const content = ["storefront.css", "storefront.js", "placeholder.svg", "cart.js", "checkout.js", "order.js"]
     .map((f) => fs.readFileSync(`storefront/public/${f}`, "utf8").replace(/\r\n/g, "\n")).join("");
   const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 10);
   assert.equal(ASSET_VERSION, hash, `update storefront/src/assets.ts to '${hash}'`);
@@ -135,7 +135,29 @@ test("asset version matches the files (sha256 of css + js + svg + cart.js, LF-no
   assert.ok(body(home).includes("/storefront.css?v=test"), "pages reference the versioned stylesheet");
 });
 
-test("page weight: home with 48 cards ≤ 60 KB, stylesheet ≤ 20 KB, script ≤ 10 KB", async () => {
+test('online order budgets: order.js ≤ 12 KB LF and a 50-line status page ≤ 30 KB', async () => {
+  const fs = await import('node:fs');
+  const { LIMITS } = await import('../storefront/src/limits.js');
+  const { FixtureOrderGateway } = await import('../storefront/src/fixture.js');
+  const source = fs.readFileSync('storefront/public/order.js', 'utf8');
+  assert.ok(!source.includes('\r'));
+  assert.ok(Buffer.byteLength(source) <= LIMITS.orderJsBytes);
+  const data = new FixtureSource(demoFixture(60, { ordering: 'online' }));
+  const gateway = new FixtureOrderGateway(data);
+  const key = 'a'.repeat(32);
+  const result = await gateway.submit(data.fx.store.slug, { attempt: 'budget', status_key: key, network: 'n', customer: { name: 'Jane', phone: '70123456', fulfilment: 'pickup' }, lines: [{ listing: data.fx.listings[0].listing_id, unit: 'base', qty: 10, price: 1.5 }], expected_total_usd: 15 });
+  assert.equal(result.code, 'created');
+  result.order.lines = Array.from({ length: 50 }, () => ({ ...result.order.lines[0] }));
+  for (const lang of ['en', 'ar', 'fr']) {
+    const r = await handle({ host: 'beirut-market.myomnipos.com', url: '/o/' + key + '?lang=' + lang }, { data, gateway, config: { ...config, orderGatewayKey: 'test' }, assetVersion: 'test' });
+    assert.equal(r.status, 200);
+    const bytes = Buffer.byteLength(body(r));
+    assert.ok(bytes <= LIMITS.statusHtmlBytes, `${lang} status page is ${bytes} bytes`);
+    console.log(`${lang} 50-line status HTML: ${bytes} bytes`);
+  }
+});
+
+test("page weight: home with 48 cards ≤ 60 KB, stylesheet ≤ 24 KB, script ≤ 10 KB", async () => {
   const fs = await import("fs");
   const { LIMITS } = await import("../storefront/src/limits.js");
   const data = new FixtureSource(demoFixture(200));

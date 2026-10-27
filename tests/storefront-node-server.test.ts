@@ -40,6 +40,12 @@ test("node server: health check, immutable assets, store pages from the Host hea
     assert.equal(css.headers.get("cache-control"), CACHE_IMMUTABLE);
     assert.ok((await css.text()).length > 100);
 
+    const order = await get('/order.js?v=abc', 'beirut-market.myomnipos.com');
+    assert.equal(order.status, 200);
+    assert.match(order.headers.get('content-type') || '', /javascript/);
+    assert.equal(order.headers.get('cache-control'), CACHE_IMMUTABLE);
+    assert.match(await order.text(), /window.OmniOrder/);
+
     const home = await get("/", "beirut-market.myomnipos.com");
     assert.equal(home.status, 200);
     assert.equal(home.headers.get("cache-control"), CACHE_PAGE);
@@ -54,4 +60,25 @@ test("node server: X-Forwarded-Host is ignored (the edge caches by Host)", async
     assert.equal(spoofed.status, 404);
     assert.doesNotMatch(await spoofed.text(), /Beirut Market/);
   });
+});
+
+test('node server: POST body, cap, methods and Host isolation', async () => {
+  const { FixtureOrderGateway } = await import('../storefront/src/fixture.js');
+  const data = new FixtureSource(demoFixture(10, { ordering: 'online' }));
+  const gateway = new FixtureOrderGateway(data);
+  const server = createStorefrontServer({ config: { ...config, orderGatewayKey: 'fixture' }, data, gateway });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const http = await import('node:http');
+  const post = (body: string, host = 'beirut-market.myomnipos.com', method = 'POST') => new Promise<{ status: number; headers: import('node:http').IncomingHttpHeaders; body: string }>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/order/quote', method, headers: { Host: host, 'Content-Type': 'application/json', 'X-Forwarded-Host': 'beirut-market.myomnipos.com' } }, res => {
+      let body = ''; res.on('data', c => body += c); res.on('end', () => resolve({ status: res.statusCode!, headers: res.headers, body }));
+    }); req.on('error', reject); req.end(body);
+  });
+  try {
+    assert.equal(JSON.parse((await post('{"lines":[]}')).body).code, 'ok');
+    const large = await post('x'.repeat(16385)); assert.equal(large.status,413); assert.equal(large.headers['cache-control'],'no-store');
+    assert.equal(JSON.parse((await post('{}','unknown.myomnipos.com')).body).code,'store_unavailable');
+    const bad = await post('',undefined,'PUT'); assert.equal(bad.status,405); assert.ok(bad.headers.allow);
+  } finally { server.close(); }
 });

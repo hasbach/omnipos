@@ -257,5 +257,5 @@ server.listen(PORT, "0.0.0.0", () => {
   }
 
   // Start the background offline-first cloud sync
-  startSyncEngine();
+  startSyncEngine({ onPulled: ({ tenantId, newSubmitted, changed }) => broadcast({ type: 'ORDERS_UPDATED', newSubmitted, changed }, tenantId) });
 });

@@ -1,4 +1,3 @@
-// Cache-busting version for /storefront.css, /storefront.js, /placeholder.svg, /cart.js and /checkout.js (served immutable by the
-// CDN): the first 10 hex chars of sha256(storefront.css + storefront.js + placeholder.svg + cart.js + checkout.js), line endings normalised
-// to LF. A test (T037) fails when the files change and this isn't updated.
-export const ASSET_VERSION = '2caf9038d3';
+// Cache-busting sha256 of storefront.css + storefront.js + placeholder.svg + cart.js + checkout.js + order.js,
+// normalised to LF. The asset-version test keeps immutable CDN URLs in step with their contents.
+export const ASSET_VERSION = 'e1b5858f19';

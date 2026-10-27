@@ -1,3 +1,4 @@
+import { callRpc } from './cloudCall.js';
 import { db } from './db.js';
 import { getActiveSession } from './session.js';
 import { recomputeAllBalances } from './balance.js';
@@ -27,6 +28,9 @@ const fkMap: Record<string, Record<string, string>> = {
   settlement_corrections: { tenant_id: 'tenants', report_id: 'daily_reports', user_id: 'users' },
   cash_flow_categories: { tenant_id: 'tenants' },
   // Commerce (specs/001-commerce-domain-foundation): a tenant's online store and its product listings.
+  orders: { tenant_id: 'tenants', store_id: 'stores' },
+  order_lines: { tenant_id: 'tenants', order_id: 'orders', product_id: 'products' },
+  order_events: { tenant_id: 'tenants', order_id: 'orders' },
   stores: { tenant_id: 'tenants' },
   store_listings: { tenant_id: 'tenants', store_id: 'stores', product_id: 'products' },
 };
@@ -205,7 +209,7 @@ const LOCAL_ONLY_COLUMNS: Record<string, string[]> = {
 // migration get pushed once.
 export const OPTIONAL_CLOUD_COLUMNS: Record<string, string[]> = {
   stakeholders: ['local_rate'],
-  transactions: ['local_rate', 'local_currency'],
+  transactions: ['local_rate', 'local_currency', 'order_global_id'],
 };
 const cloudColFlag = (table: string, col: string) => `cloud_col_ok:${table}.${col}`;
 function noteCloudColumnsAccepted(tableName: string, payload: any[]) {
@@ -263,7 +267,10 @@ const PUSH_TABLES = [
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
 ];
 
+export const ORDER_PULL_TABLES = ['orders', 'order_lines', 'order_events'];
+const CLOUD_AUTHORITATIVE = new Set(['tenants', 'orders', 'order_lines', 'order_events']);
 export const HOT_PULL_TABLES = [
+  ...ORDER_PULL_TABLES,
   'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments', 'cash_flow',
 ];
@@ -275,7 +282,7 @@ export const COLD_PULL_TABLES = [
 // Pull order: parents before children (FK translation needs the parent row locally).
 const PULL_TABLES = [
   'tenants',
-  'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', ...ORDER_PULL_TABLES, 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
 ];
@@ -569,7 +576,149 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 /** A child whose parent transaction is unknown stays deferred this long; older orphans are dropped. */
 const ORPHAN_DEFER_MS = 24 * 60 * 60 * 1000;
 
+export type PullCount = { inserted: number; updated: number };
+type PullStats = PullCount & { newSubmitted: number };
+// Strip cloud 'local_id'/'id'/'synced_at'/embedded parent, normalize timestamps, translate FK
+// UUIDs -> local ids, then insert/update. Rows we must not touch are skipped (see below).
+// Returns the earliest DEFERRED child row (parent transaction unknown here, not tombstoned, and
+// the cloud row is recent): the caller must not advance its cursor past it, so a later pull retries.
+export function applyCloudRows(localId: number, tableName: string, rawData: any[], embedParent?: string, counts?: PullStats): { synced_at: string; global_id: string } | null {
+  // Never resurrect a row deleted here on purpose (see "Tombstones"), nor a child of a deleted
+  // parent. A child whose parent is merely unknown is deferred (or dropped once older than
+  // ORPHAN_DEFER_MS). Checked on the cloud's UUIDs, i.e. BEFORE the FK translation below.
+  const isChild = tableName === 'transaction_items' || tableName === 'payments';
+  // Order lines / events can be read before their order (created in the cloud between the two pages of one
+  // cycle): defer them like transaction children, or they would be stored with order_id NULL for good.
+  const isOrderChild = tableName === 'order_lines' || tableName === 'order_events';
+  let deferred: { synced_at: string; global_id: string } | null = null;
+  let droppedOrphans = 0;
+  const tenantGlobalId = CLOUD_AUTHORITATIVE.has(tableName) && tableName !== 'tenants' ? getGlobalId('tenants', localId) : null;
+  const data = rawData.filter(record => {
+    if (tenantGlobalId && record.tenant_id !== tenantGlobalId) return false;
+    if (isTombstoned(tableName, record.global_id)) return false;
+    if (tableName === 'products' && record.deleted_at) {
+      const product = db.prepare('SELECT id FROM products WHERE global_id = ? AND tenant_id = ?').get(record.global_id, localId) as any;
+      if (product) {
+        // A cloud deletion wins even when this register has an unpushed edit.
+        db.transaction(() => {
+          deleteProductLocally(localId, product.id);
+          markTombstonesPurged([{ table: 'products', globalId: record.global_id }]);
+        })();
+      }
+      return false;
+    }
+    if (isOrderChild) {
+      if (db.prepare('SELECT 1 FROM orders WHERE global_id = ? AND tenant_id = ?').get(record.order_id, localId)) return true;
+    } else {
+      if (!isChild) return true;
+      if (isTombstoned('transactions', record.transaction_id)) return false;
+      if (getLocalId('transactions', record.transaction_id)) return true;
+    }
+    const ts = record.synced_at ? Date.parse(record.synced_at) : NaN;
+    if (Number.isFinite(ts) && ts > Date.now() - ORPHAN_DEFER_MS) {
+      if (!deferred) deferred = { synced_at: record.synced_at, global_id: record.global_id };
+    } else droppedOrphans++;
+    return false;
+  });
+  if (droppedOrphans) console.warn(`⚠️ [SYNC] Dropped ${droppedOrphans} ${tableName} row(s) older than 24h whose parent transaction never arrived.`);
+  if (data.length === 0) return deferred;
+  const mappedData = data.map(record => {
+    const { local_id, id, synced_at, ...rest } = record;
+    if (embedParent) delete rest[embedParent];
+    const mapped: any = { ...rest };
+    if (tableName === 'order_events' && mapped.detail && typeof mapped.detail !== 'string') mapped.detail = JSON.stringify(mapped.detail);
+    if (mapped.updated_at) mapped.updated_at = mapped.updated_at.replace('T', ' ').replace('Z', '');
+    if (mapped.created_at) mapped.created_at = mapped.created_at.replace('T', ' ').replace('Z', '');
+    if (mapped.deleted_at) mapped.deleted_at = mapped.deleted_at.replace('T', ' ').replace('Z', '');
+    if (fkMap[tableName]) {
+      for (const [col, refTable] of Object.entries(fkMap[tableName])) {
+        if (mapped[col]) {
+          mapped[col] = ORDER_PULL_TABLES.includes(tableName) && refTable !== 'tenants'
+            ? (db.prepare(`SELECT id FROM ${refTable} WHERE global_id = ? AND tenant_id = ?`).get(mapped[col], localId) as any)?.id ?? null
+            : getLocalId(refTable, mapped[col]);
+        }
+      }
+    }
+    const clean = dropUnknownLocalColumns(tableName, mapped);
+    // A row we just pulled IS the cloud's copy: mark it synced (last_synced_at = its updated_at) in
+    // the same write, so it is never pushed straight back. Must be part of the same statement: a
+    // separate UPDATE would fire the updated_at trigger and bump the row. Capped at "now" so a cloud
+    // stamp from a register whose clock runs ahead can't swallow a later local edit.
+    if (clean.updated_at && localColumns(tableName).has('last_synced_at')) {
+      const nowStamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+      clean.last_synced_at = ORDER_PULL_TABLES.includes(tableName) ? clean.updated_at : String(clean.updated_at) < nowStamp ? clean.updated_at : nowStamp;
+    }
+    return clean;
+  });
+
+  const columns = Object.keys(mappedData[0]);
+  // Stakeholder balances are DERIVED locally (server/balance.ts): the cloud copy only seeds a
+  // brand-new row, never overwrites one we have (registers with different baselines would fight).
+  const updateColumns = tableName === 'stakeholders' ? columns.filter(c => c !== 'balance') : columns;
+  const updateSet = updateColumns.map(col => `${col} = ?`).join(', ');
+  const insertCols = columns.join(', ');
+  const insertVals = columns.map(() => '?').join(', ');
+
+  const checkStmt = db.prepare(`SELECT updated_at, last_synced_at FROM ${tableName} WHERE global_id = ?`);
+  const updateStmt = db.prepare(`UPDATE ${tableName} SET ${updateSet} WHERE global_id = ?`);
+  const insertStmt = db.prepare(`INSERT INTO ${tableName} (${insertCols}) VALUES (${insertVals})`);
+  const restoreStmt = columns.includes('updated_at') && columns.includes('last_synced_at')
+    ? db.prepare(`UPDATE ${tableName} SET updated_at = ?, last_synced_at = ? WHERE global_id = ?`) : null;
+  const barcodeHolder = tableName === 'product_barcodes'
+    ? db.prepare(`SELECT id, deleted_at FROM product_barcodes WHERE barcode = ?`) : null;
+  const purgeBarcode = tableName === 'product_barcodes'
+    ? db.prepare(`DELETE FROM product_barcodes WHERE id = ?`) : null;
+
+  // Deleted-here-on-purpose parties are SOFT deleted (deleted_at): a deleted row we never held is
+  // not worth inserting. Currencies are unique per code: a second live copy with another global_id
+  // (e.g. a USD seeded by a second device) must not be inserted next to ours.
+  const skipUnknownDeleted = tableName === 'currencies' || tableName === 'users' || tableName === 'stakeholders';
+  const liveCurrencyByCode = tableName === 'currencies'
+    ? db.prepare(`SELECT 1 FROM currencies WHERE tenant_id = ? AND UPPER(code) = UPPER(?) AND deleted_at IS NULL`) : null;
+
+  const applied: PullStats = { inserted: 0, updated: 0, newSubmitted: 0 };
+  const tx = db.transaction((records: any[]) => {
+    for (const record of records) {
+      const exists = checkStmt.get(record.global_id) as any;
+      if (!exists && skipUnknownDeleted && record.deleted_at) continue;
+      if (!exists && liveCurrencyByCode && !record.deleted_at && liveCurrencyByCode.get(record.tenant_id, record.code)) continue;
+      if (!exists && barcodeHolder) {
+        // product_barcodes.barcode is UNIQUE locally: a cloud row we don't have must not collide
+        // with a local row (which would fail the whole pull of this table every cycle).
+        if (record.deleted_at) continue; // a removal we never held - nothing to store
+        const holder = barcodeHolder.get(record.barcode) as any;
+        if (holder && !holder.deleted_at) continue; // live here already; our push wins
+        if (holder) purgeBarcode!.run(holder.id);
+      }
+      if (exists) {
+        // Same version already held (overlap / re-fetch): nothing to do, and an UPDATE that leaves
+        // updated_at unchanged would make the trigger bump it and re-push the row.
+        if (exists.updated_at && record.updated_at && String(exists.updated_at) === String(record.updated_at)) continue;
+        // A row with a pending local edit (never pushed, or edited since the last push) is NEVER
+        // overwritten: the push will send ours. Cloud-authoritative mirrors always accept the cloud copy.
+        if (!CLOUD_AUTHORITATIVE.has(tableName) && (exists.last_synced_at == null || String(exists.updated_at) > String(exists.last_synced_at))) continue;
+        applied.updated++;
+        updateStmt.run(...updateColumns.map(col => record[col] ?? null), record.global_id);
+      } else {
+        applied.inserted++;
+        if (tableName === 'orders' && record.state === 'submitted') applied.newSubmitted++;
+        insertStmt.run(...columns.map(col => record[col] ?? null));
+        // The AFTER INSERT trigger re-writes updated_at, which fires the updated_at trigger and
+        // stamps the row with "now" (it would look like a local edit and be pushed back). Restore
+        // the cloud's values (they differ from the stamped ones, so no trigger fires).
+        if (record.updated_at && restoreStmt) restoreStmt.run(record.updated_at, record.last_synced_at ?? record.updated_at, record.global_id);
+      }
+    }
+  });
+  tx(mappedData);
+  if (counts) { counts.inserted += applied.inserted; counts.updated += applied.updated; counts.newSubmitted += applied.newSubmitted; }
+  return deferred;
+}
+
+
 export async function pullFromCloud(client: SupabaseClient, localId: number, globalId: string, tables: readonly string[] = PULL_TABLES) {
+  const counts: Record<string, PullStats> = {};
+  if (tables.some(t => ORDER_PULL_TABLES.includes(t))) await callRpc(localId, 'orders_sweep', {}, { timeoutMs: 10000 });
   // KEYSET paging on (col, global_id): page 1 is `col >= start`, later pages `col > last OR (col = last
   // AND global_id > lastId)`, so rows inserted or changed between pages can neither be skipped nor
   // duplicated, and any number of rows sharing one timestamp are all returned. `onPage` stores the page.
@@ -592,124 +741,6 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
     }
   }
 
-  // Strip cloud 'local_id'/'id'/'synced_at'/embedded parent, normalize timestamps, translate FK
-  // UUIDs -> local ids, then insert/update. Rows we must not touch are skipped (see below).
-  // Returns the earliest DEFERRED child row (parent transaction unknown here, not tombstoned, and
-  // the cloud row is recent): the caller must not advance its cursor past it, so a later pull retries.
-  function applyRows(tableName: string, rawData: any[], embedParent?: string): { synced_at: string; global_id: string } | null {
-    // Never resurrect a row deleted here on purpose (see "Tombstones"), nor a child of a deleted
-    // parent. A child whose parent is merely unknown is deferred (or dropped once older than
-    // ORPHAN_DEFER_MS). Checked on the cloud's UUIDs, i.e. BEFORE the FK translation below.
-    const isChild = tableName === 'transaction_items' || tableName === 'payments';
-    let deferred: { synced_at: string; global_id: string } | null = null;
-    let droppedOrphans = 0;
-    const data = rawData.filter(record => {
-      if (isTombstoned(tableName, record.global_id)) return false;
-      if (tableName === 'products' && record.deleted_at) {
-        const product = db.prepare('SELECT id FROM products WHERE global_id = ? AND tenant_id = ?').get(record.global_id, localId) as any;
-        if (product) {
-          // A cloud deletion wins even when this register has an unpushed edit.
-          db.transaction(() => {
-            deleteProductLocally(localId, product.id);
-            markTombstonesPurged([{ table: 'products', globalId: record.global_id }]);
-          })();
-        }
-        return false;
-      }
-      if (!isChild) return true;
-      if (isTombstoned('transactions', record.transaction_id)) return false;
-      if (getLocalId('transactions', record.transaction_id)) return true;
-      const ts = record.synced_at ? Date.parse(record.synced_at) : NaN;
-      if (Number.isFinite(ts) && ts > Date.now() - ORPHAN_DEFER_MS) {
-        if (!deferred) deferred = { synced_at: record.synced_at, global_id: record.global_id };
-      } else droppedOrphans++;
-      return false;
-    });
-    if (droppedOrphans) console.warn(`⚠️ [SYNC] Dropped ${droppedOrphans} ${tableName} row(s) older than 24h whose parent transaction never arrived.`);
-    if (data.length === 0) return deferred;
-    const mappedData = data.map(record => {
-      const { local_id, id, synced_at, ...rest } = record;
-      if (embedParent) delete rest[embedParent];
-      const mapped: any = { ...rest };
-      if (mapped.updated_at) mapped.updated_at = mapped.updated_at.replace('T', ' ').replace('Z', '');
-      if (mapped.created_at) mapped.created_at = mapped.created_at.replace('T', ' ').replace('Z', '');
-      if (mapped.deleted_at) mapped.deleted_at = mapped.deleted_at.replace('T', ' ').replace('Z', '');
-      if (fkMap[tableName]) {
-        for (const [col, refTable] of Object.entries(fkMap[tableName])) {
-          if (mapped[col]) mapped[col] = getLocalId(refTable, mapped[col]);
-        }
-      }
-      const clean = dropUnknownLocalColumns(tableName, mapped);
-      // A row we just pulled IS the cloud's copy: mark it synced (last_synced_at = its updated_at) in
-      // the same write, so it is never pushed straight back. Must be part of the same statement: a
-      // separate UPDATE would fire the updated_at trigger and bump the row. Capped at "now" so a cloud
-      // stamp from a register whose clock runs ahead can't swallow a later local edit.
-      if (clean.updated_at && localColumns(tableName).has('last_synced_at')) {
-        const nowStamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
-        clean.last_synced_at = String(clean.updated_at) < nowStamp ? clean.updated_at : nowStamp;
-      }
-      return clean;
-    });
-
-    const columns = Object.keys(mappedData[0]);
-    // Stakeholder balances are DERIVED locally (server/balance.ts): the cloud copy only seeds a
-    // brand-new row, never overwrites one we have (registers with different baselines would fight).
-    const updateColumns = tableName === 'stakeholders' ? columns.filter(c => c !== 'balance') : columns;
-    const updateSet = updateColumns.map(col => `${col} = ?`).join(', ');
-    const insertCols = columns.join(', ');
-    const insertVals = columns.map(() => '?').join(', ');
-
-    const checkStmt = db.prepare(`SELECT updated_at, last_synced_at FROM ${tableName} WHERE global_id = ?`);
-    const updateStmt = db.prepare(`UPDATE ${tableName} SET ${updateSet} WHERE global_id = ?`);
-    const insertStmt = db.prepare(`INSERT INTO ${tableName} (${insertCols}) VALUES (${insertVals})`);
-    const restoreStmt = columns.includes('updated_at') && columns.includes('last_synced_at')
-      ? db.prepare(`UPDATE ${tableName} SET updated_at = ?, last_synced_at = ? WHERE global_id = ?`) : null;
-    const barcodeHolder = tableName === 'product_barcodes'
-      ? db.prepare(`SELECT id, deleted_at FROM product_barcodes WHERE barcode = ?`) : null;
-    const purgeBarcode = tableName === 'product_barcodes'
-      ? db.prepare(`DELETE FROM product_barcodes WHERE id = ?`) : null;
-
-    // Deleted-here-on-purpose parties are SOFT deleted (deleted_at): a deleted row we never held is
-    // not worth inserting. Currencies are unique per code: a second live copy with another global_id
-    // (e.g. a USD seeded by a second device) must not be inserted next to ours.
-    const skipUnknownDeleted = tableName === 'currencies' || tableName === 'users' || tableName === 'stakeholders';
-    const liveCurrencyByCode = tableName === 'currencies'
-      ? db.prepare(`SELECT 1 FROM currencies WHERE tenant_id = ? AND UPPER(code) = UPPER(?) AND deleted_at IS NULL`) : null;
-
-    const tx = db.transaction((records: any[]) => {
-      for (const record of records) {
-        const exists = checkStmt.get(record.global_id) as any;
-        if (!exists && skipUnknownDeleted && record.deleted_at) continue;
-        if (!exists && liveCurrencyByCode && !record.deleted_at && liveCurrencyByCode.get(record.tenant_id, record.code)) continue;
-        if (!exists && barcodeHolder) {
-          // product_barcodes.barcode is UNIQUE locally: a cloud row we don't have must not collide
-          // with a local row (which would fail the whole pull of this table every cycle).
-          if (record.deleted_at) continue; // a removal we never held - nothing to store
-          const holder = barcodeHolder.get(record.barcode) as any;
-          if (holder && !holder.deleted_at) continue; // live here already; our push wins
-          if (holder) purgeBarcode!.run(holder.id);
-        }
-        if (exists) {
-          // Same version already held (overlap / re-fetch): nothing to do, and an UPDATE that leaves
-          // updated_at unchanged would make the trigger bump it and re-push the row.
-          if (exists.updated_at && record.updated_at && String(exists.updated_at) === String(record.updated_at)) continue;
-          // A row with a pending local edit (never pushed, or edited since the last push) is NEVER
-          // overwritten: the push will send ours. (The tenants row is cloud-authoritative, never pushed.)
-          if (tableName !== 'tenants' && (exists.last_synced_at == null || String(exists.updated_at) > String(exists.last_synced_at))) continue;
-          updateStmt.run(...updateColumns.map(col => record[col] ?? null), record.global_id);
-        } else {
-          insertStmt.run(...columns.map(col => record[col] ?? null));
-          // The AFTER INSERT trigger re-writes updated_at, which fires the updated_at trigger and
-          // stamps the row with "now" (it would look like a local edit and be pushed back). Restore
-          // the cloud's values (they differ from the stamped ones, so no trigger fires).
-          if (record.updated_at && restoreStmt) restoreStmt.run(record.updated_at, record.last_synced_at ?? record.updated_at, record.global_id);
-        }
-      }
-    });
-    tx(mappedData);
-    return deferred;
-  }
-
   // Latest updated_at we hold for this tenant in a row that is NOT waiting to be pushed - the
   // fallback cursor. Pending local edits and unfetched rows never move it, minus an overlap.
   function fallbackStart(tableName: string): string {
@@ -718,7 +749,7 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
     else if (Object.keys(fkMap[tableName] || {}).includes('tenant_id')) scope = `tenant_id = ${Number(localId)}`;
     else if (tableName === 'product_barcodes') scope = `product_id IN (SELECT id FROM products WHERE tenant_id = ${Number(localId)})`;
     else scope = `transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ${Number(localId)})`;
-    const cleanOnly = tableName === 'tenants' ? '' : ' AND last_synced_at IS NOT NULL AND updated_at <= last_synced_at';
+    const cleanOnly = CLOUD_AUTHORITATIVE.has(tableName) ? '' : ' AND last_synced_at IS NOT NULL AND updated_at <= last_synced_at';
     const r = db.prepare(`SELECT MAX(updated_at) AS m FROM ${tableName} WHERE ${scope}${cleanOnly}`).get() as any;
     return r?.m ? shiftIso(r.m, -CURSOR_OVERLAP_MS) : EPOCH;
   }
@@ -728,7 +759,8 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
   let transactionsPullFailed = false;
   for (const tableName of PULL_TABLES) {
     if (!tables.includes(tableName)) continue;
-    if (syncPaused) return;
+    if (syncPaused) break;
+    counts[tableName] = { inserted: 0, updated: 0, newSubmitted: 0 };
     if (cloudMissingTables.has(tableName)) continue;
     if (transactionsPullFailed && (tableName === 'transaction_items' || tableName === 'payments')) continue;
     try {
@@ -748,7 +780,7 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
       const bySyncedAt = () => {
         const cur = getCursor(localId, tableName);
         return pageThrough('synced_at', cur ? shiftIso(cur.synced_at, -CURSOR_OVERLAP_MS) : EPOCH, baseQuery, (rows) => {
-          const deferred = applyRows(tableName, rows, embedParent);
+          const deferred = applyCloudRows(localId, tableName, rows, embedParent, counts[tableName]);
           // Keyset order is (synced_at, global_id): with a deferred child, advance only to the row just
           // before it (not at all if it is first) and stop paging. Re-reading the applied rows is harmless.
           const upTo = deferred ? rows.findIndex(r => r.global_id === deferred!.global_id) - 1 : rows.length - 1;
@@ -758,7 +790,7 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
         });
       };
       const byUpdatedAt = (query: () => any) =>
-        pageThrough('updated_at', fallbackStart(tableName), query, (rows) => { applyRows(tableName, rows, embedParent); });
+        pageThrough('updated_at', fallbackStart(tableName), query, (rows) => { applyCloudRows(localId, tableName, rows, embedParent, counts[tableName]); });
 
       if (chunkedOnly) {
         // handled below
@@ -786,7 +818,7 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
         for (let i = 0; i < ids.length && !res.error; i += 100) {
           const chunk = ids.slice(i, i + 100);
           res = await pageThrough('updated_at', fallbackStart(tableName), () => client.from(tableName).select('*').in(embed.fk, chunk),
-            (rows) => { applyRows(tableName, rows); });
+            (rows) => { applyCloudRows(localId, tableName, rows, undefined, counts[tableName]); });
         }
       }
 
@@ -801,6 +833,8 @@ export async function pullFromCloud(client: SupabaseClient, localId: number, glo
       console.error(`❌ [SYNC] Error pulling ${tableName}:`, err);
     }
   }
+  reportOrders(localId, counts);
+  return Object.fromEntries(Object.entries(counts).map(([table, { inserted, updated }]) => [table, { inserted, updated }])) as Record<string, PullCount>;
 }
 
 // A pull may have changed transactions/payments without going through the local write paths, so
@@ -831,19 +865,28 @@ export function recomputeBalancesAfterPull(localId: number): void {
 let scheduleTenant: string | null = null;
 let lastHotPullAt = 0;
 let lastColdPullAt = 0;
+let lastOrdersPullAt = 0;
+type Pulled = { tenantId: number; newSubmitted: number; changed: number };
+let onPulled: ((event: Pulled) => void) | undefined;
+function reportOrders(tenantId: number, counts: Record<string, PullStats>) {
+  const c = counts.orders;
+  if (c && c.inserted + c.updated > 0) onPulled?.({ tenantId, newSubmitted: c.newSubmitted, changed: c.inserted + c.updated });
+}
 
 /** Which tables are due for a pull at `now` (injectable clock for tests). Advances the schedule. */
-export function duePullTables(now: number, sessionKey: string): string[] {
-  if (scheduleTenant !== sessionKey) { scheduleTenant = sessionKey; lastHotPullAt = 0; lastColdPullAt = 0; }
+export function duePullTables(now: number, sessionKey: string, onlineOrdering = false): string[] {
+  if (scheduleTenant !== sessionKey) { scheduleTenant = sessionKey; lastHotPullAt = 0; lastColdPullAt = 0; lastOrdersPullAt = 0; }
   const hot = now - lastHotPullAt >= HOT_PULL_INTERVAL_MS;
   const cold = now - lastColdPullAt >= COLD_PULL_INTERVAL_MS;
   if (hot) lastHotPullAt = now;
   if (cold) lastColdPullAt = now;
-  if (!hot && !cold) return [];
-  return PULL_TABLES.filter(t => (hot && HOT_PULL_TABLES.includes(t)) || (cold && COLD_PULL_TABLES.includes(t)));
+  const orders = onlineOrdering && now - lastOrdersPullAt >= 30000;
+  if (orders || hot) lastOrdersPullAt = now;
+  if (!hot && !cold && !orders) return [];
+  return PULL_TABLES.filter(t => (orders && ORDER_PULL_TABLES.includes(t)) || (hot && HOT_PULL_TABLES.includes(t)) || (cold && COLD_PULL_TABLES.includes(t)));
 }
 /** Test hook: forget the pull schedule. */
-export function resetPullSchedule() { scheduleTenant = null; lastHotPullAt = 0; lastColdPullAt = 0; }
+export function resetPullSchedule() { scheduleTenant = null; lastHotPullAt = 0; lastColdPullAt = 0; lastOrdersPullAt = 0; }
 
 /**
  * One sync cycle for the currently logged-in tenant. No-op if nobody is logged in
@@ -868,7 +911,8 @@ async function runSyncCycleInner(now: number) {
   await purgeTombstonedFromCloud(session.client, session.localId);
   await pushToCloud(session.client, session.localId);
   if (!syncPaused) lastPushAt = Date.now();
-  const due = duePullTables(now, `${session.localId}:${session.globalId}`);
+  const onlineOrdering = (db.prepare('SELECT settings FROM stores WHERE tenant_id = ? AND deleted_at IS NULL').all(session.localId) as any[]).some(s => { try { return JSON.parse(s.settings || '{}').ordering_mode === 'online'; } catch { return false; } });
+  const due = duePullTables(now, `${session.localId}:${session.globalId}`, onlineOrdering);
   if (due.length === 0) return;
   await pullFromCloud(session.client, session.localId, session.globalId, due);
   if (!syncPaused) lastPullAt = Date.now();
@@ -888,9 +932,10 @@ async function forceInitialSyncInner() {
   console.log('[SYNC] Forcing initial pull for tenant...');
   await purgeTombstonedFromCloud(session.client, session.localId);
   await pullFromCloud(session.client, session.localId, session.globalId);
+  if (!syncPaused) lastPullAt = Date.now();
   // Count it as both schedules having just run, so the next cycle doesn't pull everything again.
   scheduleTenant = `${session.localId}:${session.globalId}`;
-  lastHotPullAt = lastColdPullAt = Date.now();
+  lastOrdersPullAt = lastHotPullAt = lastColdPullAt = Date.now();
   recomputeBalancesAfterPull(session.localId);
   console.log('[SYNC] Initial pull complete.');
 }
@@ -922,13 +967,16 @@ export function notifyLocalChange(): void {
 /**
  * Starts the continuous synchronization loop.
  */
-export function startSyncEngine() {
+export function startSyncEngine(options: { onPulled?: (event: Pulled) => void } = {}) {
+  onPulled = options.onPulled;
   console.log('Starting Offline-First Sync Engine...');
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     try {
       await runSyncCycle();
     } catch (err) {
       console.error('[SYNC] Critical engine error:', err);
     }
   }, SYNC_INTERVAL_MS);
+  timer.unref?.();
+  return timer;
 }

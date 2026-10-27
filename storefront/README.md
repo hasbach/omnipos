@@ -27,6 +27,47 @@ The storefront reads only the allow-listed public functions (`store_public_get`,
 `2026-10-21_retail_ordering_s1.sql` those functions don't return the ordering fields, and the storefront simply treats
 every store as "ordering off" — so the storefront and the migration can be deployed in either order.
 
+## Online orders (003 Slice 2)
+
+In `online` mode, with pickup or delivery enabled and `ORDER_GATEWAY_KEY` configured, `public/order.js` reviews
+server-priced cart lines, requires a separate confirmation to place the order, and reuses attempt/status keys on
+retry. It keeps up to 20 private links in this device's My orders, updates their state on status pages, and offers
+the WhatsApp fallback on a cloud failure when the store has a WhatsApp number. Tests enforce a 12,288-byte script
+budget (LF). Orders go through the four cloud order RPCs; the storefront still never accesses tables directly.
+
+`<root>` is either `https://<address>.<domain>` or `https://<domain>/s/<address>`:
+
+| Route | Method | Returns |
+|---|---|---|
+| `<root>/order/quote` | POST JSON `{ lines }` | 200 JSON with the cloud quote and validation problems. |
+| `<root>/order` | POST JSON `{ attempt, status_key, customer, lines, expected_total_usd, website }` | 200 JSON from `order_submit`; `created` / `existing` include `status_url`. |
+| `<root>/o/<key>` | GET/HEAD | Server-rendered status page, or 404 for an unknown key or another store's order. |
+| `<root>/o/<key>/cancel` | POST form `confirm=1` | 303 back to the status page with `cancelled=1` or `not_cancellable=1`, preserving `lang`. |
+
+Status and cancellation do not require the store to remain open or in online mode; they still need the gateway
+key. Cancellation is allowed only while submitted. Keys must be 32 characters `[A-Za-z0-9_-]`. Order responses are
+not cached or indexed; status pages also set `Referrer-Policy: no-referrer`. Cloud failures return 503 with
+`Retry-After: 30`: JSON for quote/submit, HTML for status/cancel. Preview tokens are refused.
+
+`ORDER_GATEWAY_KEY` is the server-only secret authorising the four public order RPCs. Only its SHA-256 is stored
+in the cloud table `storefront_gateway_keys`. Run `node scripts/gateway-key.mjs` to print a new key and hash; it
+writes nothing. Set the key on Render (`sync: false` in `render.yaml`); never commit it. Without it, online-mode
+stores render with ordering off and startup logs a warning.
+
+For POSTs, `src/network.ts` chooses `CF-Connecting-IP`, then `True-Client-IP`, then the last `X-Forwarded-For`
+hop, then the socket address. It hashes `UTC date + '|' + address + '|' + ORDER_GATEWAY_KEY` with SHA-256, rotating
+daily. Only the hash is sent as `p_network` on order submission; the raw IP is never forwarded to the cloud or
+logged. Check the once-per-process `network source: ...` log on Render to verify which source production uses.
+
+Deploy in this order (owner setup):
+
+1. Apply `supabase/migrations/2026-10-23_retail_ordering_s2.sql` after Slice 1, then run
+   `supabase/checks/2026-10-23_retail_ordering_s2_checks.sql` (the key-count check needs the next step).
+2. Generate the gateway key and insert only its hash into `storefront_gateway_keys`; recheck the key count.
+3. Set `ORDER_GATEWAY_KEY` on Render.
+4. Merge to `main` and deploy the storefront.
+5. Release the desktop app.
+
 ## Checks
 
 - `npm test` (repo root) covers routing, rendering, privacy and caching headers (`tests/storefront-*.test.ts`) and

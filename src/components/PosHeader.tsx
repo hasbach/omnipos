@@ -7,7 +7,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
-import { Badge, IconButton, Kbd } from './ui';
+import { Badge, Button, IconButton, Kbd } from './ui';
+import { useOrderBadge } from '../hooks/useOrderNotifications';
+import OnlineOrdersDrawer from './pos/OnlineOrdersDrawer';
 import { formatMoney, partyDisplayName } from '../lib/format';
 import type { PriceLevel } from '../lib/pricing';
 import { usePermissions, refreshPermissions } from '../lib/usePermissions';
@@ -25,6 +27,8 @@ export default function PosHeader() {
   } = pos as any;
 
   const { can } = usePermissions();
+  const orderCount = useOrderBadge();
+  const [showOnlineOrders, setShowOnlineOrders] = React.useState(false);
   // Locking the till drops the PIN user from the server session too (roles apply per signed-in user).
   const lockTerminal = () => {
     fetch('/api/auth/lock', { method: 'POST' }).catch(() => {}).finally(() => { refreshPermissions(); });
@@ -71,6 +75,12 @@ export default function PosHeader() {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap justify-end">
+        {can('orders.view') && (
+          <Button variant="secondary" onClick={() => setShowOnlineOrders(true)}>
+            {t('orders_title')}
+            {orderCount > 0 && <Badge variant="warning">{orderCount}</Badge>}
+          </Button>
+        )}
         {/* Price level selector — changeable per sale, defaults from the selected customer.
             Hidden entirely when Settings → Sales & Pricing → enable_price_levels is off. */}
         {priceLevelsEnabled && (
@@ -291,6 +301,13 @@ export default function PosHeader() {
         </div>
       </div>
       <BalancePaymentModal open={showBalanceModal} onClose={() => setShowBalanceModal(false)} />
+      {can('orders.view') && (
+        <OnlineOrdersDrawer
+          open={showOnlineOrders}
+          onClose={() => setShowOnlineOrders(false)}
+          onComplete={pos.newSaleTabFromOrder}
+        />
+      )}
     </header>
   );
 }

@@ -18,7 +18,7 @@ const CATS: [string, string, number, StockState][] = [
 
 export interface FixtureOptions {
   /** 003: a store that takes WhatsApp orders, with listings covering the ordering cases (see below). */
-  ordering?: boolean;
+  ordering?: boolean | 'online';
 }
 
 export function demoFixture(count = 60, opts: FixtureOptions = {}): FixtureStore {
@@ -54,7 +54,7 @@ export function demoFixture(count = 60, opts: FixtureOptions = {}): FixtureStore
       address: 'Hamra Street, Beirut', default_language: 'en',
       show_local_price: true, hide_out_of_stock: false, show_exact_stock: false,
       local_currency_code: 'LBP', local_currency_symbol: 'LL', local_rate: 89500,
-      ordering_mode: opts.ordering ? 'whatsapp' : 'off',
+      ordering_mode: opts.ordering === 'online' ? 'online' : opts.ordering ? 'whatsapp' : 'off',
       pickup_enabled: true, pickup_note: opts.ordering ? 'Back door after 4 pm' : '',
       delivery_enabled: !!opts.ordering, delivery_note: opts.ordering ? 'Hamra and Ras Beirut only' : '',
       min_order_usd: opts.ordering ? 10 : null,
@@ -115,4 +115,76 @@ export class FixtureSource implements DataSource {
     const l = this.visible().find((x) => x.listing_id === listingId);
     return l ? this.strip(l) : null;
   }
+}
+
+import { createHash } from 'node:crypto';
+import { type OrderGateway, type OrderLine, type OrderSubmitPayload, type OrderResult, UpstreamError } from './data.js';
+import { isMeasuredUnit, orderableUnits } from './ordering.js';
+import { whatsappDigits } from './phone.js';
+const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
+export class FixtureOrderGateway implements OrderGateway {
+  blockedPhones = new Set<string>();
+  unavailable = false;
+  dropNextResponse = false;
+  orders: { slug: string; attempt: string; hash: string; phone: string; network: string; at: number; expires: number; order: any }[] = [];
+  constructor(public source: FixtureSource = new FixtureSource(demoFixture(60, { ordering: 'online' })), private now: () => number = Date.now) {}
+  private check() { if (this.unavailable) throw new UpstreamError('fixture unavailable'); }
+  private expire() { for (const o of this.orders) if (o.order.state === 'submitted' && o.expires < this.now()) o.order.state = 'expired'; }
+  async quote(slug: string, lines: OrderLine[]): Promise<OrderResult> {
+    this.check();
+    const store = await this.source.getStore(slug);
+    if (!store || store.ordering_mode !== 'online' || !(store.pickup_enabled || store.delivery_enabled)) return { ok: false, code: 'store_unavailable' };
+    const problems: any[] = []; const rows: any[] = []; const quantities = new Map<string, number>();
+    if (!Array.isArray(lines)) lines = [];
+    lines = lines.map(l => l && typeof l === 'object' ? l : { listing: '', unit: '', qty: 0 });
+    if (!lines.length) problems.push({ code: 'empty' });
+    if (lines.length > 50) problems.push({ code: 'too_many_lines' });
+    for (const [i, line] of lines.slice(0, 50).entries()) {
+      const l = await this.source.getListing(slug, line?.listing);
+      const u = l && orderableUnits(l).find(u => u.key === line.unit);
+      let code = !l ? 'listing_unavailable' : !u ? 'unit_not_orderable' : l.stock_state === 'out_of_stock' ? 'out_of_stock' : '';
+      const qty = line?.qty;
+      if (!code && (!Number.isFinite(qty) || qty <= 0 || qty > 999 || (line.unit === 'base' && isMeasuredUnit(l!.unit) ? Math.abs(qty * 1000 - Math.round(qty * 1000)) > 1e-6 : !Number.isInteger(qty)))) code = 'invalid_quantity';
+      if (code) { problems.push({ line: i + 1, code }); rows.push({ line: i + 1, ok: false, problem: code, listing: line.listing, unit: line.unit, qty, product_name: l?.title || '', unit_name: u?.name || '', unit_price_usd: u?.price ?? null, unit_price_local: null, line_total_usd: null, line_total_local: null }); continue; }
+      const local = u!.price_lbp && u!.price_lbp > 0 ? u!.price_lbp : Math.round(u!.price * (store.local_rate || 0));
+      rows.push({ line: i + 1, ok: true, problem: null, unit_factor: u!.factor, listing: line.listing, unit: line.unit, qty, price: u!.price, product_name: l!.title, unit_name: u!.name, ordered_qty: qty, confirmed_qty: null, unit_price_usd: u!.price, unit_price_local: local, line_total_usd: Math.round(u!.price * qty * 100) / 100, line_total_local: Math.round(local * qty) });
+      quantities.set(line.listing, (quantities.get(line.listing) || 0) + qty * u!.factor);
+      if (line.price !== undefined && line.price !== u!.price) problems.push({ line: i + 1, code: 'price_changed' });
+    }
+    for (const [i, line] of lines.entries()) { const l = await this.source.getListing(slug, line?.listing); if (l?.min_quantity && (quantities.get(line.listing) || 0) < l.min_quantity) problems.push({ line: i + 1, code: 'below_listing_minimum', min: l.min_quantity }); }
+    const total_usd = Math.round(rows.reduce((n, l) => n + l.line_total_usd, 0) * 100) / 100;
+    if (store.min_order_usd && total_usd < store.min_order_usd) problems.push({ code: 'below_store_minimum', min: store.min_order_usd });
+    return { ok: true, code: 'ok', quote: { lines: rows, total_usd, total_local: rows.reduce((n, l) => n + l.line_total_local, 0), local: { code: store.local_currency_code, rate: store.local_rate }, problems } };
+  }
+  async submit(slug: string, p: OrderSubmitPayload): Promise<OrderResult> {
+    this.check(); this.expire();
+    const store = await this.source.getStore(slug);
+    if (!store || store.ordering_mode !== 'online' || !(store.pickup_enabled || store.delivery_enabled)) return { ok: false, code: 'store_unavailable' };
+    const existing = this.orders.find(o => o.slug === slug && o.attempt === p.attempt);
+    if (existing) return existing.hash === hashKey(String(p.status_key)) ? { ok: true, code: 'existing', number: existing.order.number, order: existing.order } : { ok: false, code: 'refused' };
+    if (p.website) return { ok: false, code: 'refused' };
+    const invalid = (field: string) => ({ ok: false, code: 'invalid', field });
+    if (!/^[A-Za-z0-9_-]{32}$/.test(p.status_key || '')) return invalid('status_key');
+    if (!p.attempt || typeof p.attempt !== 'string') return invalid('attempt');
+    const c = p.customer; if (!c || typeof c.name !== 'string' || !c.name.trim() || c.name.length > 80) return invalid('name');
+    const phone = typeof c.phone === 'string' ? whatsappDigits(c.phone) : null;
+    if (!phone || phone.length < 8 || phone.length > 15) return invalid('phone');
+    if (!['pickup','delivery'].includes(c.fulfilment) || !(c.fulfilment === 'pickup' ? store.pickup_enabled : store.delivery_enabled)) return invalid('fulfilment');
+    if ((c.address && (typeof c.address !== 'string' || c.address.length > 300)) || (c.fulfilment === 'delivery' && (typeof c.address !== 'string' || !c.address.trim()))) return invalid('address');
+    if (c.note && (typeof c.note !== 'string' || c.note.length > 300)) return invalid('note');
+    if (this.blockedPhones.has(phone) || this.blockedPhones.has('+' + phone)) return { ok: false, code: 'refused' };
+    const own = this.orders.filter(o => o.slug === slug && o.phone === phone);
+    if (own.filter(o => o.at > this.now() - 3600000).length >= 5 || own.filter(o => o.order.state === 'submitted').length >= 3) return { ok: false, code: 'phone_limit' };
+    const network = this.orders.filter(o => o.network === p.network && o.at > this.now() - 3600000);
+    if (network.length >= 30 || network.filter(o => o.slug === slug).length >= 10) return { ok: false, code: 'network_limit' };
+    const result = await this.quote(slug, p.lines); const q = result.quote;
+    if (q.problems.length || q.total_usd !== p.expected_total_usd || q.lines.some((l: any, i: number) => l.price !== p.lines[i]?.price)) return { ok: false, code: 'changed', quote: q };
+    const at = this.now();
+    const order = { number: `W-${1001 + this.orders.filter(o => o.slug === slug).length}`, state: 'submitted', first_name: c.name.trim().split(/\s+/)[0], fulfilment: c.fulfilment, address: c.fulfilment === 'delivery' ? c.address : null, submitted_at: new Date(at).toISOString(), lines: q.lines.map((l: any) => ({ product_name: l.product_name, unit_name: l.unit_name, ordered_qty: l.qty, confirmed_qty: null, shortfall_reason: null, unit_price_usd: l.unit_price_usd, unit_price_local: l.unit_price_local, line_total_usd: l.line_total_usd, line_total_local: l.line_total_local })), total_usd: q.total_usd, total_local: q.total_local, confirmed_total_usd: null, confirmed_total_local: null, confirmed_at: null, ready_at: null, closed_at: null, reason: null, cancelled_by: null, local_currency: store.local_currency_code, store: { slug, name: store.name, contact_whatsapp: store.contact_whatsapp, contact_phone: store.contact_phone, contact_email: store.contact_email } };
+    this.orders.push({ slug, attempt: p.attempt, hash: hashKey(p.status_key), phone, network: p.network || '', at, expires: at + 86400000, order });
+    if (this.dropNextResponse) { this.dropNextResponse = false; throw new UpstreamError('fixture dropped response'); }
+    return { ok: true, code: 'created', number: order.number, order };
+  }
+  async status(key: string): Promise<OrderResult> { this.check(); this.expire(); const o = this.orders.find(o => o.hash === hashKey(key)); return o ? { ok: true, order: o.order } : { ok: false, code: 'not_found' }; }
+  async cancel(key: string): Promise<OrderResult> { const r = await this.status(key); if (!r.ok) return r; if (r.order.state !== 'submitted') return { ...r, ok: false, code: 'not_cancellable' }; r.order.state = 'cancelled'; r.order.cancelled_by = 'customer'; r.order.closed_at = new Date(this.now()).toISOString(); return { ...r, code: 'cancelled' }; }
 }

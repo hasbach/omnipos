@@ -29,6 +29,9 @@ export default {
     perm_area_admin: 'Administration',
     perm_area_pos: 'Point of sale',
     perm_area_commerce: 'Online store',
+    perm_area_orders: 'Online orders',
+    perm_orders_view: 'View online orders',
+    perm_orders_manage: 'Manage online orders',
 
     perm_dashboard_overview: 'View the dashboard overview',
     perm_invoices_view: 'View invoices',
@@ -99,6 +102,9 @@ export default {
     perm_area_admin: 'الإدارة',
     perm_area_pos: 'نقطة البيع',
     perm_area_commerce: 'المتجر الإلكتروني',
+    perm_area_orders: 'الطلبات عبر الإنترنت',
+    perm_orders_view: 'عرض الطلبات عبر الإنترنت',
+    perm_orders_manage: 'إدارة الطلبات عبر الإنترنت',
 
     perm_dashboard_overview: 'عرض نظرة عامة على لوحة التحكم',
     perm_invoices_view: 'عرض الفواتير',
@@ -169,6 +175,9 @@ export default {
     perm_area_admin: 'Administration',
     perm_area_pos: 'Point de vente',
     perm_area_commerce: 'Boutique en ligne',
+    perm_area_orders: 'Commandes en ligne',
+    perm_orders_view: 'Voir les commandes en ligne',
+    perm_orders_manage: 'Gérer les commandes en ligne',
 
     perm_dashboard_overview: "Voir l'aperçu du tableau de bord",
     perm_invoices_view: 'Voir les factures',

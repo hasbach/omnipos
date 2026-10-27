@@ -8,6 +8,7 @@
 //  - Public (anonymous) reads go through cloud functions with an explicit field allow-list
 //    (supabase/migrations/2026-10-18_commerce_store_foundation.sql), never through raw tables.
 import { db, logAction } from './db.js';
+import { callRpc } from './cloudCall.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 import { tierUnitPrice, uomUnitPrice } from './pricing.js';
 import { RESERVED_SLUGS } from '../storefront/src/reserved.js';
@@ -113,6 +114,7 @@ const STORE_SETTING_FLAGS = ['show_exact_stock', 'hide_out_of_stock', 'show_loca
 // 003 ordering settings (specs/003-retail-ordering, research R6): ordering stays off until the owner opts in.
 export const ORDERING_MODES = ['off', 'whatsapp', 'online'] as const;
 const STORE_SETTING_DEFAULTS = {
+  order_expiry_hours: 24,
   show_exact_stock: 0, hide_out_of_stock: 0, show_local_price: 1, category_order: [] as string[],
   ordering_mode: 'off', pickup_enabled: 1, pickup_note: '', delivery_enabled: 0, delivery_note: '', min_order_usd: null as number | null,
 };
@@ -205,9 +207,13 @@ function storeFields(body: any, existingSettings?: any) {
       if ((STORE_SETTING_FLAGS as readonly string[]).includes(k)) {
         if (![true, false, 0, 1].includes(v as any)) throw fail(`${k} must be on or off.`, 'STORE_SETTINGS_INVALID', `settings.${k}`);
         merged[k] = v ? 1 : 0;
+      } else if (k === 'order_expiry_hours') {
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 72) {
+          throw fail('Enter a whole number from 1 to 72.', 'STORE_ORDER_EXPIRY_INVALID', 'settings.order_expiry_hours');
+        }
+        merged[k] = v;
       } else if (k === 'ordering_mode') {
-        if (!(ORDERING_MODES as readonly string[]).includes(v as any)) throw fail('Choose off or WhatsApp.', 'STORE_SETTINGS_INVALID', 'settings.ordering_mode');
-        if (v === 'online') throw fail('Online orders are not available yet.', 'ORDERING_MODE_UNAVAILABLE', 'settings.ordering_mode');
+        if (!(ORDERING_MODES as readonly string[]).includes(v as any)) throw fail('Choose off, WhatsApp or online orders.', 'STORE_SETTINGS_INVALID', 'settings.ordering_mode');
         merged[k] = v;
       } else if (k === 'pickup_note' || k === 'delivery_note') {
         if (typeof v !== 'string' || v.trim().length > 200) throw fail('Use at most 200 characters.', 'STORE_SETTINGS_INVALID', `settings.${k}`);
@@ -770,6 +776,39 @@ export async function storePreviewLink(tenantId: number, storeId: number) {
 
 // ---- routes (contracts/backoffice-api.md; permissions in server/permissions.ts ROUTE_RULES) ---------
 
+async function blockedPhoneRpc(tenantId: number, storeId: number, action: 'list' | 'add' | 'remove', body?: any) {
+  const store = loadStore(tenantId, storeId);
+  const args: Record<string, unknown> = { p_store: store.global_id };
+  if (action !== 'list') {
+    if (typeof body?.phone !== 'string' || !body.phone.trim() || body.phone.length > 40) {
+      throw fail('Enter a valid phone number.', 'ORDER_PHONE_INVALID', 'phone');
+    }
+    args.p_phone = body.phone;
+    if (action === 'add') {
+      if (body.note !== undefined && (typeof body.note !== 'string' || body.note.length > 120)) {
+        throw fail('Use at most 120 characters for the note.', 'ORDER_PHONE_INVALID', 'note');
+      }
+      args.p_note = body.note ?? null;
+    }
+  }
+  const names = { list: 'order_blocked_phones', add: 'order_block_phone', remove: 'order_unblock_phone' };
+  const result = await callRpc<any>(tenantId, names[action], args);
+  if (result.ok === false) {
+    const offline = result.reason === 'offline';
+    throw fail(offline ? 'Needs internet.' : 'Cloud request failed.',
+      offline ? 'ORDER_NEEDS_ONLINE' : 'ORDER_CLOUD_FAILED', undefined, offline ? 503 : 502);
+  }
+  const value = result.value;
+  if (!value?.ok) {
+    if (value?.code === 'invalid') throw fail('Enter a valid phone number.', 'ORDER_PHONE_INVALID', 'phone');
+    if (value?.code === 'not_owner') throw fail('This store does not exist.', 'STORE_NOT_FOUND', undefined, 404);
+    throw fail('Cloud request failed.', 'ORDER_CLOUD_FAILED', undefined, 502);
+  }
+  if (action === 'list') return { rows: value.rows };
+  if (action === 'add') return { phone: value.phone };
+  return { ok: true };
+}
+
 export function setupCommerceRoutes(app: any, authenticate: any) {
   app.get('/api/commerce/status', authenticate, (req: any, res: any) => {
     res.json(commerceStatus(req.session.tenantId));
@@ -795,6 +834,13 @@ export function setupCommerceRoutes(app: any, authenticate: any) {
     }
   };
   const id = (v: any) => Number(v);
+
+  app.get('/api/commerce/stores/:id/blocked-phones', authenticate, handle((t, _u, req) =>
+    blockedPhoneRpc(t, id(req.params.id), 'list')));
+  app.post('/api/commerce/stores/:id/blocked-phones', authenticate, handle((t, _u, req) =>
+    blockedPhoneRpc(t, id(req.params.id), 'add', req.body)));
+  app.delete('/api/commerce/stores/:id/blocked-phones/:phone', authenticate, handle((t, _u, req) =>
+    blockedPhoneRpc(t, id(req.params.id), 'remove', { phone: req.params.phone })));
 
   app.get('/api/commerce/stores', authenticate, handle((t) => listStores(t)));
   app.post('/api/commerce/stores', authenticate, handle((t, u, req) => createStore(t, u, req.body)));
