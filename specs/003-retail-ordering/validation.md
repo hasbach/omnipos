@@ -74,8 +74,8 @@ Branch `003-retail-ordering-s2` (not merged). Steps refer to [quickstart-s2](qui
       (1 live row, checked via table statistics because the read-only role can't see RLS-only rows).
 - [x] `ORDER_GATEWAY_KEY` set on the Render service `omnipos-storefront` (2026-10-23). It takes effect at the next
       deploy, i.e. when this branch is merged to `main`.
-- [ ] §1.5 Network header: after that deploy, read the one-time `network source: …` log line on Render at the first
-      order. `socket` means every visitor counts as one network: fix the header choice before going live.
+- [x] §1.5 Network header (2026-10-27, after the merge deployed the storefront): the Render log reports
+      `network source: CF-Connecting-IP`, so per-network limits see each visitor's own address.
 
 ## §2. Automated checks (2026-10-27)
 
@@ -105,18 +105,19 @@ with a reduced line and reason, complete W-1003 at the POS as cashier (paid $10 
 linked; stock down; second completion refused; back office shows the sale), blocked phones add / remove / block
 from an order, Arabic RTL. The fake cloud doesn't write order history or recompute confirmed totals.
 
-## §4. End-to-end on a test store (cloud + two registers) — to do
+## §4. End-to-end on a test store (cloud + two registers) — partly done
 
-Only on a **test** business, never a customer tenant on the dev PC. Needs the merge (storefront deploy) and a
-desktop build of this branch on two registers.
+Only on a **test** business, never a customer tenant on the dev PC. 2026-10-27, after PR #5 was merged and deployed:
+one register (`npm run dev` on the dev PC, signed in to the test business "test store", store `teststore`) and the
+live storefront `teststore.myomnipos.com` opened from the same PC (made-up customer name and phone).
 
 | Step | Result | Timing |
 |---|---|---|
-| 1 Turn on Online orders (expiry 1 h) → storefront shows "Review order" | | ≤ 5 min expected |
-| 2 Order from a phone → toast + tone on A and B, badge 1; muted B shows the toast silently | | notification delay: |
-| 3 Accept with a change on A; B refused as already handled; phone shows Accepted with 4 | | status delay: |
+| 1 Turn on Online orders (expiry 1 h) → storefront shows "Review order" | ✔ setting in the cloud 5 s after saving; the live cart already ran in online mode with the new scripts | < 1 min |
+| 2 Order → register sees it | ✔ W-1001 placed 09:19:09 UTC (cloud quote and submit through the gateway key); the register had it at the first check. Toast/tone, a second register and mute not checked | ≈ 10 s |
+| 3 Accept → phone shows Accepted | ✔ accepted (no change); live status page "Accepted, Confirmed 1" at once. **Found and fixed:** the cloud's reply has no `tenant_id` on lines, so the register dropped them until the next pull (the open drawer showed "—" for the confirmed quantity); second register not checked | status: immediate |
 | 4 WhatsApp the customer (accepted message, store language) | | |
-| 5 Complete the sale on A (45 USD cash + LBP); stock, receipt, Completed + link; B refused | | |
+| 5 Complete the sale | ✔ POS drawer → tab "Sale W-1001" at the order price → Quick Cash: transaction #191, stock 50 → 49; cloud order `completed` with `sale_global_id` = the transaction's `global_id`, history submitted → confirmed → completed, the sale pushed to the cloud with its `order_global_id`; a second completion refused (409); live status page "Completed". Mixed USD/LBP payment, receipt and second register not checked | |
 | 6 Reject with a reason → phone shows it | | |
 | 7 Expiry after 1 h → Expired on phone and both registers | | |
 | 8 Offline register B → read-only list, POS still sells | | |

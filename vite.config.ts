@@ -23,6 +23,9 @@ export default defineConfig(({mode}) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      // `npm run dev` keeps its database in the repo root: every write touches pos.db-wal, and a watched
+      // change reloads the page (which locks the register). Never watch the database or its session files.
+      watch: { ignored: ['**/pos.db', '**/pos.db-*', '**/sessions/**'] },
     },
   };
 });
