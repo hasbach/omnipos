@@ -52,6 +52,6 @@ ${flags.not_cancellable ? `<p role="status">${html(t(lang, 'not_cancellable_noti
 ${state === 'submitted' ? `<form method="post" action="${attr(ctx.link('/o/' + statusKey + '/cancel'))}"><label class="sf-check"><input type="checkbox" name="confirm" value="1" required> ${html(t(lang, 'cancel_confirm'))}</label><button class="sf-button" type="submit">${html(t(lang, 'cancel_order'))}</button></form>` : ['confirmed', 'ready'].includes(state) ? `<p>${html(t(lang, 'cannot_cancel_contact'))}</p>` : ''}
 ${contactButtons(lang, store, { whatsapp: t(lang, 'wa_store', { store: store.name, url: ctx.canonicalHome }), subject: String(order.number) })}
 <p><a href="${attr(ctx.link('/'))}">${html(t(lang, 'back_to_store'))}</a></p><section id="sf-myorders"></section></section>`;
-  const json = JSON.stringify({ address: ctx.address, base: ctx.base, status: { number: order.number, key: statusKey, at: order.submitted_at, state }, ui: Object.fromEntries(ORDER_UI_KEYS.map(k => [k, t(lang, k)])) }).replace(/</g, '\\u003c');
+  const json = JSON.stringify({ address: ctx.address, base: ctx.base, lang, status: { number: order.number, key: statusKey, at: order.submitted_at, state }, ui: Object.fromEntries(ORDER_UI_KEYS.map(k => [k, t(lang, k)])) }).replace(/</g, '\\u003c');
   return layout({ lang, meta: { title: t(lang, 'order_number', { number: String(order.number) }) }, body, store, homeHref: ctx.link('/'), assetVersion: ctx.assetVersion, websiteUrl: ctx.websiteUrl, noindex: true, refresh: ['submitted', 'confirmed', 'ready'].includes(state), statusJson: json });
 }

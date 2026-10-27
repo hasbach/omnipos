@@ -123,3 +123,13 @@ updates the visitor's My orders state.
   to the `ASSET_VERSION` hash.
 - Status page HTML ≤ 30 KB. CSS stays ≤ 24 KB, the Slice 1 limit.
 - The pages of `off` and `whatsapp` stores are unchanged.
+
+## Implementation notes
+
+- Status and customer cancel bypass the store gate, so existing orders remain accessible after a store is paused
+  or stops taking orders. A status link under another store address returns 404.
+- On cloud failure, status/cancel return a 503 HTML page; quote/submit return the documented 503 JSON. Both set
+  `Retry-After: 30`. Cancel redirects preserve `lang` as well as the result flag; `created` / `existing`
+  `status_url` also preserves `lang`, and so do the My orders links that `order.js` builds (payload `lang`), so an
+  Arabic shopper does not land on a status page in the store's default language.
+- The network hash is computed only for POSTs, and only submission sends it to the cloud as `p_network`.

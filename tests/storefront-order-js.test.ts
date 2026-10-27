@@ -173,3 +173,11 @@ test('status script updates only this store device history, without fetching', (
   assert.equal(list.length, 1); assert.equal(list[0].state, 'ready');
   assert.equal(page.byId['sf-myorders'].querySelector('a')!.href, '/s/beirut-market/o/' + key);
 });
+
+test('"My orders" links keep the page language', () => {
+  const storage = memoryStorage(); const key = 'z'.repeat(32);
+  storage.setItem(ORDERS, JSON.stringify({ v: 1, orders: [{ number: 'W-1', key, at: '2026-01-01', state: 'submitted' }] }));
+  const page = { body: new FakeEl('body'), byId: { 'sf-myorders': new FakeEl('section') } };
+  run({ storage, page, order: true, config: { address: 'beirut-market', base: '/s/beirut-market', lang: 'ar', status: { number: 'W-1', key, at: '2026-01-01', state: 'ready' }, ui: __dicts.ar }, globals: { fetch: () => assert.fail('no status fetch') } });
+  assert.equal(page.byId['sf-myorders'].querySelector('a')!.href, '/s/beirut-market/o/' + key + '?lang=ar');
+});

@@ -137,3 +137,26 @@ All three are online only; offline returns `ORDER_NEEDS_ONLINE`.
   - "Orders expire after (hours)";
   - "Blocked phones" (list, add, remove; online only).
 - **Notifications:** a toast, a tone and a badge (research R21), plus a mute toggle on the Online orders page.
+
+## Implementation notes
+
+- Action replies update the mirrored order and lines immediately, including refusals carrying an order; history
+  events arrive on the next orders pull (30 s), rather than in the action write-back.
+- Detail also returns `online`, `customer_wa_digits` and `store` (including language and pickup note); its order
+  includes the formatted `W-<n>` number and `effective_state`.
+- Sale-draft reads require `orders.view` through the generic GET rule; there is no separate POS sale permission
+  check. The draft checks for an existing sale before checking state, converts removed units to base, and omits
+  zero-confirmed lines. Without exactly one phone match it uses the live `Walk-in Customer`, or null if absent.
+- Transaction order pricing applies only when the submitted price matches the order price (within rounding
+  tolerance), the unit matches (or converts to base after removal), and quantity fits the remaining confirmed
+  quantity across items. Other prices follow normal sale rules.
+- `order_global_id: null` follows the ordinary sale path. A non-string order id, refund or purchase with an order
+  returns `ORDER_NOT_COMPLETABLE` (409). Validation runs the sale transaction with a rollback sentinel, then
+  re-runs it to commit after cloud completion.
+- Best-effort `order_complete_undo` also runs after a timeout/dropped completion response, since the cloud may
+  have completed it. Completion refusals `invalid_transition`, `expired` and `not_found` map to
+  `ORDER_NOT_COMPLETABLE` (409); `handled` remains `ORDER_ALREADY_COMPLETED`.
+- Blocked-phone HTTP responses are `{rows:[...]}` for GET, `{phone:<normalised>}` for POST, and `{ok:true}` for
+  DELETE. Cloud `not_owner` maps to `STORE_NOT_FOUND` (404).
+- The page key/path is `online-orders`. New-order toasts show the count, since the socket message has no order
+  number; mute silences only the tone.

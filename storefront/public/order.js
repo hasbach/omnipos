@@ -24,7 +24,7 @@
     return n;
   }
   function empty(n) { if (n) while (n.firstChild) n.removeChild(n.firstChild); }
-  function orderUrl(key) { return (cfg.base !== undefined ? cfg.base : cfg.api.submit.replace(/\/order(?:\?.*)?$/, '')) + '/o/' + key; }
+  function orderUrl(key) { return (cfg.base !== undefined ? cfg.base : cfg.api.submit.replace(/\/order(?:\?.*)?$/, '')) + '/o/' + key + (cfg.lang ? '?lang=' + cfg.lang : ''); }
   function orders() {
     var v = read(ORDERS);
     return v && v.v === 1 && Array.isArray(v.orders) ? v.orders.filter(function (o) {

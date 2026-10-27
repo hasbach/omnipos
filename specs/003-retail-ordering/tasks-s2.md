@@ -551,17 +551,19 @@ that its next order is refused; invalid hours are refused with the field error.
 
 ## Phase 7: Polish & cross-cutting
 
-- [ ] T051 [P] Update the docs.
+- [X] T051 [P] Update the docs.
   - `storefront/README.md`: `order.js`, the order routes, `ORDER_GATEWAY_KEY`, the network header check, and the
     deploy order (migration → gateway key → env var → storefront deploy → desktop release).
   - Record any deviation from the contracts in the contract files.
-- [ ] T052 [P] Check i18n and RTL.
+- [X] T052 [P] Check i18n and RTL.
   - The storefront key-parity test covers the new keys.
   - The back-office `orders.ts` locale has the same keys in en/ar/fr.
   - An Arabic status page and cart page render with no English labels.
-- [ ] T053 Run the full gate and fix anything red: `npm test`, `npx tsc --noEmit` (no new errors vs T001),
+  - **Done note:** back-office `orders.ts` has 92 keys in each language (none missing/empty, no Latin-only Arabic values); the storefront parity test iterates every key. Found and fixed: the status link returned after submit (`status_url`) and the My orders links built by `order.js` dropped `?lang=`, so an Arabic shopper got the status page in the store's default language. Now `status_url` keeps `lang` and the payloads carry `lang` for `order.js` (order.js 12,234 / 12,288 bytes; `ASSET_VERSION` e1b5858f19); two regression tests added. Checked on the fixture: Arabic cart, order and status page show only Arabic labels.
+- [X] T053 Run the full gate and fix anything red: `npm test`, `npx tsc --noEmit` (no new errors vs T001),
   `npm run build`, `npm run build:server` and `node --check dist-server/server.js`.
-- [ ] T054 Record the results.
+  - **Done note:** 2026-10-27: 592/592 tests, `tsc` 0 errors, both builds ok (existing chunk-size warning only), `node --check` ok; better-sqlite3 back on the Electron ABI.
+- [X] T054 Record the results.
   - Add a "Slice 2" section to `specs/003-retail-ordering/validation.md` with the quickstart-s2 §2–3 results and
     placeholders for §1 (owner setup) and §4 (two registers on a test business, notification and status timings).
   - Update the `ROADMAP.md` 003 row (Slice 2 implemented, not merged; pending: migration, gateway key, Render env,

@@ -175,3 +175,16 @@ nothing to disk.
 -- Supabase SQL editor: only the hash
 INSERT INTO storefront_gateway_keys (key_hash, label) VALUES ('<sha256 hex>', 'render-2026-10');
 ```
+
+## Implementation notes
+
+- Hashing uses `_order_sha256` with core `sha256(convert_to(..., 'UTF8'))`, rather than `digest`; pgcrypto is not
+  required. An empty quote adds the order-level problem `empty`.
+- `order_submit` also returns `invalid` with field `attempt` unless the idempotency key matches
+  `[A-Za-z0-9-]{8,64}`. Successful
+  `order_status` includes `code: 'ok'`.
+- `order_accept` also returns `invalid` for non-array `p_lines`, or with `line_no` for a non-numeric or negative
+  confirmed quantity. `order_complete` returns `invalid` when the sale id is null.
+- Blocked-phone functions use envelopes: list returns `{ok:true, code:'ok', rows:[...]}`, add returns
+  `{ok:true, code:'ok', phone:<normalised>}`, and remove returns `{ok:true, code:'ok'}`. Remove uses the supplied
+  phone unchanged if normalisation fails, returning success rather than `invalid`.

@@ -214,7 +214,9 @@ async function handleOrderRoute(r: ReturnType<typeof route>, req: StoreRequest, 
       if (r.kind === 'orderQuote') return orderJson(200, await gateway.quote(r.address, payload.lines));
       const result = await gateway.submit(r.address, { ...payload, network: req.network || '' });
       const sent = result.code === 'created' || result.code === 'existing';
-      return orderJson(200, sent ? { ...result, status_url: base + '/o/' + payload.status_key } : result);
+      // The status link keeps the shopper's language (the page otherwise falls back to the store's).
+      const statusUrl = url(base + '/o/' + payload.status_key, { lang: r.params.lang });
+      return orderJson(200, sent ? { ...result, status_url: statusUrl } : result);
     }
 
     // Status and cancel keep working when the store is later paused or stops taking orders (spec edge case:

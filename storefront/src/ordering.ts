@@ -65,6 +65,7 @@ export interface OrderPayload {
   storeName: string;
   wa?: string;
   mode?: 'online';
+  lang?: Lang;
   api?: { quote: string; submit: string };
   local: { show: boolean; code: string | null; symbol: string | null; rate: number | null };
   pickup: { on: boolean; note: string };
@@ -90,7 +91,8 @@ export function orderPayload(i: PayloadInput): OrderPayload {
   const storeLang: Lang = LANGS.includes(store.default_language as Lang) ? (store.default_language as Lang) : 'en';
   const online = onlineOrdering(store, i.gatewayKey);
   return {
-    ...(online ? { mode: 'online' as const, api: { quote: i.link('/order/quote'), submit: i.link('/order') } } : {}),
+    // lang: order.js keeps it on the status links it builds ("My orders").
+    ...(online ? { mode: 'online' as const, lang, api: { quote: i.link('/order/quote'), submit: i.link('/order') } } : {}),
     address: i.address,
     home: i.canonicalHome,
     cart: i.link('/cart'),

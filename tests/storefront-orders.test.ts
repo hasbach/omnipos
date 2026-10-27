@@ -35,6 +35,8 @@ test('create, replay, status and cancel redirects', async () => {
   const { call, data } = setup();
   const payload = { attempt: 'attempt', status_key: key, customer: { name: 'Jane Doe', phone: '70123456', fulfilment: 'pickup' }, lines: [{ listing: data.fx.listings[0].listing_id, unit: 'base', qty: 10, price: 1.5 }], expected_total_usd: 15, website: '' };
   for (const code of ['created','existing']) { const r = await call('/order','POST',JSON.stringify(payload)); const b = JSON.parse(String(r.body)); assert.equal(b.code,code); assert.equal(b.status_url,`/o/${key}`); }
+  // The status link keeps the shopper's language, or the page falls back to the store's.
+  assert.equal(JSON.parse(String((await call('/order?lang=ar','POST',JSON.stringify(payload))).body)).status_url, `/o/${key}?lang=ar`);
   const status = await call(`/o/${key}`,'GET'); assert.equal(status.status,200); assert.equal(status.headers['Cache-Control'],'private, no-store'); assert.equal(status.headers['Referrer-Policy'],'no-referrer'); assert.match(String(status.body),/W-1001/); assert.match(String(status.body),/submitted/);
   for (const flag of ['cancelled','not_cancellable']) { const r = await call(`/o/${key}/cancel`,'POST','confirm=1',{'content-type':'application/x-www-form-urlencoded'}); assert.equal(r.status,303); assert.equal(r.headers.Location,`/o/${key}?${flag}=1`); }
 });
