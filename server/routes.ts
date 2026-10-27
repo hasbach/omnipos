@@ -36,6 +36,7 @@ import {
   loadUnitsByProduct, loadUnitsForProduct, loadUnit, normalizeUnitsPayload, assertBarcodesFree, saveProductUnits,
   legacyPackageColumns, refundLineStates, displayFields,
 } from "./uom.js";
+import { updatePurchaseProductCost } from "./purchaseCost.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
 import { resolveArchiveIdCollisions } from "./settlementIds.js";
@@ -762,8 +763,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       // used to just delete these with no trace anywhere, which meant every itemized cash-in/out
       // and its reason was permanently unrecoverable after every settlement.
       db.prepare(`
-        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id)
-        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id
+        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id)
+        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id
         FROM cash_flow WHERE tenant_id = ?
       `).run(tenantId);
 
@@ -1731,7 +1732,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
             const newCost = applyPurchaseCost(product.stock || 0, product.cost, pieces, unitPrice);
             product.cost = newCost;
             product.stock = (product.stock || 0) + pieces;
-            db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, item.id, tenantId);
+            updatePurchaseProductCost(tenantId, item.id, newCost);
           }
         }
 
@@ -2003,7 +2004,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         // decrement below, using the stock as it stands right now (i.e. still including this line).
         if (tx.type === 'purchase') {
           const newCost = reversePurchaseCost(item.current_stock || 0, item.current_cost, item.quantity, item.unit_cost ?? item.unit_price);
-          db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, item.product_id, tenantId);
+          updatePurchaseProductCost(tenantId, item.product_id, newCost);
         }
         if (item.track_inventory === 0) continue;
         if (tx.type === 'sale') {
@@ -2581,13 +2582,13 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       // toward zero via the stakeholder's BASELINE (negative = owes, so a payment adds toward 0).
       if (direction === 'collect') {
         adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD, { source: 'balance_collection', user_id: userId, note: bpNote });
-        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty) VALUES (?, ?, 'in', ?, ?, ?, ?, 'customer_collection', ?)")
-          .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`, stakeholder.name);
+        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty, stakeholder_id) VALUES (?, ?, 'in', ?, ?, ?, ?, 'customer_collection', ?, ?)")
+          .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`, stakeholder.name, stakeholder_id);
       } else {
         // Paying a supplier → reduce their outstanding (move toward zero), cash goes out
         adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD, { source: 'supplier_payment', user_id: userId, note: bpNote });
-        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty) VALUES (?, ?, 'out', ?, ?, ?, ?, 'supplier_payment', ?)")
-          .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`, stakeholder.name);
+        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty, stakeholder_id) VALUES (?, ?, 'out', ?, ?, ?, ?, 'supplier_payment', ?, ?)")
+          .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`, stakeholder.name, stakeholder_id);
       }
     });
 

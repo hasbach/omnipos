@@ -199,8 +199,10 @@ const QUANTITY_COLUMNS: Record<string, string[]> = {
 };
 // Columns that exist only in the local database and must never be pushed.
 //  - stakeholders.balance_baseline (see server/balance.ts)
+//  - cash_flow.stakeholder_id: device-local id linking a balance payment to its party (server/cashFlow.ts)
 const LOCAL_ONLY_COLUMNS: Record<string, string[]> = {
   stakeholders: ['balance_baseline'],
+  cash_flow: ['stakeholder_id'],
 };
 // Columns pushed only once the cloud has them (supabase/migrations/2026-10-06_local_rates.sql). They
 // are always included in the payload; if the cloud rejects one as unknown, upsertToCloud learns that,
@@ -626,6 +628,8 @@ export function applyCloudRows(localId: number, tableName: string, rawData: any[
     const { local_id, id, synced_at, ...rest } = record;
     if (embedParent) delete rest[embedParent];
     const mapped: any = { ...rest };
+    // Keep this device's local link when updating an existing row.
+    if (tableName === 'cash_flow') delete mapped.stakeholder_id;
     if (tableName === 'order_events' && mapped.detail && typeof mapped.detail !== 'string') mapped.detail = JSON.stringify(mapped.detail);
     if (mapped.updated_at) mapped.updated_at = mapped.updated_at.replace('T', ' ').replace('Z', '');
     if (mapped.created_at) mapped.created_at = mapped.created_at.replace('T', ' ').replace('Z', '');

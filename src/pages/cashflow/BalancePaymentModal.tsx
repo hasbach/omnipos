@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Combobox, Field, Modal, MoneyInput, Select, useToast } from '../../components/ui';
+import { Button, Combobox, Field, Modal, MoneyInput, useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { formatMoney, partyDisplayName } from '../../lib/format';
 import { api } from '../../lib/api';
-import { effectiveLocalCurrency, formatRate } from '../../lib/orderTotals';
+import { effectiveLocalCurrency, formatRate, formatLocal } from '../../lib/orderTotals';
 
 interface Currency {
   id?: number;
@@ -39,7 +39,8 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
   const [direction, setDirection] = useState<'collect' | 'pay'>(initialDirection);
   const [stakeholderId, setStakeholderId] = useState('');
   const [amount, setAmount] = useState<number | ''>('');
-  const [currencyCode, setCurrencyCode] = useState('USD');
+  // '' = use the tenant's default currency (is_default) once currencies load.
+  const [currencyCode, setCurrencyCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -47,7 +48,7 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
     setDirection(initialDirection);
     setStakeholderId('');
     setAmount('');
-    setCurrencyCode('USD');
+    setCurrencyCode('');
     let cancelled = false;
     (async () => {
       try {
@@ -73,7 +74,6 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
     setDirection(d);
     setStakeholderId('');
     setAmount('');
-    setCurrencyCode('USD');
   };
 
   const selectedStakeholder = stakeholders.find((s) => s.id === parseInt(stakeholderId));
@@ -81,7 +81,15 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
   // A party's own local-currency rate overrides the global one for converting what's entered.
   const effLocal = effectiveLocalCurrency(currencies, selectedStakeholder);
   const effCurrencies: Currency[] = currencies.map((c) => (effLocal && c.code === effLocal.code ? { ...c, rate: effLocal.rate } : c));
-  const currency = effCurrencies.find((c) => c.code === currencyCode) || effCurrencies[0];
+  const defaultCode = (currencies.find((c: any) => c.is_default)?.code) || 'USD';
+  const currency = effCurrencies.find((c) => c.code === (currencyCode || defaultCode)) || effCurrencies[0];
+  const fmtIn = (n: number, c: Currency) =>
+    c.code === 'USD' ? formatMoney(n, { code: 'USD', symbol: '$' }) : formatLocal(Math.round(n), c);
+  // Amount (USD) -> every currency, e.g. "$2.35 / 210,000 LL".
+  const fmtBoth = (usdAmt: number) => effCurrencies.map((c) => fmtIn(usdAmt * (c.code === 'USD' ? 1 : c.rate), c)).join(' / ');
+  const numericAmount = typeof amount === 'number' ? amount : parseFloat(String(amount)) || 0;
+  const amountUsd = numericAmount / (currency.rate || 1);
+  const otherCurrencies = effCurrencies.filter((c) => c.code !== currency.code);
   const partyRateHint = (c: Currency) =>
     effLocal?.source === 'party' && c.code === effLocal.code
       ? ` ${direction === 'pay' ? t('party_rate_supplier', 'supplier rate') : t('party_rate_customer', 'customer rate')}`
@@ -190,24 +198,37 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
             <p className="mt-1 text-xs text-text-3">
               {t('fin_cfr_current_balance', 'Current balance')}:{' '}
               <span className={selectedStakeholder.balance > 0 ? 'font-semibold text-accent' : selectedStakeholder.balance < 0 ? 'font-semibold text-danger' : 'text-success'}>
-                {formatMoney(selectedStakeholder.balance, { code: 'USD', symbol: '$' })}
+                {effCurrencies.length > 1 ? fmtBoth(selectedStakeholder.balance) : formatMoney(selectedStakeholder.balance, { code: 'USD', symbol: '$' })}
               </span>
             </p>
           )}
         </Field>
 
-        <Field label={t('fin_currency', 'Currency')}>
-          <Select
-            value={currencyCode}
-            onChange={(e) => setCurrencyCode(e.target.value)}
-            options={effCurrencies.map((c) => ({ value: c.code, label: `${c.code} (rate ${formatRate(c.rate)}${partyRateHint(c) ? ',' + partyRateHint(c) : ''})` }))}
-          />
-        </Field>
+        {effCurrencies.length > 1 && (
+          <Field label={t('fin_currency', 'Currency')}>
+            <div className="flex gap-2">
+              {effCurrencies.map((c) => (
+                <button
+                  key={c.code}
+                  type="button"
+                  onClick={() => setCurrencyCode(c.code)}
+                  className={`flex-1 cursor-pointer rounded-lg border py-2 text-xs font-bold uppercase transition-all ${currency.code === c.code ? 'border-primary bg-primary text-on-primary' : 'border-border text-text-2'}`}
+                >
+                  {c.code}
+                </button>
+              ))}
+            </div>
+            {currency.code !== 'USD' && (
+              <p className="mt-1 text-xs text-text-3">{`1 USD = ${formatRate(currency.rate)} ${currency.code}${partyRateHint(currency)}`}</p>
+            )}
+          </Field>
+        )}
 
-        <Field label={`${t('fin_amount', 'Amount')} (${currency.symbol})`}
+        <Field
+          label={`${t('fin_amount', 'Amount')} (${currency.symbol})`}
           helper={
-            currency.code !== 'USD' && amount
-              ? `${t('fin_approx_usd', 'Approx. USD')}: ${formatMoney((typeof amount === 'number' ? amount : 0) / currency.rate, { code: 'USD', symbol: '$' })}`
+            numericAmount > 0 && otherCurrencies.length > 0
+              ? `${t('fin_cfr_equivalent', 'Equivalent')}: ${otherCurrencies.map((c) => fmtIn(amountUsd * (c.code === 'USD' ? 1 : c.rate), c)).join(' / ')}`
               : undefined
           }
         >

@@ -7,6 +7,8 @@
 import { db, logAction } from "./db.js";
 import { parseRegisterScope, registerWindow } from "./settlement.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
+import { adjustStakeholderBaseline } from "./balance.js";
+import { effectiveLocalRate, isLocalCode } from "./localCurrency.js";
 import { randomBytes } from "node:crypto";
 
 export const CASH_FLOW_CATEGORIES = [
@@ -120,12 +122,32 @@ export function editCashFlow(tenantId: number, id: number, userId: number | null
 
   const type = body.type !== undefined ? String(body.type) : row.type;
   if (type !== "in" && type !== "out") throw new ValidationError("Type must be 'in' or 'out'.", 400, { code: "CASHFLOW_TYPE_INVALID", field: "type" });
-  const { amount, rate } = validateMoney(body.amount !== undefined ? body.amount : row.amount, body.exchange_rate !== undefined ? body.exchange_rate : (row.exchange_rate || 1));
+  let { amount, rate } = validateMoney(body.amount !== undefined ? body.amount : row.amount, body.exchange_rate !== undefined ? body.exchange_rate : (row.exchange_rate || 1));
   const currency = body.currency !== undefined ? (cleanText(body.currency, 10) || "USD") : (row.currency || "USD");
   // A row with no category reads as 'other'; keep that unless the caller sets one.
   const category = validateCategory(body.category !== undefined ? body.category : (row.category || "other"), type, tenantId, row.category || "other");
   const counterparty = body.counterparty !== undefined ? cleanText(body.counterparty) : (row.counterparty ?? null);
   const reason = body.reason !== undefined ? (cleanText(body.reason, 500) ?? "") : (row.reason ?? "");
+
+  // Only balance-payment rows move the baseline. Invoice-payment cash rows do not.
+  let stakeholder: any;
+  if (row.stakeholder_id != null) {
+    stakeholder = db.prepare("SELECT id FROM stakeholders WHERE id = ? AND tenant_id = ?").get(row.stakeholder_id, tenantId);
+  } else if ([AUTO_CATEGORY.collect, AUTO_CATEGORY.pay].includes(row.category) &&
+      /^(Balance collection from |Payment to supplier )/.test(row.reason || "")) {
+    const matches = db.prepare("SELECT id FROM stakeholders WHERE name = ? AND tenant_id = ?").all(row.counterparty, tenantId) as any[];
+    if (matches.length === 1) stakeholder = matches[0];
+  }
+  // Switching a balance payment INTO the local currency converts at the party's own rate (as the
+  // original POST does); an explicit rate edit on an unchanged currency is kept as entered.
+  if (stakeholder && currency !== (row.currency || "USD")) {
+    const local = effectiveLocalRate(tenantId, stakeholder.id);
+    if (isLocalCode(local, currency)) rate = local!.rate;
+  }
+  const contribution = (entry: any) =>
+    (entry.category === AUTO_CATEGORY.collect && entry.type === "in") ||
+    (entry.category === AUTO_CATEGORY.pay && entry.type === "out")
+      ? entry.amount / (entry.exchange_rate || 1) : 0;
 
   const before = snapshot({ ...row, category: row.category || "other" });
   const after = { type, amount, currency, exchange_rate: rate, category, counterparty, reason };
@@ -133,8 +155,15 @@ export function editCashFlow(tenantId: number, id: number, userId: number | null
     throw new ValidationError("Nothing was changed.", 400, { code: "CASHFLOW_NO_CHANGES" });
   }
 
+  const balanceDelta = stakeholder ? contribution(after) - contribution(row) : 0;
   const table = archived ? "archived_cash_flow" : "cash_flow";
   db.transaction(() => {
+    if (stakeholder) {
+      db.prepare(`UPDATE ${table} SET stakeholder_id = ? WHERE id = ? AND tenant_id = ?`).run(stakeholder.id, id, tenantId);
+      if (balanceDelta !== 0) adjustStakeholderBaseline(stakeholder.id, tenantId, balanceDelta, {
+        source: "balance_payment_edit", reference_id: id, user_id: userId, note: editReason,
+      });
+    }
     db.prepare(`UPDATE ${table} SET type = ?, amount = ?, currency = ?, exchange_rate = ?, category = ?, counterparty = ?, reason = ? WHERE id = ? AND tenant_id = ?`)
       .run(type, amount, currency, rate, category, counterparty, reason, id, tenantId);
     db.prepare("INSERT INTO cash_flow_edits (tenant_id, cash_flow_id, archived, user_id, edit_reason, before_json, after_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -143,7 +172,7 @@ export function editCashFlow(tenantId: number, id: number, userId: number | null
 
   logAction(tenantId, userId, "Cash Flow Edited",
     `#${id}${archived ? " (settled)" : ""}: ${before.amount} ${before.currency} → ${amount} ${currency}. Reason: ${editReason}`);
-  return { archived, before, after };
+  return { archived, before, after, balanceAdjusted: balanceDelta !== 0 };
 }
 
 interface AnalyticsFilters {
@@ -385,6 +414,7 @@ export function setupCashFlowRoutes(app: any, authenticate: any, broadcast: Func
       const userId = tenantUserId(tenantId, req.session.userId ?? req.body?.user_id);
       const result = editCashFlow(tenantId, id, userId, req.body || {}, req.query.archived === "1");
       broadcast({ type: "CASH_FLOW_UPDATED" }, tenantId);
+      if (result.balanceAdjusted) broadcast({ type: "STAKEHOLDERS_UPDATED" }, tenantId);
       res.json({ success: true, ...result });
     } catch (e) { fail(res, e); }
   });

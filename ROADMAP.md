@@ -88,6 +88,17 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.10.2 — Quick Market fixes (2026-10-27)
+- **Balance payment edits:** editing a customer collection or supplier payment in the cash-flow log now corrects the
+  party's balance too (audited in the balance history, settled rows included). Payments recorded before 1.10.2 are
+  matched by party name only when exactly one party has it; a wrong payment already on a balance is corrected when
+  the admin opens and saves that cash-flow row again.
+- **Balance Payment window:** USD and local-currency buttons when a local currency is enabled; the amount's
+  equivalent and the party's balance are shown in both currencies.
+- **POS:** the payment method goes back to cash after every checkout, and credit is never kept on Walk-in.
+- **Purchases:** a purchase (create, edit, delete) now updates the LBP cost with the USD cost, at the global rate.
+  A hand-typed LBP cost is overwritten by the next purchase of that product.
+
 ### 1.10.1 — Update offer fix (2026-10-27)
 - **Updates:** a register now offers a new version once the POS opens. Before, the only check ran 10 s after launch,
   while the lock screen was still up, and its result was lost, so registers never offered an update by themselves.
