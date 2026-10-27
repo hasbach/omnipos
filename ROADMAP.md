@@ -62,7 +62,9 @@ Other items: _(add fixes and ideas here)_
 - [x] 003 Slice 2: merged to `main` (PR #5) and deployed; the Render log reports `network source: CF-Connecting-IP`.
       First live order on the test store (2026-10-27): placed, seen by the register in ≈ 10 s, accepted, completed as
       a POS sale; two fixes from it (reply lines dropped by the register; dev watcher reloading on database writes).
-- [ ] 003 Slice 2: desktop release (Online orders page, POS drawer, order sales, expiry and blocked phones).
+- [x] 003 Slice 2: desktop release — 1.10.0 published 2026-10-27; checked live on the installed app (validation.md §4).
+- [ ] Rollout: registers on 1.10.0 or older don't offer updates by themselves (fixed in 1.10.1). Ask shops to run
+      back office → Settings → Updates → Check for updates once to reach 1.10.1.
 - [ ] 003 Slice 2: quickstart-s2 §4 on a **test** business with two registers; record the notification and status
       timings in validation.md.
 - [ ] Statement: legacy balance payments (before 1.7.3) are matched from cash_flow by counterparty name; renamed or
@@ -85,6 +87,11 @@ Other items: _(add fixes and ideas here)_
 ---
 
 ## Shipped
+
+### 1.10.1 — Update offer fix (2026-10-27)
+- **Updates:** a register now offers a new version once the POS opens. Before, the only check ran 10 s after launch,
+  while the lock screen was still up, and its result was lost, so registers never offered an update by themselves.
+  Registers on 1.10.0 or older still need one manual check to reach 1.10.1 (back office → Settings → Updates).
 
 ### 1.10.0 — Online orders (2026-10-27)
 Spec: [003](specs/003-retail-ordering/spec.md) Slice 2 ([plan S2](specs/003-retail-ordering/plan-s2.md) ·
