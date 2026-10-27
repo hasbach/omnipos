@@ -1,8 +1,12 @@
-// Upgrade dry run for the commerce foundation (specs/001-commerce-domain-foundation, US1 / SC-001).
+// Upgrade dry run for the commerce foundation (specs/001-commerce-domain-foundation, US1 / SC-001) and the
+// online orders slice (specs/003-retail-ordering, Slice 2: order mirrors, transactions.order_global_id).
 //
 // Copies a database, measures it, runs the CURRENT schema setup (server/db.ts) on the copy, measures
 // again and prints every difference. Exit code 1 if anything that matters to a shop changed.
 // The original file is never opened for writing.
+//
+// Offline by construction: only server/db.ts is loaded (no sync, session or cloud code), the copied cloud
+// sign-in is deleted from the work copy first, and fetch is disabled for the whole process.
 //
 // better-sqlite3 is built for Electron in this repo, so switch to the Node build around the run:
 //   npm rebuild better-sqlite3
@@ -58,8 +62,21 @@ async function main() {
     console.error("Usage: npx tsx scripts/commerce-dryrun.ts <path to a COPY of pos.db>");
     process.exit(2);
   }
+  // Nothing in a dry run may talk to the network.
+  (globalThis as any).fetch = () => { throw new Error("dry run: network disabled"); };
+
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "omnipos-dryrun-"));
   fs.copyFileSync(src, path.join(work, "pos.db"));
+  // A customer's copy may hold their cloud sign-in: drop it from the work copy so it can never be used.
+  {
+    const db = new Database(path.join(work, "pos.db"));
+    try {
+      if (has(db, "cloud_session")) {
+        const n = db.prepare("DELETE FROM cloud_session").run().changes;
+        console.log(`Cloud sign-in rows removed from the work copy: ${n}`);
+      }
+    } finally { db.close(); }
+  }
 
   const before = (() => {
     const db = new Database(path.join(work, "pos.db"), { readonly: true });
@@ -81,6 +98,23 @@ async function main() {
     console.log("Commerce tables after upgrade:", commerce);
     if (commerce.stores || commerce.store_listings || commerce.commerce_enabled) {
       console.error("FAIL: the upgrade created commerce rows on its own.");
+      process.exitCode = 1;
+    }
+    // Slice 2: the order mirrors exist and are empty; the new order link is on both sales tables and unset.
+    const cols = (t: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as any[]).map((c) => c.name);
+    const orders = {
+      orders: Number((db.prepare("SELECT COUNT(*) v FROM orders").get() as any).v),
+      order_lines: Number((db.prepare("SELECT COUNT(*) v FROM order_lines").get() as any).v),
+      order_events: Number((db.prepare("SELECT COUNT(*) v FROM order_events").get() as any).v),
+      live_column: cols("transactions").includes("order_global_id"),
+      archived_column: cols("archived_transactions").includes("order_global_id"),
+      linked_sales: Number((db.prepare("SELECT COUNT(*) v FROM transactions WHERE order_global_id IS NOT NULL").get() as any).v)
+        + Number((db.prepare("SELECT COUNT(*) v FROM archived_transactions WHERE order_global_id IS NOT NULL").get() as any).v),
+    };
+    console.log("Online orders after upgrade:", orders);
+    if (orders.orders || orders.order_lines || orders.order_events || orders.linked_sales
+      || !orders.live_column || !orders.archived_column) {
+      console.error("FAIL: online-order tables or columns are not as expected after the upgrade.");
       process.exitCode = 1;
     }
     db.close();
