@@ -458,7 +458,7 @@ one sale. Settlement and refunds are unchanged.
 **Independent test**: quickstart-s2 §4 steps 5 and 10. Automated: an order sale equals the same sale typed by hand
 (stock, invoice, payments, balance, cash drawer, settlement), live and settled; a second completion is refused.
 
-- [ ] T041 [P] [US5] Write `tests/orders-sale.test.ts` (createTestApp, T003's fake via T011's seam).
+- [X] T041 [P] [US5] Write `tests/orders-sale.test.ts` (createTestApp, T003's fake via T011's seam).
   - **Sale draft:** `GET /api/orders/:id/sale-draft` returns confirmed lines with local product and unit; a removed
     unit converts to base (qty × factor, price ÷ factor); a deleted product → `skipped`; the single phone match →
     that customer, 0 or 2+ matches → Walk-in; a non-completable state → `ORDER_NOT_COMPLETABLE`.
@@ -473,18 +473,18 @@ one sale. Settlement and refunds are unchanged.
   - **Settlement:** it archives the sale with `order_global_id` (`archived_transactions`), the UNION reads return it,
     and refunds and edits of the sale work unchanged.
   - **Permissions:** a sale needs the sale rule plus `orders.view`.
-- [ ] T042 [US5] Carry `order_global_id` through settlement and sync in `server/routes.ts` and `server/sync.ts`.
+- [X] T042 [US5] Carry `order_global_id` through settlement and sync in `server/routes.ts` and `server/sync.ts`.
   - Add `order_global_id` to the settlement `INSERT INTO archived_transactions … SELECT` column list and to
     `TX_LIVE_COLUMNS` / `TX_ARCHIVED_COLUMNS`.
   - Add it to `OPTIONAL_CLOUD_COLUMNS.transactions`, so it is pushed once the cloud has the column.
   - It is not editable in `server/invoiceEdit.ts` (an edit keeps it).
-- [ ] T043 [US5] Add the sale draft to `server/orders.ts`: `GET /api/orders/:id/sale-draft` per
+- [X] T043 [US5] Add the sale draft to `server/orders.ts`: `GET /api/orders/:id/sale-draft` per
   contracts/backoffice-api-s2.md.
   - Resolve lines, the unit conversion and skipped lines.
   - Phone match (research R24): normalise the order phone and every live customer phone of the tenant with
     `whatsappDigits` from `storefront/src/phone.ts`; exactly one match → its id, otherwise Walk-in.
   - Rule: `orders.view` plus the POS sale permission.
-- [ ] T044 [US5] Refactor `POST /api/transactions` in `server/routes.ts` into a validation phase and a commit phase,
+- [X] T044 [US5] Refactor `POST /api/transactions` in `server/routes.ts` into a validation phase and a commit phase,
   with the handler made `async`. This is the riskiest change of the slice. Without `order_global_id` it must be
   byte-identical in effects and responses; the existing suites must stay green at every step.
   - **Order checks:** with `order_global_id`, refuse refunds and other types, check the mirror state
@@ -497,7 +497,8 @@ one sale. Settlement and refunds are unchanged.
   - **Response and broadcast:** apply the returned order row to the mirror, broadcast `ORDERS_UPDATED` and
     `TRANSACTIONS_UPDATED`, and respond with `order: { number, state }`.
   - **Rules:** update `ROUTE_RULES` for the extra `orders.view`.
-- [ ] T045 [US5] Extend the POS sale tabs in `src/hooks/usePos.ts`.
+  - **Done note:** the validation phase is a dry run of the unchanged sale transaction that throws a sentinel at the end, so SQLite rolls it back (every existing guard runs, nothing is written); the commit re-runs it. Order-priced lines come from `server/orderSale.ts` `orderPricedItems()`, shared by the handler and `ROUTE_RULES` so permission and pricing agree (a line counts only with the order's price, its unit and quantity within the unconsumed confirmed quantity). Review fixes: `order_global_id: null` is an ordinary sale; a timed-out/dropped `order_complete` (may have landed in the cloud) also gets the best-effort `order_complete_undo`.
+- [X] T045 [US5] Extend the POS sale tabs in `src/hooks/usePos.ts`.
   - `SaleTab` gains `orderGlobalId?` and `orderNumber?`.
   - `newSaleTabFromOrder(draft)` builds cart lines (product, `uom_id`, quantity, `unit_price`), sets the stakeholder,
     labels the tab with the order number, and shows the skipped and converted warnings.
@@ -505,17 +506,18 @@ one sale. Settlement and refunds are unchanged.
   - On `ORDER_NEEDS_ONLINE`, offer "Sell without the order", which clears the link from the tab.
   - On `ORDER_ALREADY_COMPLETED`, show a toast and keep the tab.
   - Tabs persist with the new fields (localStorage key unchanged, missing fields tolerated).
-- [ ] T046 [US5] Add the POS window UI.
+- [X] T046 [US5] Add the POS window UI.
   - Create `src/components/pos/OnlineOrdersDrawer.tsx`: confirmed and ready orders first, New orders read-only, and a
     "Complete sale" button calling the sale draft and then `newSaleTabFromOrder`.
   - In `src/components/PosHeader.tsx`, add an "Online orders" button with the submitted badge, visible only with
     `orders.view`.
   - The back-office detail drawer shows "Complete at the POS" for confirmed and ready orders, plus a link to the sale
     once completed.
-- [ ] T047 [US5] Verify in the preview server: complete a seeded accepted order from the POS drawer with a fake RPC
+- [X] T047 [US5] Verify in the preview server: complete a seeded accepted order from the POS drawer with a fake RPC
   (`__setRpcCaller` hooked in `scripts/preview-server.ts` behind a `PREVIEW_FAKE_ORDERS=1` env flag). The tab is
   pre-filled, the sale finishes with mixed USD/LBP payment, the stock goes down, and the order shows Completed with
   the sale link. Check en and ar, and capture screenshots.
+  - **Done note:** the preview's fake session (always on, no env flag needed) gained `order_complete` / `order_complete_undo`. Checked as cashier Lina: POS drawer (Ready/Accepted first, New read-only), W-1003 opened as tab "Sale W-1003" with the reduced quantity and order prices, paid $10 + 984,500 LBP, transaction #223 stored with `order_global_id`, cloud sale id = transaction `global_id`, stock down 3 and 1, order Completed, a second draft refused, back-office drawer shows "Sale #223 · $21.00"; Arabic RTL drawer. Review fixes in usePos: the order link is cleared on success (a lone tab is reused) and "Sell without the order" also drops the order prices.
 
 **Checkpoint**: Slice 2's main flow (order → accept → sale) works end to end on the dev PC with faked cloud calls.
 

@@ -214,8 +214,15 @@ export default function OrderDetailDrawer({ orderId, open, onClose, onChanged }:
                 </>
               )}
             </div>
-            {['confirmed', 'ready'].includes(data.order.effective_state) && (
+            {!data.sale && ['confirmed', 'ready'].includes(data.order.effective_state) && (
               <p className="rounded-md bg-info-soft p-3 text-sm text-info">{t('orders_pos_note')}</p>
+            )}
+            {data.sale && (
+              <p className="rounded-md bg-success-soft p-3 text-sm text-success">
+                {t('orders_sale').replace('{id}', String(data.sale.id))}
+                {' · '}
+                {formatMoney(data.sale.total_amount, { code: 'USD', symbol: '$' })}
+              </p>
             )}
             <div className="flex flex-wrap gap-2">
               {(['accept', 'reject', 'ready', 'cancel'] as const).map((a) => (

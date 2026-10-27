@@ -26,7 +26,10 @@ import { setupReportRoutes } from "./reports.js";
 import { setupImportRoutes } from "./importer.js";
 import { setupTenantResetRoutes } from "./tenantReset.js";
 import { setupCashFlowRoutes } from "./cashFlow.js";
-import { setupOrderRoutes } from './orders.js';
+import { randomUUID } from 'node:crypto';
+import { callRpc } from './cloudCall.js';
+import { loadCompletableOrder, orderEffectiveState, orderSaleExists, orderPricedItems } from './orderSale.js';
+import { applyResult, setupOrderRoutes } from './orders.js';
 import { setupCommerceRoutes } from "./commerce.js";
 import { normalizeLevel, saleLineUnitPrice, saleLineUnitPriceLbp, lineTotal, computeTotals, uomUnitPrice, uomUnitPriceLbp, type PriceLevel } from "./pricing.js";
 import {
@@ -92,8 +95,8 @@ function localToday(): string {
 // column lists keep that UNION consistent across every query that needs it. `archived_transactions`
 // has no `idempotency_key` column (that check only matters for still-live inserts), so the
 // archived side selects NULL in its place to keep the column count/order aligned.
-export const TX_LIVE_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at";
-export const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, NULL as idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at";
+export const TX_LIVE_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at";
+export const TX_ARCHIVED_COLUMNS = "id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, NULL as idempotency_key, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at";
 
 // Same guard for stakeholder_id. The POS defaults the customer to id 1, which for any tenant
 // other than the seed tenant is a FOREIGN tenant's Walk-in — pushing that trips the cloud
@@ -733,8 +736,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
       // Move transactions
       db.prepare(`
-      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at, global_id)
-      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, created_at, global_id
+      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id)
+      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
@@ -1366,7 +1369,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     }
   });
 
-  app.post("/api/transactions", authenticate, (req: any, res) => {
+  app.post("/api/transactions", authenticate, async (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { stakeholder_id, user_id, items, currency, exchange_rate, payments, discount, tax, terminalId, original_transaction_id, price_level, notes, reference } = req.body;
     // The POS checkout has never sent `type` (it relied on the INSERT's `type || 'sale'` default),
@@ -1374,6 +1377,46 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     // priced from the client's item.price (no package break, no price tier) and its unit_cost was
     // set to the selling price. Normalize once, up front, so a POS sale IS a sale everywhere.
     const type: 'sale' | 'purchase' | 'refund' = req.body.type || 'sale';
+    // A sale from an online order (003 Slice 2). null/absent = an ordinary sale, on the unchanged path.
+    const hasOrder = req.body.order_global_id != null;
+    const orderGlobalId = req.body.order_global_id;
+    let order: any = null;
+    try {
+      if (hasOrder) {
+        if (typeof orderGlobalId !== 'string' || type !== 'sale') {
+          throw new ValidationError('ORDER_NOT_COMPLETABLE', 409, { code: 'ORDER_NOT_COMPLETABLE' });
+        }
+        order = loadCompletableOrder(tenantId, orderGlobalId);
+        if (orderSaleExists(tenantId, orderGlobalId)) {
+          throw new ValidationError('ORDER_ALREADY_COMPLETED', 409, { code: 'ORDER_ALREADY_COMPLETED' });
+        }
+        if (!order || !['confirmed', 'ready'].includes(orderEffectiveState(order))) {
+          throw new ValidationError('ORDER_NOT_COMPLETABLE', 409, { code: 'ORDER_NOT_COMPLETABLE' });
+        }
+      }
+    } catch (error: any) {
+      return res.status(error.status).json(validationErrorBody(error));
+    }
+    let saleGlobalId: string | null = null;
+    let validatedTotal = 0;
+    let completion: any = null;
+    // Throw only after all writes and balance checks so SQLite rolls the validation pass back.
+    const dryRunRollback = {};
+    // Compensation (research R20): revert the cloud completion when the local sale was not written.
+    // Best effort; the cloud reverts only if this sale id is the one it recorded.
+    const undoCompletion = async () => {
+      try {
+        const undo = await callRpc<any>(tenantId, 'order_complete_undo', {
+          p_order: orderGlobalId, p_sale_global_id: saleGlobalId, p_actor: actor,
+        }, { timeoutMs: 10000 });
+        if (!undo.ok || !undo.value?.ok) console.error('order_complete_undo failed', undo);
+      } catch (undoError) {
+        console.error('order_complete_undo failed', undoError);
+      }
+    };
+    const actor = hasOrder ? { name: (db.prepare('SELECT name FROM users WHERE id = ? AND tenant_id = ?')
+      .get(req.session.userId ?? null, tenantId) as any)?.name || req.session.userName || '',
+      terminal: terminalId || req.headers['x-terminal-id'] || '' } : null;
     if (!['sale', 'purchase', 'refund'].includes(type)) {
       return res.status(400).json({ error: "Invalid transaction type." });
     }
@@ -1524,7 +1567,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     const taxError = invalidAdjustment(tax, 'tax');
     if (taxError) return res.status(400).json({ error: taxError });
 
-    const transaction = db.transaction(() => {
+    const transaction = db.transaction((dryRun = false) => {
+      const orderPrices = hasOrder ? orderPricedItems(tenantId, orderGlobalId, items) : new Map<number, { perUnitUsd: number }>();
       // Cache products fetched for this request — a purchase's WAC blend must see the running
       // cost/stock left by an EARLIER line for the same product in the same invoice, not the
       // stale value from the initial (pre-request) row.
@@ -1596,7 +1640,10 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           // way PUT /api/transactions/:id honors them on edit (and are visible in the invoice itself);
           // at the POS a typed price needs the explicit tenant setting.
           const overrideAllowed = settings.allow_price_override === '1' || req.body.source === 'backoffice';
-          if (overrideAllowed && Number.isFinite(item.unit_price) && item.unit_price >= 0) {
+          if (orderPrices.has(idx)) {
+            perUnit = orderPrices.get(idx)!.perUnitUsd;
+            perUnitLbp = perUnit * lbpRate;
+          } else if (overrideAllowed && Number.isFinite(item.unit_price) && item.unit_price >= 0) {
             perUnit = item.unit_price; // per unit of the line's UoM
             perUnitLbp = item.unit_price * lbpRate;
           }
@@ -1739,8 +1786,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       const termSeq = sequenceRow.next_seq;
 
       const info = db.prepare(`
-      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, local_rate, local_currency)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, local_rate, local_currency${hasOrder ? ', global_id, order_global_id' : ''})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${hasOrder ? ', ?, ?' : ''})
     `).run(
         tenantId,
         resolvedStakeholderId,
@@ -1761,7 +1808,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         notes || null,
         reference || null,
         localCur?.rate ?? null,
-        localCur?.code ?? null
+        localCur?.code ?? null,
+        ...(hasOrder ? [saleGlobalId, orderGlobalId] : [])
       );
 
       const transactionId = info.lastInsertRowid;
@@ -1841,11 +1889,50 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         recomputeStakeholderBalance(resolvedStakeholderId, tenantId, { source: type, reference_id: Number(transactionId), user_id: resolvedUserId });
       }
 
+      if (dryRun) {
+        validatedTotal = finalTotal;
+        throw dryRunRollback;
+      }
       return transactionId;
     });
 
     try {
-      const id = transaction();
+      if (hasOrder) {
+        try { transaction(true); } catch (error) { if (error !== dryRunRollback) throw error; }
+        if (getActiveSession()?.localId !== tenantId) {
+          throw new ValidationError('ORDER_NEEDS_ONLINE', 503, { code: 'ORDER_NEEDS_ONLINE' });
+        }
+        saleGlobalId = randomUUID();
+        const result = await callRpc<any>(tenantId, 'order_complete', {
+          p_order: orderGlobalId, p_sale_global_id: saleGlobalId,
+          p_sale_total_usd: validatedTotal, p_actor: actor,
+        }, { timeoutMs: 10000 });
+        if (result.ok === false) {
+          const offline = result.reason === 'offline';
+          // A timeout or dropped connection may still have completed the order in the cloud: revert it
+          // (only reverts if it carries this sale id), or the order would stay completed with no sale.
+          if (offline) await undoCompletion();
+          const code = offline ? 'ORDER_NEEDS_ONLINE' : 'ORDER_CLOUD_FAILED';
+          throw new ValidationError(code, offline ? 503 : 502, { code });
+        }
+        completion = result.value;
+        if (!completion?.ok) {
+          if (completion?.order) applyResult(tenantId, completion);
+          const code = completion?.code === 'handled' ? 'ORDER_ALREADY_COMPLETED'
+            : ['invalid_transition', 'expired', 'not_found'].includes(completion?.code)
+              ? 'ORDER_NOT_COMPLETABLE' : 'ORDER_CLOUD_FAILED';
+          throw new ValidationError(code, code === 'ORDER_CLOUD_FAILED' ? 502 : 409,
+            { code, ...(completion?.code === 'handled' ? { state: completion.order?.state } : {}) });
+        }
+      }
+      let id: ReturnType<typeof transaction>;
+      try {
+        id = transaction();
+      } catch (error) {
+        if (hasOrder && completion?.ok) await undoCompletion();
+        throw error;
+      }
+      if (hasOrder) applyResult(tenantId, completion);
       const fullTransaction = db.prepare(`
       SELECT t.*, s.name as stakeholder_name, u.name as user_name
       FROM transactions t
@@ -1861,10 +1948,12 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         : null;
       const balanceAfter = balanceAfterRow ? (balanceAfterRow.balance || 0) : null;
 
-      res.json({ id, success: true, balance_before: balanceBefore, balance_after: balanceAfter });
+      res.json({ id, success: true, balance_before: balanceBefore, balance_after: balanceAfter,
+        ...(hasOrder ? { order: { number: 'W-' + order.number, state: 'completed' } } : {}) });
       logAction(tenantId, resolvedUserId, `Transaction: ${type || 'sale'}`, `ID: ${id}, Total: ${fullTransaction.total_amount} ${fullTransaction.currency}`);
       broadcast({ type: 'TRANSACTIONS_UPDATED', transaction: fullTransaction, terminalId }, tenantId);
       broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+      if (hasOrder) broadcast({ type: 'ORDERS_UPDATED', newSubmitted: 0, changed: 1 }, tenantId);
     } catch (error: any) {
       if (error instanceof ValidationError) {
         return res.status(error.status).json(validationErrorBody(error));

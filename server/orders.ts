@@ -1,3 +1,4 @@
+import { orderSaleExists } from './orderSale.js';
 import { db } from './db.js';
 import { getActiveSession } from './session.js';
 import { callRpc } from './cloudCall.js';
@@ -29,7 +30,7 @@ function linesFor(tenantId: number, id: number) {
 function saleFor(tenantId: number, globalId: string) {
   return db.prepare('SELECT id, total_amount FROM transactions WHERE tenant_id = ? AND order_global_id = ? UNION ALL SELECT id, total_amount FROM archived_transactions WHERE tenant_id = ? AND order_global_id = ? LIMIT 1').get(tenantId, globalId, tenantId, globalId) || null;
 }
-function applyResult(tenantId: number, result: any) {
+export function applyResult(tenantId: number, result: any) {
   const tenant = db.prepare('SELECT global_id FROM tenants WHERE id = ?').get(tenantId) as any;
   db.transaction(() => {
     if (result.order && result.order.tenant_id === tenant.global_id) {
@@ -66,6 +67,37 @@ export function setupOrderRoutes(app: any, authenticate: any, broadcast: Functio
   app.get('/api/orders/summary', authenticate, route((req: any, res: any) => {
     const rows = db.prepare('SELECT state, expires_at FROM orders WHERE tenant_id = ? AND deleted_at IS NULL').all(req.session.tenantId) as any[];
     res.json({ submitted: rows.filter(o => effectiveState(o) === 'submitted').length, open: rows.filter(o => ['submitted', 'confirmed', 'ready'].includes(effectiveState(o))).length });
+  }));
+  app.get('/api/orders/:id/sale-draft', authenticate, route((req: any, res: any) => {
+    const tenantId = req.session.tenantId;
+    const order = load(tenantId, req.params.id);
+    if (orderSaleExists(tenantId, order.global_id)) throw fail('ORDER_ALREADY_COMPLETED', 409);
+    if (!['confirmed', 'ready'].includes(effectiveState(order))) throw fail('ORDER_NOT_COMPLETABLE', 409);
+    const lines: any[] = [], skipped: any[] = [], converted: any[] = [];
+    for (const line of linesFor(tenantId, order.id)) {
+      if (!(line.confirmed_qty > 0)) continue;
+      const product = db.prepare('SELECT id FROM products WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL')
+        .get(tenantId, line.product_id);
+      if (!product) {
+        skipped.push({ line_no: line.line_no, product_name: line.product_name, reason: 'product_deleted' });
+        continue;
+      }
+      const unit = line.unit_key === 'base' ? null : db.prepare('SELECT id FROM product_units WHERE tenant_id = ? AND product_id = ? AND global_id = ? AND deleted_at IS NULL')
+        .get(tenantId, line.product_id, line.unit_key) as any;
+      const removed = line.unit_key !== 'base' && !unit;
+      if (removed) converted.push({ line_no: line.line_no, reason: 'unit_removed' });
+      lines.push({ product_id: line.product_id, uom_id: unit?.id ?? null,
+        quantity: line.confirmed_qty * (removed ? line.unit_factor : 1),
+        unit_price: line.unit_price_usd / (removed ? line.unit_factor : 1) });
+    }
+    const digits = whatsappDigits(order.customer_phone);
+    const customers = db.prepare("SELECT id, name, phone FROM stakeholders WHERE tenant_id = ? AND type = 'customer' AND deleted_at IS NULL ORDER BY id")
+      .all(tenantId) as any[];
+    const matches = customers.filter(c => digits && whatsappDigits(c.phone) === digits);
+    const stakeholderId = matches.length === 1 ? matches[0].id
+      : customers.find(c => c.name === 'Walk-in Customer')?.id ?? null;
+    res.json({ order_global_id: order.global_id, number: 'W-' + order.number, stakeholder_id: stakeholderId,
+      lines, skipped, converted });
   }));
   app.get('/api/orders/:id', authenticate, route((req: any, res: any) => {
     const tenantId = req.session.tenantId, o = load(tenantId, req.params.id), state = effectiveState(o);

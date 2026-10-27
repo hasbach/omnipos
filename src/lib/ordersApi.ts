@@ -75,6 +75,15 @@ export interface OrderDetail {
   store: { id: number; name: string; default_language: string; pickup_note: string | null };
 }
 
+export interface OrderSaleDraft {
+  order_global_id: string;
+  number: string;
+  stakeholder_id: number;
+  lines: { product_id: number; uom_id: number | null; quantity: number; unit_price: number }[];
+  skipped: { line_no: number; product_name: string; reason: string }[];
+  converted: { line_no: number; reason: string }[];
+}
+
 export interface ConfirmLine {
   line_no: number;
   confirmed_qty: number;
@@ -86,6 +95,7 @@ export const ordersApi = {
     api.get<{ rows: OrderRow[]; online: boolean; last_pull_at: string | null }>('/api/orders', query),
   summary: () => api.get<{ submitted: number; open: number }>('/api/orders/summary'),
   detail: (id: number) => api.get<OrderDetail>('/api/orders/' + id),
+  getSaleDraft: (id: number) => api.get<OrderSaleDraft>('/api/orders/' + id + '/sale-draft'),
   accept: (id: number, expected_state: OrderState, lines: ConfirmLine[]) =>
     api.post<{ order: Order; lines: OrderLine[] }>('/api/orders/' + id + '/accept', { expected_state, lines }),
   action: (id: number, action: 'reject' | 'cancel' | 'ready', expected_state: OrderState, reason?: string) =>

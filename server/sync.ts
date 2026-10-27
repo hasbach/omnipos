@@ -209,7 +209,7 @@ const LOCAL_ONLY_COLUMNS: Record<string, string[]> = {
 // migration get pushed once.
 export const OPTIONAL_CLOUD_COLUMNS: Record<string, string[]> = {
   stakeholders: ['local_rate'],
-  transactions: ['local_rate', 'local_currency'],
+  transactions: ['local_rate', 'local_currency', 'order_global_id'],
 };
 const cloudColFlag = (table: string, col: string) => `cloud_col_ok:${table}.${col}`;
 function noteCloudColumnsAccepted(tableName: string, payload: any[]) {

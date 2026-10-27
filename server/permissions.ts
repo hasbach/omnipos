@@ -13,6 +13,7 @@
 //    no rule pass. Reads the POS itself needs stay open to every signed-in user.
 //
 // The catalogue / defaults are mirrored on the client in src/lib/permissions.ts — keep them in sync.
+import { orderPricedItems } from './orderSale.js';
 import { db, logAction } from './db.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 
@@ -172,11 +173,14 @@ export const ROUTE_RULES: RouteRule[] = [
         (Array.isArray(body.items) && body.items.some((it: any) => Number(it?.discount?.value) > 0));
       if (type === 'sale') {
         // The back-office invoice editor (source 'backoffice') is invoice editing, whatever the lines hold.
-        if (body.source === 'backoffice') return 'invoices.edit';
+        if (body.source === 'backoffice') return typeof body.order_global_id === 'string' ? { allOf: ['invoices.edit', 'orders.view'] } : 'invoices.edit';
         // The POS only puts a finite `unit_price` on a cart line when the cashier overrode it.
+        const orderPrices = typeof body.order_global_id === 'string'
+          ? orderPricedItems(req.session.tenantId, body.order_global_id, body.items) : new Map();
         const overridesPrice = Array.isArray(body.items) &&
-          body.items.some((it: any) => it && it.unit_price != null && Number.isFinite(Number(it.unit_price)));
+          body.items.some((it: any, index: number) => !orderPrices.has(index) && it && it.unit_price != null && Number.isFinite(Number(it.unit_price)));
         const needs: Need[] = [];
+        if (typeof body.order_global_id === 'string') needs.push('orders.view');
         if (overridesPrice) needs.push('pos.price_override');
         if (hasDiscount) needs.push(['pos.discount', 'invoices.edit']);
         if (needs.length === 1) return needs[0];

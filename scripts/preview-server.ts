@@ -182,6 +182,25 @@ __setSlugClaimer(async (_tenantId, storeGlobalId, slug) => {
   fake.onRpc('order_reject', act('rejected', ['submitted']));
   fake.onRpc('order_ready', act('ready', ['confirmed']));
   fake.onRpc('order_cancel_by_shop', act('cancelled', ['confirmed', 'ready']));
+  // Completion from a POS sale: first sale id wins, the same id again is ok (idempotent), undo only for that id.
+  fake.onRpc('order_complete', (args: any) => {
+    const o = db.prepare("SELECT * FROM orders WHERE global_id = ?").get(args.p_order) as any;
+    if (!o) return { ok: false, code: 'not_found' };
+    if (o.state === 'completed' && o.sale_global_id === args.p_sale_global_id) return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
+    if (!['confirmed', 'ready'].includes(o.state)) return { ok: false, code: 'handled', ...cloudRows(o.global_id) };
+    const stamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    db.prepare("UPDATE orders SET state = 'completed', sale_global_id = ?, closed_at = ?, updated_at = ? WHERE id = ?")
+      .run(args.p_sale_global_id, stamp, stamp, o.id);
+    return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
+  });
+  fake.onRpc('order_complete_undo', (args: any) => {
+    const o = db.prepare("SELECT * FROM orders WHERE global_id = ?").get(args.p_order) as any;
+    if (!o || o.state !== 'completed' || o.sale_global_id !== args.p_sale_global_id) return { ok: false, code: 'handled' };
+    const back = o.ready_at ? 'ready' : 'confirmed';
+    const stamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    db.prepare("UPDATE orders SET state = ?, sale_global_id = NULL, closed_at = NULL, updated_at = ? WHERE id = ?").run(back, stamp, o.id);
+    return { ok: true, code: 'ok', ...cloudRows(o.global_id) };
+  });
   session.__setClientFactory(() => fake as any);
   await session.setActiveSession(tenantId, tenantGid, "preview@omnipos.test", { access_token: "preview", refresh_token: "preview" });
 }
