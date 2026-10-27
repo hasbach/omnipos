@@ -94,6 +94,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit' | 'store_credit'>('cash');
+  // Credit/store-credit only make sense for a real customer: whenever the selection is Walk-in (including
+  // after a checkout resets to Walk-in, or switching to a Walk-in sale tab) fall back to cash.
+  useEffect(() => {
+    if (isWalkIn && (paymentMethod === 'credit' || paymentMethod === 'store_credit')) setPaymentMethod('cash');
+  }, [isWalkIn, paymentMethod]);
   const [paymentCurrencyState, setPaymentCurrency] = useState(CURRENCIES[0]);
   // Refund method for the POS refund modal: 'cash' pays back in cash; 'credit' keeps the amount on
   // the customer's account (payments: [] submitted, matching store_credit/credit semantics
@@ -1301,6 +1306,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         }
         setCart([]);
         setPayments([]); // Reset split payments
+        setPaymentMethod('cash'); // Don't carry credit/card into the next sale
         setSelectedStakeholder(walkInId); // Reset to Walk-in default customer
         fetchData();
 

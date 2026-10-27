@@ -7,6 +7,7 @@ import { getActiveSession } from "./session.js";
 import { addTombstones, markTombstonesPurged } from "./sync.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
 import { loadUnit, loadUnitsForProduct } from "./uom.js";
+import { updatePurchaseProductCost } from "./purchaseCost.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { ValidationError } from "./errors.js";
 import { effectiveLocalRate, isLocalCode } from "./localCurrency.js";
@@ -350,7 +351,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       }
     }
 
-    const unitCost = oldLine ? oldLine.unit_cost : (tx.type === 'purchase' ? unitPrice : (product.cost ?? null));
+    const unitCost = tx.type === 'purchase' ? unitPrice : (oldLine ? oldLine.unit_cost : (product.cost ?? null));
 
     return {
       ...item, unitPrice, discountType, discountValue, unitCost, product, pieces,
@@ -394,7 +395,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       if (tx.type === 'purchase') {
         const newCost = reversePurchaseCost(product.stock || 0, product.cost, old.quantity, old.unit_cost ?? old.unit_price);
         product.cost = newCost;
-        db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, product.id, tenantId);
+        updatePurchaseProductCost(tenantId, product.id, newCost);
       }
       if (product.track_inventory !== 0) {
         const delta = tx.type === 'sale' ? old.quantity : -old.quantity; // undo the original sale/purchase stock move
@@ -407,7 +408,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
       if (tx.type === 'purchase') {
         const newCost = applyPurchaseCost(product.stock || 0, product.cost, item.pieces, item.unitPrice);
         product.cost = newCost;
-        db.prepare("UPDATE products SET cost = ? WHERE id = ? AND tenant_id = ?").run(newCost, product.id, tenantId);
+        updatePurchaseProductCost(tenantId, product.id, newCost);
       }
       if (product.track_inventory !== 0) {
         const delta = tx.type === 'sale' ? -item.pieces : item.pieces;

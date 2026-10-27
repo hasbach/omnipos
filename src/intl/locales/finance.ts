@@ -22,6 +22,7 @@ const finance: Record<string, Record<string, string>> = {
     fin_continue: 'Continue',
     fin_total_usd: 'Total (USD)',
     fin_approx_usd: 'Approx. USD',
+    fin_cfr_equivalent: 'Equivalent',
 
     // Cash Flow Register
     fin_cfr_title: 'Cash Flow Register',
@@ -241,6 +242,7 @@ const finance: Record<string, Record<string, string>> = {
     fin_continue: 'متابعة',
     fin_total_usd: 'الإجمالي (دولار)',
     fin_approx_usd: 'ما يعادل بالدولار',
+    fin_cfr_equivalent: 'ما يعادل',
 
     fin_cfr_title: 'سجل التدفق النقدي',
     fin_cfr_subtitle: 'تتبّع حركات النقد، وتحصيل الأرصدة، ودفع الموردين.',
@@ -456,6 +458,7 @@ const finance: Record<string, Record<string, string>> = {
     fin_continue: 'Continuer',
     fin_total_usd: 'Total (USD)',
     fin_approx_usd: 'Environ en USD',
+    fin_cfr_equivalent: 'Équivalent',
 
     fin_cfr_title: 'Registre de trésorerie',
     fin_cfr_subtitle: 'Suivez les mouvements de caisse, encaissez les soldes et payez les fournisseurs.',

@@ -514,6 +514,7 @@ try { db.exec("ALTER TABLE archived_cash_flow ADD COLUMN settlement_id INTEGER;"
 for (const t of ["cash_flow", "archived_cash_flow"]) {
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN category TEXT;`); } catch {}
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN counterparty TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN stakeholder_id INTEGER;`); } catch {}
 }
 // One-time backfill by reason prefix (the automatic rows). Only rows with NO category are touched, so
 // re-running at every start is a no-op once done. Manual rows stay NULL (= 'other').
