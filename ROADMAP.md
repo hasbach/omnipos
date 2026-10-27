@@ -59,8 +59,9 @@ Other items: _(add fixes and ideas here)_
 - [x] 003 Slice 2 owner setup (2026-10-23): migration `2026-10-23_retail_ordering_s2.sql` applied and its checks
       verified read-only; gateway key generated, only its hash in `storefront_gateway_keys`; `ORDER_GATEWAY_KEY` set
       on Render (takes effect at the next deploy).
-- [ ] 003 Slice 2: merge `003-retail-ordering-s2` to `main` (Render deploys the storefront with the gateway key), then
-      read the one-time `network source: …` log line at the first order — `socket` must be fixed before going live.
+- [x] 003 Slice 2: merged to `main` (PR #5) and deployed; the Render log reports `network source: CF-Connecting-IP`.
+      First live order on the test store (2026-10-27): placed, seen by the register in ≈ 10 s, accepted, completed as
+      a POS sale; two fixes from it (reply lines dropped by the register; dev watcher reloading on database writes).
 - [ ] 003 Slice 2: desktop release (Online orders page, POS drawer, order sales, expiry and blocked phones).
 - [ ] 003 Slice 2: quickstart-s2 §4 on a **test** business with two registers; record the notification and status
       timings in validation.md.

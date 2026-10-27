@@ -35,7 +35,10 @@ export function applyResult(tenantId: number, result: any) {
   db.transaction(() => {
     if (result.order && result.order.tenant_id === tenant.global_id) {
       applyCloudRows(tenantId, 'orders', [result.order]);
-      applyCloudRows(tenantId, 'order_lines', (result.lines || []).filter((l: any) => l.tenant_id === tenant.global_id && l.order_id === result.order.global_id));
+      // The cloud's reply omits tenant_id on lines (_order_lines_json): they belong to the order checked above.
+      const lines = (result.lines || []).filter((l: any) => l.order_id === result.order.global_id)
+        .map((l: any) => ({ ...l, tenant_id: tenant.global_id }));
+      applyCloudRows(tenantId, 'order_lines', lines);
     }
   })();
 }

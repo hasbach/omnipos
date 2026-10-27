@@ -174,11 +174,14 @@ test('permissions and tenant isolation apply to every route', async () => {
 for (const [action, from, to] of [['accept', 'submitted', 'confirmed'], ['reject', 'submitted', 'rejected'], ['ready', 'confirmed', 'ready'], ['cancel', 'ready', 'cancelled']]) test(`${action} sends owner arguments and applies synced rows without fetching`, async () => {
   const id = order(from); const o = cloudOrder(id, to);
   const l = one('SELECT * FROM order_lines WHERE order_id = ?', id);
-  const returned = { ...l, tenant_id: o.tenant_id, order_id: o.global_id, product_id: one('SELECT global_id FROM products WHERE id = ?', product).global_id, confirmed_qty: 2, updated_at: o.updated_at };
+  // Shaped like the cloud's reply: _order_lines_json strips tenant_id from the lines.
+  const { tenant_id: _tenant, ...line } = l;
+  const returned = { ...line, order_id: o.global_id, product_id: one('SELECT global_id FROM products WHERE id = ?', product).global_id, confirmed_qty: 2, updated_at: o.updated_at };
   let args: any, fn: any;
   cloud.__setRpcCaller(async (name, value) => { fn = name; args = value; return { data: { ok: true, order: o, lines: [returned] }, error: null }; });
   const r = await request('POST', `/api/orders/${id}/${action}`, { expected_state: from, lines: [{ line_no: 1, confirmed_qty: 2, reason: 'other' }], reason: 'Customer asked', terminalId: 'register-2' });
   assert.equal(r.status, 200, JSON.stringify(r.body)); assert.equal(r.body.order.state, to); assert.equal(r.body.lines[0].product_id, product);
+  assert.equal(r.body.lines[0].confirmed_qty, 2, 'the reply lines are applied now, not at the next pull');
   assert.equal(r.body.order.last_synced_at, r.body.order.updated_at); assert.equal(r.body.lines[0].last_synced_at, r.body.lines[0].updated_at);
   assert.equal(fn, action === 'cancel' ? 'order_cancel_by_shop' : `order_${action}`); assert.equal(args.p_order, o.global_id); assert.equal(args.p_expected_state, from);
   assert.deepEqual(args.p_actor, { name: 'Admin', terminal: 'register-2' }); assert.equal(fake.calls().length, 0);

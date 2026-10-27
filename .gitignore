@@ -9,6 +9,8 @@ coverage/
 .DS_Store
 *.log
 *.db
+*.db-wal
+*.db-shm
 .env*
 !.env.example
 .claude/settings.local.json
