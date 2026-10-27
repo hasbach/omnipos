@@ -526,7 +526,7 @@ test("client mirror (src/lib/permissions.ts) matches the server catalogue and de
   const client = await import("../src/lib/permissions.js");
   assert.deepEqual(client.PERMISSION_GROUPS, server.PERMISSION_GROUPS);
   assert.deepEqual(client.DEFAULT_ROLE_PERMISSIONS, server.DEFAULT_ROLE_PERMISSIONS);
-  assert.deepEqual(client.PAGE_PERMISSIONS.onlineOrders, ['orders.view']);
+  assert.deepEqual(client.PAGE_PERMISSIONS['online-orders'], ['orders.view']);
 });
 
 test('order permissions have the chosen defaults for every role', async () => {

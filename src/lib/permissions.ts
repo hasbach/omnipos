@@ -62,7 +62,7 @@ export const PAGE_PERMISSIONS: Record<string, string[] | null> = {
   'cash-flow': ['cash_flow.view'],
   'settlement': ['settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct'],
   'logs': ['logs.view'],
-  onlineOrders: ['orders.view'],
+  'online-orders': ['orders.view'],
   // Open to everyone: appearance / language are personal; Settings.tsx hides the other sections by permission.
   'settings': null,
   'ui-kit': ['settings.manage'],

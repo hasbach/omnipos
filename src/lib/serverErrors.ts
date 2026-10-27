@@ -207,7 +207,7 @@ export function translateServerError(err: unknown, t: Translate): string {
 
   // Online store (server/commerce.ts): every code has a commerce_err_<code> string in
   // src/intl/locales/commerce.ts; the server's English message is the fallback.
-  if (e.code && (/^(COMMERCE|STORE|LISTING)_/.test(e.code) || e.code === 'PRODUCT_NOT_FOUND')) {
+  if (e.code && (/^(COMMERCE|STORE|LISTING|ORDER)_/.test(e.code) || e.code === 'PRODUCT_NOT_FOUND')) {
     return t(`commerce_err_${e.code.toLowerCase()}`, rawMessage);
   }
 

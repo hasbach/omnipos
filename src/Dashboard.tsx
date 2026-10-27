@@ -26,6 +26,8 @@ import ProductManagement from './pages/ProductManagement';
 import StockManagement from './pages/StockManagement';
 import StakeholderManagement from './pages/StakeholderManagement';
 import UserManagement from './pages/UserManagement';
+import OnlineOrders from './pages/OnlineOrders';
+import { useOrderNotifications } from './hooks/useOrderNotifications';
 import InvoiceManagement from './pages/InvoiceManagement';
 import PurchaseManagement from './pages/PurchaseManagement';
 import Reports from './pages/Reports';
@@ -70,6 +72,7 @@ function DashboardShell({
 }) {
   const { t } = useI18n();
   const [isDarkMode, setIsDarkMode] = useTheme();
+  useOrderNotifications();
 
   const isLicenseExpired = (type: string, expiry?: string) => {
     if (type === 'lifetime') return false;
@@ -117,6 +120,7 @@ function DashboardShell({
             <Route path="/purchases" element={guard('purchases', <PurchaseManagement />)} />
             <Route path="/stakeholders" element={guard('stakeholders', <StakeholderManagement />)} />
             <Route path="/users" element={guard('users', <UserManagement />)} />
+            <Route path="/online-orders" element={guard('online-orders', <OnlineOrders />)} />
             <Route path="/invoices" element={guard('invoices', <InvoiceManagement />)} />
             <Route path="/cash-flow" element={guard('cash-flow', <CashFlowRegister />)} />
             <Route path="/settlement" element={guard('settlement', <Settlement />)} />

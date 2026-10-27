@@ -206,8 +206,7 @@ function storeFields(body: any, existingSettings?: any) {
         if (![true, false, 0, 1].includes(v as any)) throw fail(`${k} must be on or off.`, 'STORE_SETTINGS_INVALID', `settings.${k}`);
         merged[k] = v ? 1 : 0;
       } else if (k === 'ordering_mode') {
-        if (!(ORDERING_MODES as readonly string[]).includes(v as any)) throw fail('Choose off or WhatsApp.', 'STORE_SETTINGS_INVALID', 'settings.ordering_mode');
-        if (v === 'online') throw fail('Online orders are not available yet.', 'ORDERING_MODE_UNAVAILABLE', 'settings.ordering_mode');
+        if (!(ORDERING_MODES as readonly string[]).includes(v as any)) throw fail('Choose off, WhatsApp or online orders.', 'STORE_SETTINGS_INVALID', 'settings.ordering_mode');
         merged[k] = v;
       } else if (k === 'pickup_note' || k === 'delivery_note') {
         if (typeof v !== 'string' || v.trim().length > 200) throw fail('Use at most 200 characters.', 'STORE_SETTINGS_INVALID', `settings.${k}`);

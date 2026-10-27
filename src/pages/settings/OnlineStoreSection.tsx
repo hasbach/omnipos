@@ -415,12 +415,21 @@ export function OnlineStoreSection() {
               <CardBody>
                 <form onSubmit={saveOrdering} className="flex flex-col gap-4">
                   <p className="text-sm text-text-3">{t('commerce_ordering_subtitle')}</p>
-                  <Field label={t('commerce_ordering_mode')} error={err('settings.ordering_mode')}>
-                    <Select value={ordering.ordering_mode} disabled={!editable} onChange={(e) => setOrder({ ordering_mode: e.target.value as Ordering['ordering_mode'] })} options={[
-                      { value: 'off', label: t('commerce_ordering_off') },
-                      { value: 'whatsapp', label: t('commerce_ordering_whatsapp') },
-                      { value: 'online', label: t('commerce_ordering_online'), disabled: true },
-                    ]} />
+                  <Field
+                    label={t('commerce_ordering_mode')}
+                    helper={t('orders_fallback_hint')}
+                    error={err('settings.ordering_mode') || err('ordering_mode')}
+                  >
+                    <Select
+                      value={ordering.ordering_mode}
+                      disabled={!editable}
+                      onChange={(e) => setOrder({ ordering_mode: e.target.value as Ordering['ordering_mode'] })}
+                      options={[
+                        { value: 'off', label: t('commerce_ordering_off') },
+                        { value: 'whatsapp', label: t('commerce_ordering_whatsapp') },
+                        { value: 'online', label: t('orders_title') },
+                      ]}
+                    />
                   </Field>
                   {ordering.ordering_mode === 'whatsapp' && !store.contact_whatsapp && (
                     <p className="rounded-[var(--radius-input)] bg-accent-soft px-3 py-2 text-sm text-accent">{t('commerce_ordering_needs_whatsapp')}</p>
@@ -440,7 +449,11 @@ export function OnlineStoreSection() {
                       </Field>
                     </div>
                   </div>
-                  {err('settings.pickup_enabled') && <p className="text-sm text-danger">{err('settings.pickup_enabled')}</p>}
+                  {(err('settings.pickup_enabled') || err('settings.delivery_enabled')) && (
+                    <p className="text-sm text-danger">
+                      {err('settings.pickup_enabled') || err('settings.delivery_enabled')}
+                    </p>
+                  )}
                   <Field label={t('commerce_ordering_min_order')} helper={t('commerce_ordering_min_helper')} error={err('settings.min_order_usd')} className="sm:max-w-xs">
                     <MoneyInput value={ordering.min_order_usd} currencySymbol="$" min={0} disabled={!editable} invalid={!!err('settings.min_order_usd')} onChange={(v) => setOrder({ min_order_usd: v })} />
                   </Field>

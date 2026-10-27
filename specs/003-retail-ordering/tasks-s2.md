@@ -339,7 +339,7 @@ online only. Offline registers show the orders read-only. Shops can now select O
 **Independent test**: quickstart-s2 §4 steps 1–4, 6–8 with two registers on a **test** business. In the automated
 suites: mirror pull, first-action-wins mapping, offline/timeout, permissions.
 
-- [ ] T028 [P] [US4] Write `tests/orders-sync.test.ts` with T003's fake.
+- [X] T028 [P] [US4] Write `tests/orders-sync.test.ts` with T003's fake.
   - **Pull:** order tables are pulled (hot, and the 30 s orders pull when a store of the tenant has `ordering_mode =
     'online'`) and are never pushed. FK translation: `store_id` → local store, `order_id` → local order, `product_id`
     → local product or null when unknown.
@@ -350,7 +350,8 @@ suites: mirror pull, first-action-wins mapping, offline/timeout, permissions.
     changed }` only when order rows changed.
   - **Cleanup:** a missing cloud table is skipped with one warning; a tenant reset clears the mirrors and their
     cursors.
-- [ ] T029 [P] [US4] Write `tests/orders-routes.test.ts` (createTestApp + T011's seam).
+  - **Done note:** added after review: lines/events read before their order are deferred, then linked once the order arrives.
+- [X] T029 [P] [US4] Write `tests/orders-routes.test.ts` (createTestApp + T011's seam).
   - **Reads:** `GET /api/orders` sorts submitted orders first (oldest first), then by date descending; filters `state`,
     `store`, `from`/`to` and `q` (number, name, phone); `effective_state` is `expired` past `expires_at`.
     `GET /api/orders/summary` excludes overdue orders. The detail shows lines with local stock, history and
@@ -364,7 +365,7 @@ suites: mirror pull, first-action-wins mapping, offline/timeout, permissions.
   - **Permissions:** without `orders.view` → 403 on reads; without `orders.manage` → 403 on actions; cashier defaults
     can read but not act.
   - **Isolation:** tenant isolation on every route.
-- [ ] T030 [US4] Extend `server/sync.ts`.
+- [X] T030 [US4] Extend `server/sync.ts`.
   - Add `fkMap` entries for `orders`, `order_lines` and `order_events` (data-model-s2) and add the tables to
     `PULL_TABLES` (after `products`/`stores`) and `HOT_PULL_TABLES`, not to `PUSH_TABLES`.
   - Replace the `tableName !== 'tenants'` checks (pending-edit guard, `fallbackStart` clean-only filter) with a
@@ -373,34 +374,38 @@ suites: mirror pull, first-action-wins mapping, offline/timeout, permissions.
     `orders_sweep` via `cloudCall`.
   - `pullFromCloud` returns counts. `startSyncEngine({ onPulled })` is called with the order counts.
   - `clearSyncCursors` and `server/tenantReset.ts` also cover the mirrors.
-- [ ] T031 [US4] In `server.ts`, pass `onPulled` to `startSyncEngine`. It broadcasts `{ type: 'ORDERS_UPDATED',
+  - **Done note:** review fix: `order_lines` / `order_events` whose order is not local yet are deferred like transaction children (the cursor does not pass them); without it a line read in the same cycle as a brand-new order was stored with `order_id` NULL for good. `startSyncEngine` returns its timer (unref'd) so tests can stop it.
+- [X] T031 [US4] In `server.ts`, pass `onPulled` to `startSyncEngine`. It broadcasts `{ type: 'ORDERS_UPDATED',
   newSubmitted, changed }` to the tenant.
-- [ ] T032 [US4] Create `server/orders.ts` (reads) and register the routes in `server/routes.ts`, all scoped by tenant.
+- [X] T032 [US4] Create `server/orders.ts` (reads) and register the routes in `server/routes.ts`, all scoped by tenant.
   - **List:** `GET /api/orders`.
   - **Summary:** `GET /api/orders/summary`.
   - **Detail:** `GET /api/orders/:id`, with lines joined to local products and units, unit keys resolved, the
     `actions` object and `online` from the session status.
   - **Rules:** add `ROUTE_RULES` (`orders.view`) in `server/permissions.ts`.
   - **Isolation test:** enable the `todo` case from T013.
-- [ ] T033 [US4] Add the actions to `server/orders.ts`: `POST /api/orders/:id/{accept,reject,ready,cancel}`.
+  - **Done note:** the detail returns `number` as `W-<n>` like the list (the drawer title and WhatsApp messages use it).
+- [X] T033 [US4] Add the actions to `server/orders.ts`: `POST /api/orders/:id/{accept,reject,ready,cancel}`.
   - Local validation first: quantities ≥ 0 and ≤ ordered; a reason (`out_of_stock` | `damaged` | `customer_request` |
     `other`) is required below ordered; reject and cancel need a reason of 1–300 chars.
   - Call the RPC through `cloudCall` (10 s), apply the returned rows to the mirror marked synced
     (`last_synced_at = updated_at`), and broadcast `ORDERS_UPDATED`.
   - Map the codes with `ValidationError`, add `ROUTE_RULES` (`orders.manage`), and give the routes the `broadcast`
     function (unlike `setupCommerceRoutes` today).
-- [ ] T034 [P] [US4] Client types and strings.
+  - **Done note:** deviation (Codex): actions write back the returned order + lines; history events arrive with the next orders pull (≤ 30 s). Review fix: every reply carrying the order (incl. `expired`) is applied to the mirror, not only ok/handled.
+- [X] T034 [P] [US4] Client types and strings.
   - Create `src/lib/ordersApi.ts` with the types and calls.
   - Create `src/intl/locales/orders.ts` with all page, drawer, state, reason, notification and error strings in
     en/ar/fr, registered like the other locale modules.
   - Extend the `translateServerError` prefix in `src/lib/serverErrors.ts` to `ORDER_`.
-- [ ] T035 [US4] Allow Online orders in `server/commerce.ts`.
+  - **Done note:** also `src/lib/api.ts` keeps `state` from error bodies (for ORDER_ALREADY_HANDLED). Implemented by Codex — Gemini was out of quota (free tier limit 0) on 2026-10-27.
+- [X] T035 [US4] Allow Online orders in `server/commerce.ts`.
   - `ordering_mode = 'online'` is accepted (remove `ORDERING_MODE_UNAVAILABLE`). It requires pickup or delivery
     (`STORE_ORDERING_NEEDS_FULFILMENT`); WhatsApp is not required.
   - In `src/pages/settings/OnlineStoreSection.tsx`, the Online orders option is enabled (no "coming soon"), with a
     hint that the WhatsApp fallback needs a number.
   - Update `tests/commerce-store.test.ts`: `online` is accepted with a fulfilment method and refused without one.
-- [ ] T036 [US4] Create the Online orders page, `src/pages/OnlineOrders.tsx` with `src/pages/orders/OrderDetailDrawer.tsx`,
+- [X] T036 [US4] Create the Online orders page, `src/pages/OnlineOrders.tsx` with `src/pages/orders/OrderDetailDrawer.tsx`,
   built from the UI kit (`PageHeader`, `Toolbar`, state chips, store filter, `DateRangePicker`, `SearchInput`,
   `DataTable`, `Drawer`, `Badge`; pattern of `src/pages/InvoiceManagement.tsx`).
   - **Detail:** customer, fulfilment, note, lines with local stock, history.
@@ -410,12 +415,14 @@ suites: mirror pull, first-action-wins mapping, offline/timeout, permissions.
   - **Conflicts:** `ORDER_ALREADY_HANDLED` shows a toast with the new state and refreshes.
   - Refetch on `pos-sync` `ORDERS_UPDATED`.
   - No `alert` or `confirm`.
-- [ ] T037 [US4] Register the page.
+  - **Done note:** review: date range starts unset so older New orders are never hidden; local totals without decimals; history shows "from → to" only for a real state change.
+- [X] T037 [US4] Register the page.
   - Route `guard('onlineOrders', …)` in `src/Dashboard.tsx`.
   - Sidebar item in `src/components/shell/Sidebar.tsx` with an icon and a badge (submitted count from
     `/api/orders/summary`).
   - TopBar title in `src/components/shell/TopBar.tsx`.
-- [ ] T038 [US4] Create `src/hooks/useOrderNotifications.ts`, mounted in the Dashboard and in the POS (`usePos` socket
+  - **Done note:** page key / path is `online-orders` (kebab-case like the other pages), not `onlineOrders`.
+- [X] T038 [US4] Create `src/hooks/useOrderNotifications.ts`, mounted in the Dashboard and in the POS (`usePos` socket
   `ORDERS_UPDATED`) only when `can('orders.view')`.
   - On `newSubmitted > 0`: an info toast for 8 s ("New online order W-…"), a Web Audio tone (~200 ms, generated, no
     file; unlocked on the first user interaction) unless `localStorage['omnipos.orders.mute'] === '1'`, and a badge
@@ -423,17 +430,19 @@ suites: mirror pull, first-action-wins mapping, offline/timeout, permissions.
   - Add a mute toggle on the Online orders page.
   - Test the pure parts (mute flag, which events trigger) in `tests/order-notifications.test.ts` with a tiny DOM-free
     harness.
-- [ ] T039 [US4] Add "WhatsApp customer" and "Call customer" to the detail drawer.
+  - **Done note:** review fix: mute silences only the tone (the toast still shows, quickstart-s2 §4.2); pure logic is `orderNotification()` in `src/lib/orderNotifications.ts`; the toast shows the count of new orders (the socket payload carries no number). `t`/`toast` held in refs so the audio context is not torn down on re-render.
+- [X] T039 [US4] Add "WhatsApp customer" and "Call customer" to the detail drawer.
   - The message is pre-filled for the order's state (accepted with the confirmed total and the pickup note, ready,
     rejected with the reason) in the **store's** language, from `src/intl/locales/orders.ts`.
   - The phone is normalised with the Slice 1 rule; the detail response includes `customer_wa_digits` computed
     server-side with `storefront/src/phone.ts`.
   - Links open `wa.me` or `tel:` without blocking the UI.
-- [ ] T040 [US4] Verify in the preview server (Node-ABI rebuild in the main checkout, restored afterwards).
+- [X] T040 [US4] Verify in the preview server (Node-ABI rebuild in the main checkout, restored afterwards).
   - Seed mirror orders in `scripts/preview-server.ts` (New, Accepted, Ready, Expired).
   - Check the list, filters, detail, the accept dialog in en and ar (RTL), the offline banner, and the badge.
   - Simulate `ORDERS_UPDATED` for the toast.
   - Capture screenshots.
+  - **Done note:** preview seeds 6 orders (New ×2, Accepted, Ready, overdue, Rejected) and a fake cloud session whose order functions follow the state machine, so the page is online and actions work. Checked: list + New-first order + badge, detail, accept with a reduced line + required reason, Accepted state with POS note, Arabic RTL. Preview limits: confirmed totals and history are not recomputed by the fake, and the badge does not refresh (no socket broadcast in the preview).
 
 **Checkpoint**: shops can turn on Online orders; with the owner steps done, quickstart-s2 §4 steps 1–4 and 6–8 pass on
 a test business.

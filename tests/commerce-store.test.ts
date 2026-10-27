@@ -331,7 +331,7 @@ test("003 ordering settings: WhatsApp mode needs a WhatsApp number and a way to 
   assert.equal((await put({ contact_whatsapp: "" })).status, 200);
 });
 
-test("003 ordering settings: online orders not yet; field rules for notes and the minimum", async () => {
+test("003 ordering settings: online orders; field rules for notes and the minimum", async () => {
   const s = setup();
   const store = await newStore(s.as, { name: "Shop", contact_whatsapp: "70 123 456" });
   const put = (settings: any) => app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body: { settings } });
@@ -340,7 +340,9 @@ test("003 ordering settings: online orders not yet; field rules for notes and th
     assert.equal(r.status, 400, JSON.stringify(settings));
     assert.deepEqual([r.body.code, r.body.field], [code, field], JSON.stringify(settings));
   };
-  await bad({ ordering_mode: "online" }, "ORDERING_MODE_UNAVAILABLE", "settings.ordering_mode");
+  assert.equal((await put({ ordering_mode: "online" })).status, 200);
+  assert.equal((await app.api("PUT", `/api/commerce/stores/${store.id}`, { ...s.as, body: { contact_whatsapp: "" } })).status, 200);
+  await bad({ pickup_enabled: false, delivery_enabled: false }, "STORE_ORDERING_NEEDS_FULFILMENT", "settings.pickup_enabled");
   await bad({ ordering_mode: "shop" }, "STORE_SETTINGS_INVALID", "settings.ordering_mode");
   await bad({ pickup_enabled: "yes" }, "STORE_SETTINGS_INVALID", "settings.pickup_enabled");
   await bad({ pickup_note: "x".repeat(201) }, "STORE_SETTINGS_INVALID", "settings.pickup_note");

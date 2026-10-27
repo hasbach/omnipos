@@ -24,7 +24,7 @@ export interface TestApp {
   api: (method: string, url: string, opts?: { tenantId?: number; userId?: number; body?: any; raw?: { type: string; data: Uint8Array } }) => Promise<{ status: number; body: any }>;
 }
 
-export async function createTestApp(): Promise<TestApp> {
+export async function createTestApp(options: { broadcast?: (data: any, tenantId: number) => void } = {}): Promise<TestApp> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omnipos-test-"));
   const prevCwd = process.cwd();
   process.chdir(tmpDir);
@@ -59,7 +59,7 @@ export async function createTestApp(): Promise<TestApp> {
   const authenticate = (req: any, res: any, next: any) =>
     req.session.tenantId ? next() : res.status(401).json({ error: "Unauthorized" });
   const wss = { clients: [] as any[] };
-  const broadcast = () => {};
+  const broadcast = options.broadcast || (() => {});
   installPermissions(app, authenticate, broadcast);
   setupRoutes(app, wss, broadcast, authenticate);
 

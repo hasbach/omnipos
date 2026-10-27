@@ -4,6 +4,7 @@ import { Product, CartItem, Stakeholder, Transaction, Payment, Discount, Tenant,
 import { useTheme } from './useTheme';
 import { getTerminalId } from '../lib/terminal';
 import { useI18n } from '../intl/index';
+import { useOrderNotifications } from './useOrderNotifications';
 import { useToast } from '../components/ui/ToastProvider';
 import { useConfirm } from '../components/ui/ConfirmDialog';
 import {
@@ -46,6 +47,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const terminalId = getTerminalId();
   const { t: t18n, lang, dir, setLang } = useI18n();
   const toast = useToast();
+  useOrderNotifications();
   const confirm = useConfirm();
 
   // Interpolating translate helper: t('key', 'English fallback {var}', { var: 5 })
@@ -390,6 +392,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         };
 
         switch (data.type) {
+          case 'ORDERS_UPDATED':
+            window.dispatchEvent(new CustomEvent('pos-sync', { detail: data }));
+            break;
           case 'PRODUCTS_UPDATED':
             safeFetch('/api/products', setProducts);
             break;

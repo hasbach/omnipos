@@ -163,6 +163,7 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
     db.prepare("DELETE FROM cash_flow_edits WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stock_adjustments WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stakeholder_balance_log WHERE tenant_id = ?").run(t);
+    for (const table of ['order_events', 'order_lines', 'orders']) db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).run(t);
     clearSyncCursors(t); // the local rows are gone: pull everything again from scratch
     clearTombstones(t); // the cloud copy was purged too: nothing left to retry or guard against
     // Balances derive from baseline + transactions; with no transactions left, zero both.

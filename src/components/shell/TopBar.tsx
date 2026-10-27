@@ -8,6 +8,7 @@ import { Select } from '../ui/Select';
 
 const TITLE_ROUTES: { prefix: string; key: string; exact?: boolean }[] = [
   { prefix: '/dashboard', key: 'shell_nav_overview', exact: true },
+  { prefix: '/dashboard/online-orders', key: 'orders_title' },
   { prefix: '/dashboard/invoices', key: 'shell_nav_invoices' },
   { prefix: '/dashboard/daily-sales', key: 'shell_nav_daily_sales' },
   { prefix: '/dashboard/live', key: 'shell_nav_live_monitor' },

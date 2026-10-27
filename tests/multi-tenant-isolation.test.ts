@@ -12,7 +12,15 @@ let tenantB: number;
 let productA: number;
 let invoiceA: number;
 
-test('tenant B order mirrors are never returned to tenant A via /api/orders (enable with T032)', { todo: true }, () => {});
+test('tenant B order mirrors are never returned to tenant A', async () => {
+  const id = Number(app.db.prepare("INSERT INTO orders (tenant_id, number, state) VALUES (?, 1042, 'submitted')").run(tenantB).lastInsertRowid);
+  app.db.prepare("INSERT INTO order_lines (tenant_id, order_id, product_name) VALUES (?, ?, 'Private B')").run(tenantB, id);
+  app.db.prepare("INSERT INTO order_events (tenant_id, order_id, kind) VALUES (?, ?, 'submitted')").run(tenantB, id);
+  const list = await app.api('GET', '/api/orders', { tenantId: tenantA });
+  assert.equal(list.status, 200);
+  assert.ok(!list.body.rows.some((o: any) => o.id === id));
+  assert.equal((await app.api('GET', `/api/orders/${id}`, { tenantId: tenantA })).status, 404);
+});
 
 test('order mirrors carry tenant scope and live/archived transactions carry the order link', () => {
   for (const table of ['orders', 'order_lines', 'order_events']) {

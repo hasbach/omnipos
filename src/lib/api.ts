@@ -7,6 +7,7 @@ export interface ApiError extends Error {
   code?: string;
   field?: string;
   available?: number;
+  state?: string;
 }
 
 async function parse(res: Response) {
@@ -21,6 +22,7 @@ async function parse(res: Response) {
       `Request failed (${res.status})`;
     const err = new Error(message) as ApiError;
     if (body && typeof body === 'object') {
+      if ('state' in body) err.state = (body as any).state;
       if ('code' in body) err.code = (body as any).code;
       if ('field' in body) err.field = (body as any).field;
       if ('available' in body) err.available = (body as any).available;

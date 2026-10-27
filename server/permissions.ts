@@ -148,6 +148,9 @@ function txType(req: any): string | null {
 
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
+  { method: 'GET', pattern: '/api/orders', need: 'orders.view' },
+  { method: 'GET', pattern: '/api/orders/*', need: 'orders.view' },
+  { method: 'POST', pattern: '/api/orders/:id/*', need: 'orders.manage' },
   // --- roles matrix itself ---
   { method: 'GET', pattern: '/api/permissions', need: 'settings.manage' },
   { method: 'POST', pattern: '/api/permissions', need: 'settings.manage' },
