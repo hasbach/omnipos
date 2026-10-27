@@ -45,6 +45,9 @@ export interface SaleTab {
 
 const EMPTY_CUSTOMER_FORM = { name: '', phone: '', email: '', address: '' };
 
+// Set once the POS has asked for an update check in this app run (the POS unmounts on every lock).
+let posUpdateCheckDone = false;
+
 export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrentUser: any, users: any, setUsers: any, handleLogout?: any) {
   // Read terminal identity from URL (?terminalId=POS+1) injected by Electron on launch
   const terminalId = getTerminalId();
@@ -579,6 +582,13 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
           break;
       }
     });
+    // The launch-time check (10 s after start) normally runs while the lock screen is still up, before this
+    // listener exists, so its result was lost and the update offer never showed. Check again once per app
+    // run now that the POS is open (unpackaged builds skip the check in the main process).
+    if (!posUpdateCheckDone && window.electronAPI.checkForUpdates) {
+      posUpdateCheckDone = true;
+      window.electronAPI.checkForUpdates().catch(() => {});
+    }
     return cleanup;
   }, []);
 

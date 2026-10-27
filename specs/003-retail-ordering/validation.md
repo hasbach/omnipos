@@ -125,8 +125,14 @@ live storefront `teststore.myomnipos.com` opened from the same PC (made-up custo
 | 3 Accept → phone shows Accepted | ✔ accepted (no change); live status page "Accepted, Confirmed 1" at once. **Found and fixed:** the cloud's reply has no `tenant_id` on lines, so the register dropped them until the next pull (the open drawer showed "—" for the confirmed quantity); second register not checked | status: immediate |
 | 4 WhatsApp the customer (accepted message, store language) | | |
 | 5 Complete the sale | ✔ POS drawer → tab "Sale W-1001" at the order price → Quick Cash: transaction #191, stock 50 → 49; cloud order `completed` with `sale_global_id` = the transaction's `global_id`, history submitted → confirmed → completed, the sale pushed to the cloud with its `order_global_id`; a second completion refused (409); live status page "Completed". Mixed USD/LBP payment, receipt and second register not checked | |
-| 6 Reject with a reason → phone shows it | | |
-| 7 Expiry after 1 h → Expired on phone and both registers | | |
-| 8 Offline register B → read-only list, POS still sells | | |
-| 9 Abuse limits: 4th order refused; blocked phone refused | | |
-| 10 End of Day → sale archived with `order_global_id`, link kept, totals equal a hand-typed sale | | |
+| 6 Reject with a reason → phone shows it | ✔ (installed 1.10.0) W-1002 rejected "Out of stock today, sorry"; status page shows Rejected + reason; history shows `rejected` after the next pull | order → register ≈ 31 s |
+| 7 Expiry after 1 h → Expired on phone and both registers | not run | |
+| 8 Offline register B → read-only list, POS still sells | not run | |
+| 9 Abuse limits: 4th order refused; blocked phone refused | ✔ phone `70 000 020`: W-1003–W-1005 created, the 4th refused `phone_limit`; W-1002's phone blocked from the order panel (cloud row `+96170000010`, note `W-1002`), a new order written `+961 70 000 010` refused `refused`. Customer cancel from the status page: W-1003–W-1005 "You cancelled this order" | |
+| 10 End of Day → sale archived with `order_global_id`, link kept | ✔ W-1006 accepted (confirmed quantity shown at once — PR #6 fix in the release), marked ready, completed as sale #48 paid $500,000 cash + $73,000 card (posted with the POS request shape; the POS screen itself was checked with W-1001), stock 49 → 48, a second completion refused 409. End of Day (whole day, expected $1,073,000 = counted): both order sales archived on the register with `order_global_id`; the cloud orders stay `completed` (history submitted → confirmed → ready → completed). As always, settlement removes the settled sales from the cloud's live `transactions` (the archive is local), so `sale_global_id` then points to the register's archive | |
+
+**Release 1.10.0 on the installed app (2026-10-27).** The PC's installed 1.5.0 was updated to 1.10.0 by hand: the
+automatic offer never appeared. Cause: the update check runs once, 10 s after launch, and its result goes to a
+listener in the POS hook, which only mounts after the business sign-in and the PIN, so it is usually lost (all versions).
+Before updating, 1.5.0 had been signed in to the test business and pushed a duplicate Admin, USD, Walk-in and
+`store_name` (seed-before-pull, fixed in 1.7.7); cleanup SQL given to the owner.
