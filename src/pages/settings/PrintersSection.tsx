@@ -45,6 +45,8 @@ function fromSettings(s: Record<string, string>) {
   return {
     receipt_footer: s.receipt_footer || '',
     show_receipt_dialog: s.show_receipt_dialog !== '0',
+    // Missing key = on.
+    pos_scan_beep: s.pos_scan_beep !== '0',
   };
 }
 
@@ -66,6 +68,7 @@ export function PrintersSection({ settings, onSaved }: PrintersSectionProps) {
       await api.post('/api/settings', {
         receipt_footer: receiptForm.receipt_footer,
         show_receipt_dialog: receiptForm.show_receipt_dialog ? '1' : '0',
+        pos_scan_beep: receiptForm.pos_scan_beep ? '1' : '0',
       });
       toast.success(t('set_saved_toast'));
       onSaved();
@@ -218,6 +221,16 @@ export function PrintersSection({ settings, onSaved }: PrintersSectionProps) {
               <Switch
                 checked={receiptForm.show_receipt_dialog}
                 onChange={(v) => setReceiptForm({ ...receiptForm, show_receipt_dialog: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+              <div className="pe-4">
+                <p className="text-sm font-medium text-text">{t('set_pos_scan_beep')}</p>
+                <p className="text-xs text-text-3">{t('set_pos_scan_beep_help')}</p>
+              </div>
+              <Switch
+                checked={receiptForm.pos_scan_beep}
+                onChange={(v) => setReceiptForm({ ...receiptForm, pos_scan_beep: v })}
               />
             </div>
           </div>

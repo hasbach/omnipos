@@ -21,6 +21,7 @@ import { translateServerError } from '../lib/serverErrors';
 import { formatDateTime, partyDisplayName } from '../lib/format';
 import { orderLocal, formatLocal, effectiveLocalCurrency } from '../lib/orderTotals';
 import { findExactBarcodeMatches } from '../lib/productSearch';
+import { beep, installBeepUnlock, setBeepEnabled } from '../lib/beep';
 
 export const CURRENCIES = [
   { code: 'USD', symbol: '$', rate: 1 },
@@ -620,9 +621,14 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         setSettings(settingsMap);
         if (settingsMap.language) setLang(settingsMap.language as any);
         setShowReceiptDialog(settingsMap.show_receipt_dialog !== '0');
+        // Missing key = on.
+        setBeepEnabled(settingsMap.pos_scan_beep !== '0');
       })
       .catch(err => console.error('Settings fetch error:', err));
   }, [setLang]);
+
+  // Scan beeps: unlock the shared AudioContext on the first click / key press on the POS.
+  useEffect(() => { installBeepUnlock(); }, []);
 
   // Load this tenant's configured currencies and, on first load, default the display + payment
   // currency to the one marked default in Settings (e.g. LBP). Falls back to USD, then the first
@@ -839,16 +845,22 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     const max = maxLineQty(line);
     if (desired <= max + 1e-9) return desired;
     toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(liveStock(line)) }));
+    beep('error');
     return Math.max(line.quantity, max);
   };
 
   const findUnit = (product: Product, uomId?: number | null) =>
     uomId != null ? (product.units || []).find(u => u.id === uomId) : undefined;
 
-  /** Adds one unit of the product in the given unit of measure (null/undefined = base piece). */
+  /**
+   * Adds one unit of the product in the given unit of measure (null/undefined = base piece).
+   * Plays the success beep when the line was added / incremented and the error beep when it was refused;
+   * callers must not beep again for the same scan.
+   */
   const addToCart = (product: Product, uomId?: number | null) => {
     if (product.active === 0) {
       toast.error(t('err_product_disabled', 'This product is disabled.'));
+      beep('error');
       return;
     }
     const unit = findUnit(product, uomId);
@@ -858,9 +870,11 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       const stock = liveStock(product);
       if (piecesInCart(product.id) + (unit ? unit.factor : 1) > stock + 1e-9) {
         toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(stock) }));
+        beep('error');
         return;
       }
     }
+    beep('success');
     setLastAdded(prev => ({ key, nonce: (prev?.nonce || 0) + 1 }));
     setCart(prev => {
       const existing = prev.find(item => item.line_key === key);
@@ -901,31 +915,34 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       const res = await fetch(`/api/products/${encodeURIComponent(code)}`);
       if (res.ok) {
         const product = await res.json();
-        if (product.active === 0) {
-          toast.error(t('err_product_disabled', 'This product is disabled.'));
-          setBarcodeInput('');
-          setSuggestions([]);
-          return;
-        }
+        // addToCart beeps (success or error) for this scan, including the disabled-product case.
         // A unit barcode (carton/pack) adds that unit; scanning it twice = 2 cartons.
         addToCart(product, product.matched_uom_id ?? null);
         setBarcodeInput('');
         setSuggestions([]);
       } else {
+        beep('error');
         const err = await res.json().catch(() => ({}));
         if (err?.code === 'PRODUCT_DISABLED') {
           toast.error(translateServerError(err, t));
           setBarcodeInput('');
           setSuggestions([]);
-        } else {
+        } else if (res.status === 404 || err?.code === 'NOT_FOUND' || !err?.error) {
           toast.error(t('product_not_found', 'Product Not Found'));
           // Keep a typed search editable, but select it so the next scan replaces it instead of
           // being appended to the unknown code.
           barcodeRef.current?.select();
+        } else {
+          toast.error(translateServerError(err, t));
+          barcodeRef.current?.select();
         }
       }
     } catch (err) {
+      // Network / server down: the scan was read but nothing was added.
       console.error(err);
+      beep('error');
+      toast.error(t('pos_scan_lookup_failed', 'Could not look up this item. Check the connection and scan again.'));
+      barcodeRef.current?.select();
     }
   };
 
@@ -939,6 +956,8 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const updateQuantity = (lineKey: string, delta: number) => {
     const line = cart.find(i => i.line_key === lineKey);
     const clamped = line && delta > 0 ? clampLineQty(line, line.quantity + delta) : null;
+    // "+" on a line: success when the full quantity went in (clampLineQty already beeped the error otherwise).
+    if (line && clamped != null && clamped >= line.quantity + delta - 1e-9) beep('success');
     setCart(prev => prev.map(item => {
       if (item.line_key === lineKey) {
         const newQty = clamped != null ? clamped : Math.max(0, item.quantity + delta);
@@ -989,6 +1008,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       const max = maxLineQty(cur, newFactor);
       if (cur.quantity > max + 1e-9) {
         toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(liveStock(cur)) }));
+        beep('error');
         if (max <= 0) return;
         qtyOverride = max;
       }
