@@ -88,6 +88,16 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.10.3 — Detailed End-of-Day X-report (2026-11-06)
+- **X-report:** the End-of-Day report now prints the whole business day: period and report number, sales by payment
+  method with counts, refunds and purchases, the cash drawer with cash received per currency, counted cash per
+  currency with over/short, each cashier Cash Out, cash in/out by category, and sales by category and by cashier.
+- **Accuracy:** the report prints what the settlement saved, not the figures the Settlement page loaded earlier (a
+  sale made while the page was open used to be missing from the printout). Reprints from History and the details
+  panel print the same full report; older settlements fill the new sections from their archived rows.
+- **Printing:** X-reports (End of Day and Cash Out) print straight to the Windows default printer like receipts, with
+  no print dialog, and show an error when printing fails.
+
 ### 1.10.2 — Quick Market fixes (2026-10-27)
 - **Balance payment edits:** editing a customer collection or supplier payment in the cash-flow log now corrects the
   party's balance too (audited in the balance history, settled rows included). Payments recorded before 1.10.2 are
