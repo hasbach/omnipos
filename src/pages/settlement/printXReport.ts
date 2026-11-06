@@ -1,4 +1,5 @@
 import { formatDate, formatDateTime } from '../../lib/format';
+import { printReportHtml, type PrintResult } from './printReport';
 import { effectiveOf, type SettlementCorrection } from './types';
 
 type T = (key: string, fallback?: string) => string;
@@ -15,12 +16,11 @@ export interface PrintXReportOptions {
   corrections?: SettlementCorrection[];
 }
 
-/** Prints a thermal-style X report. Uses effective (post-correction) expected/actual/difference when present. */
-export function printXReport(report: any, opts: PrintXReportOptions) {
+/** Prints a thermal-style X report to the default printer, like a POS receipt (no print dialog).
+ *  Uses effective (post-correction) expected/actual/difference when present. */
+export function printXReport(report: any, opts: PrintXReportOptions): Promise<PrintResult> {
   const { t, lang, title, businessName } = opts;
   const corrections = opts.corrections || [];
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) return;
 
   const eff = effectiveOf(report);
   const expected = eff.expected || 0;
@@ -41,12 +41,14 @@ export function printXReport(report: any, opts: PrintXReportOptions) {
     })
     .join('');
 
-  printWindow.document.write(`
-      <html>
+  return printReportHtml(`<!doctype html>
+      <html dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
         <head>
+          <meta charset="utf-8">
           <title>${esc(title)} - ${esc(report.date)}</title>
           <style>
-            body { font-family: 'Courier New', Courier, monospace; padding: 20px; width: 300px; }
+            @page { margin: 0; }
+            body { font-family: 'Courier New', Courier, monospace; margin: 0; padding: 8px 10px; width: 280px; }
             h1 { text-align: center; font-size: 18px; margin-bottom: 5px; }
             .meta { text-align: center; font-size: 12px; margin-bottom: 20px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 14px; }
@@ -75,7 +77,6 @@ export function printXReport(report: any, opts: PrintXReportOptions) {
           ${correctionRows ? `<div style="margin-top: 15px; border-top: 1px dashed #000; padding-top: 5px;"><strong style="font-size:12px">${t('sd_xr_corrections', 'CORRECTIONS')}</strong><div style="margin-top:4px">${correctionRows}</div></div>` : ''}
           ${report.notes ? `<div style="margin-top: 15px; font-size: 12px; border-top: 1px dashed #000; padding-top: 5px;"><strong>${t('fin_xr_notes', 'Notes:')}</strong><br>${esc(report.notes)}</div>` : ''}
           <div class="footer">${esc(businessName || t('fin_xr_business_fallback', 'Business'))}<br>${esc(title)}</div>
-          <script>window.print(); window.close();<\/script>
         </body>
       </html>
     `);

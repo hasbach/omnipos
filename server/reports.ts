@@ -53,7 +53,7 @@ function globalDiscountAmount(subtotal: number, discountType: string | null, dis
   return 0;
 }
 
-interface RawLine {
+export interface RawLine {
   transaction_id: number;
   type: string;
   product_id: number;
@@ -125,7 +125,12 @@ function computeAllocatedLines(tenantId: number, from: string, to: string): Allo
   const rows = db.prepare(`${LINE_SELECT_LIVE} UNION ALL ${LINE_SELECT_ARCHIVED}`).all(
     tenantId, from, to, tenantId, from, to
   ) as RawLine[];
+  return allocateLines(rows);
+}
 
+// The allocation itself, for callers that select their own rows (the settlement snapshot reads
+// the live or one settlement's archived lines — server/settlement.ts). Rows need RawLine's columns.
+export function allocateLines(rows: RawLine[]): AllocatedLine[] {
   // Pass 1: per-transaction subtotal (sum of each line's line-discounted total).
   const subtotalByTx = new Map<number, number>();
   const firstRowByTx = new Map<number, RawLine>(); // O(1) lookup of the tx's global discount (was a linear find per tx)

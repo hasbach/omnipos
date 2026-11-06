@@ -221,6 +221,7 @@ const finance: Record<string, Record<string, string>> = {
     fin_xr_difference: 'Difference:',
     fin_xr_notes: 'Notes:',
     fin_xr_business_fallback: 'Business',
+    fin_xr_print_failed: 'Could not print the report ({error}). Check the default printer in Windows.',
     fin_xr_end_of_day: 'END OF DAY',
   },
   ar: {
@@ -437,6 +438,7 @@ const finance: Record<string, Record<string, string>> = {
     fin_xr_difference: 'الفرق:',
     fin_xr_notes: 'ملاحظات:',
     fin_xr_business_fallback: 'المتجر',
+    fin_xr_print_failed: 'تعذّرت طباعة التقرير ({error}). تحقق من الطابعة الافتراضية في Windows.',
     fin_xr_end_of_day: 'نهاية اليوم',
   },
   fr: {
@@ -653,6 +655,7 @@ const finance: Record<string, Record<string, string>> = {
     fin_xr_difference: 'Différence :',
     fin_xr_notes: 'Notes :',
     fin_xr_business_fallback: 'Entreprise',
+    fin_xr_print_failed: 'Impossible d’imprimer le rapport ({error}). Vérifiez l’imprimante par défaut de Windows.',
     fin_xr_end_of_day: 'FIN DE JOURNÉE',
   },
 };

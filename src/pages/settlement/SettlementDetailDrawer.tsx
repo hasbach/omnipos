@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ExternalLink, Info, Plus, Printer } from 'lucide-react';
-import { Badge, Button, Card, CardBody, CardHeader, Drawer } from '../../components/ui';
+import { Badge, Button, Card, CardBody, CardHeader, Drawer, useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatDate, formatDateTime, formatMoney } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import { usePermissions } from '../../lib/usePermissions';
 import { CorrectionModal, type CurrencyInfo } from './CorrectionModal';
-import { printXReport } from './printXReport';
+import { printSettlementReport } from './printSettlementReport';
 import {
   effectiveOf,
   type Breakdown,
@@ -52,6 +52,7 @@ export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessN
   const { can } = usePermissions();
   const canCorrect = can('settlement.correct');
   const { t, lang } = useI18n();
+  const toast = useToast();
   const [detail, setDetail] = useState<SettlementDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -110,9 +111,14 @@ export function SettlementDetailDrawer({ reportId, onClose, onChanged, businessN
     return path;
   };
 
-  const handlePrint = () => {
-    if (!report) return;
-    printXReport(report, { t, lang, title: t('fin_xr_daily_report', 'DAILY X-REPORT'), businessName, corrections });
+  const handlePrint = async () => {
+    if (!detail) return;
+    const r = await printSettlementReport(detail, { t, lang, businessName, title: t('fin_xr_daily_report', 'DAILY X-REPORT') });
+    if (!r.success) {
+      toast.error(
+        t('fin_xr_print_failed', 'Could not print the report ({error}). Check the default printer in Windows.').replace('{error}', r.error || ''),
+      );
+    }
   };
 
   // ── Cash register card ────────────────────────────────────────────
