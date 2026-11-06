@@ -408,3 +408,35 @@ test("/api/cash-flow/summary numbers are unchanged by the refactor", async () =>
   assert.equal(after.openingBalance, 50, "next register opens with the counted cash");
   assert.equal(after.expectedBalance, 50);
 });
+
+test("snapshot carries sales by category, by cashier and cash in/out by category for the X-report", async () => {
+  const day = await seedDay("XReport Detail Co");
+  app.db.prepare("UPDATE products SET category = 'Snacks' WHERE id = ?").run(day.productId);
+  assert.equal((await app.api("POST", "/api/cash-flow", {
+    tenantId: day.tenantId, body: { type: "out", amount: 3, currency: "USD", exchange_rate: 1, category: "expense", reason: "cleaning" },
+  })).status, 200);
+  const reportId = await settleDay(day);
+
+  const d = await app.api("GET", `/api/settlements/${reportId}`, { tenantId: day.tenantId });
+  assert.equal(d.status, 200, JSON.stringify(d.body));
+  const rec = d.body.recorded;
+
+  assert.deepEqual(rec.sales_by_category.map((c: any) => [c.category, c.qty, c.revenue]), [["Snacks", 5, 50]]);
+  assert.equal(rec.cashiers.length, 1);
+  assert.equal(rec.cashiers[0].user_id, day.userId);
+  assert.equal(rec.cashiers[0].invoices, 3);
+  assert.equal(rec.cashiers[0].sales, 50);
+  assert.equal(rec.cashiers[0].refunds, 0);
+
+  const flows = Object.fromEntries(rec.cash_flow_by_category.map((c: any) => [`${c.type}:${c.category}`, [c.count, c.total]]));
+  assert.deepEqual(flows["out:expense"], [1, 3]);
+  const inTotal = rec.cash_flow_by_category.filter((c: any) => c.type === "in").reduce((s: number, c: any) => s + c.total, 0);
+  const outTotal = rec.cash_flow_by_category.filter((c: any) => c.type === "out").reduce((s: number, c: any) => s + c.total, 0);
+  assert.equal(inTotal, rec.register.cash_in, "categories add up to the drawer's cash in");
+  assert.equal(outTotal, rec.register.cash_out, "categories add up to the drawer's cash out");
+
+  // The rebuild from the archive produces the same sections.
+  assert.deepEqual(d.body.rebuilt.sales_by_category, rec.sales_by_category);
+  assert.deepEqual(d.body.rebuilt.cashiers, rec.cashiers);
+  assert.deepEqual(d.body.rebuilt.cash_flow_by_category, rec.cash_flow_by_category);
+});

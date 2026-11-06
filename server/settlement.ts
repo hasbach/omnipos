@@ -11,6 +11,7 @@
 import { db, logAction } from "./db.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
 import { findAdminByPin } from "./tenantReset.js";
+import { allocateLines, type RawLine } from "./reports.js";
 
 const EPOCH = "0000-01-01 00:00:00";
 const FAR_FUTURE = "9999-12-31 23:59:59";
@@ -68,20 +69,20 @@ export const registerWindow = (tenantId: number, scope: RegisterScope) =>
 // Where the rows of a breakdown come from: the tenant's LIVE tables (at settlement time) or the
 // ARCHIVED rows of one settlement (the rebuild).
 interface Source {
-  tx: string; pay: string; cf: string;
+  tenantId: number; tx: string; pay: string; cf: string; items: string;
   txWhere: string; txParams: any[];
   cfWhere: string; cfParams: any[];
 }
 function liveSource(tenantId: number): Source {
   return {
-    tx: "transactions", pay: "payments", cf: "cash_flow",
+    tenantId, tx: "transactions", pay: "payments", cf: "cash_flow", items: "transaction_items",
     txWhere: "t.tenant_id = ?", txParams: [tenantId],
     cfWhere: "tenant_id = ?", cfParams: [tenantId],
   };
 }
 function archivedSource(tenantId: number, reportId: number): Source {
   return {
-    tx: "archived_transactions", pay: "archived_payments", cf: "archived_cash_flow",
+    tenantId, tx: "archived_transactions", pay: "archived_payments", cf: "archived_cash_flow", items: "archived_transaction_items",
     txWhere: "t.tenant_id = ? AND t.settlement_id = ?", txParams: [tenantId, reportId],
     cfWhere: "tenant_id = ? AND settlement_id = ?", cfParams: [tenantId, reportId],
   };
@@ -173,6 +174,65 @@ function flowSection(src: Source, type: "in" | "out", since: string, until: stri
   return { total, by_currency, count };
 }
 
+// Net sales per product category (refund lines subtract) — the same allocated-revenue basis as the
+// Daily Sales and by-category reports (net of line + invoice discounts, excluding tax).
+function categorySection(src: Source, until: string) {
+  const rows = db.prepare(`
+    SELECT ti.transaction_id as transaction_id, t.type as type, ti.product_id as product_id,
+           ti.quantity as quantity, ti.unit_price as unit_price, ti.discount_type as discount_type,
+           ti.discount_value as discount_value, ti.unit_cost as unit_cost,
+           t.discount_type as tx_discount_type, t.discount_value as tx_discount_value,
+           t.stakeholder_id as stakeholder_id, t.user_id as user_id, t.created_at as created_at,
+           date(t.created_at,'localtime') as local_date,
+           p.name as product_name, p.barcode as barcode, p.category as category, p.cost as product_cost
+    FROM ${src.items} ti
+    JOIN ${src.tx} t ON t.id = ti.transaction_id
+    LEFT JOIN products p ON p.id = ti.product_id
+    WHERE ${src.txWhere} AND t.type IN ('sale','refund') AND t.created_at <= ?
+  `).all(...src.txParams, until) as RawLine[];
+  const map = new Map<string, { category: string; qty: number; revenue: number }>();
+  for (const l of allocateLines(rows)) {
+    const s = l.type === "refund" ? -1 : 1;
+    const c = map.get(l.category) || { category: l.category, qty: 0, revenue: 0 };
+    c.qty += s * l.quantity;
+    c.revenue += s * l.revenue;
+    map.set(l.category, c);
+  }
+  return [...map.values()].sort((a, b) => b.revenue - a.revenue);
+}
+
+// Per cashier: invoice count and totals of their sales and refunds (invoice totals, USD).
+function cashierSection(src: Source, until: string) {
+  return (db.prepare(`
+    SELECT t.user_id as user_id, u.name as name,
+           SUM(CASE WHEN t.type = 'sale' THEN 1 ELSE 0 END) as invoices,
+           IFNULL(SUM(CASE WHEN t.type = 'sale' THEN t.total_amount ELSE 0 END), 0) as sales,
+           IFNULL(SUM(CASE WHEN t.type = 'refund' THEN t.total_amount ELSE 0 END), 0) as refunds
+    FROM ${src.tx} t LEFT JOIN users u ON u.id = t.user_id
+    WHERE ${src.txWhere} AND t.type IN ('sale','refund') AND t.created_at <= ?
+    GROUP BY t.user_id ORDER BY sales DESC
+  `).all(...src.txParams, until) as any[]).map((r) => ({
+    user_id: r.user_id ?? null, name: r.name ?? null, invoices: r.invoices as number, sales: r.sales as number, refunds: r.refunds as number,
+  }));
+}
+
+// Manual cash in/out per category over the register window. `name` is set for custom categories
+// (built-in keys are translated by the client).
+function cashFlowCategorySection(src: Source, tenantId: number, since: string, until: string) {
+  return (db.prepare(`
+    SELECT f.type as type, f.category as category, c.name as name, f.count as count, f.total as total
+    FROM (
+      SELECT type, COALESCE(NULLIF(category, ''), 'other') as category, COUNT(*) as count, IFNULL(SUM(amount / exchange_rate), 0) as total
+      FROM ${src.cf} WHERE ${src.cfWhere} AND created_at > ? AND created_at <= ?
+      GROUP BY type, COALESCE(NULLIF(category, ''), 'other')
+    ) f
+    LEFT JOIN cash_flow_categories c ON c.tenant_id = ? AND c.key = f.category
+    ORDER BY f.type ASC, f.total DESC
+  `).all(...src.cfParams, since, until, tenantId) as any[]).map((r) => ({
+    type: r.type as "in" | "out", category: r.category as string, name: (r.name ?? null) as string | null, count: r.count as number, total: r.total as number,
+  }));
+}
+
 export interface Breakdown {
   period_start: string;
   period_end: string;
@@ -186,6 +246,10 @@ export interface Breakdown {
     cash_in: number; cash_out: number; expected: number;
   };
   shifts: { user_name: string | null; expected_cash: number; actual_cash: number; difference: number; created_at: string }[];
+  // Added for the detailed End-of-Day X-report; absent from snapshots taken before it.
+  sales_by_category?: ReturnType<typeof categorySection>;
+  cashiers?: ReturnType<typeof cashierSection>;
+  cash_flow_by_category?: ReturnType<typeof cashFlowCategorySection>;
 }
 
 function buildBreakdown(
@@ -209,6 +273,9 @@ function buildBreakdown(
       cash_in: m.cashIn, cash_out: m.cashOut, expected,
     },
     shifts: o.shifts,
+    sales_by_category: categorySection(src, o.until),
+    cashiers: cashierSection(src, o.until),
+    cash_flow_by_category: cashFlowCategorySection(src, src.tenantId, o.periodStart, o.until),
   };
 }
 

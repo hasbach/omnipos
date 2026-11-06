@@ -34,6 +34,9 @@ import { usePermissions } from '../lib/usePermissions';
 import { DenominationCounter } from './finance/DenominationCounter';
 import { SettlementDetailDrawer } from './settlement/SettlementDetailDrawer';
 import { printXReport as printXReportDoc } from './settlement/printXReport';
+import { printSettlementReport } from './settlement/printSettlementReport';
+import type { SettlementDetail } from './settlement/types';
+import type { PrintResult } from './settlement/printReport';
 import { effectiveOf } from './settlement/types';
 
 interface Currency {
@@ -349,7 +352,12 @@ export default function Settlement() {
         confirmLabel: t('fin_print', 'Print'),
         cancelLabel: t('fin_close', 'Close'),
       });
-      if (printIt) printXReport(report, t('fin_xr_end_of_day', 'END OF DAY'));
+      if (printIt) {
+        // Print what the server saved (its snapshot), not the figures this page loaded earlier.
+        const detail = settleData?.report_id != null ? await fetchSettlementDetail(settleData.report_id) : null;
+        if (detail) await printFullReport(detail, t('fin_xr_end_of_day', 'END OF DAY'));
+        else await printXReport(report, t('fin_xr_end_of_day', 'END OF DAY'));
+      }
     } catch (err: any) {
       toast.error(translateServerError(err, t) || String(err));
     } finally {
@@ -371,19 +379,33 @@ export default function Settlement() {
     }
   };
 
-  const printXReport = (report: any, title: string = t('fin_xr_daily_report', 'DAILY X-REPORT'), corrections?: any[]) =>
-    printXReportDoc(report, { t, lang, title, businessName, corrections });
-
-  // History-row print: fetch the corrections so the receipt lists them alongside the effective totals.
-  const printHistoryRow = async (r: DailyReport) => {
-    let corrections: any[] = [];
-    try {
-      const d = await api.get<any>(`/api/settlements/${r.id}`);
-      corrections = d?.corrections || [];
-    } catch {
-      /* print without the corrections list */
+  // Reports print like POS receipts: silently to the default printer. Say so when that fails.
+  const reportPrintResult = (r: PrintResult) => {
+    if (!r.success) {
+      toast.error(
+        t('fin_xr_print_failed', 'Could not print the report ({error}). Check the default printer in Windows.').replace('{error}', r.error || ''),
+      );
     }
-    printXReport(r, undefined, corrections);
+  };
+  const printXReport = async (report: any, title: string = t('fin_xr_daily_report', 'DAILY X-REPORT'), corrections?: any[]) =>
+    reportPrintResult(await printXReportDoc(report, { t, lang, title, businessName, corrections }));
+  const printFullReport = async (detail: SettlementDetail, title: string) =>
+    reportPrintResult(await printSettlementReport(detail, { t, lang, businessName, title }));
+
+  const fetchSettlementDetail = async (id: number): Promise<SettlementDetail | null> => {
+    try {
+      return await api.get<SettlementDetail>(`/api/settlements/${id}`);
+    } catch {
+      return null;
+    }
+  };
+
+  // History-row print: the full End-of-Day report from the saved settlement; the short receipt
+  // only if the detail cannot be loaded.
+  const printHistoryRow = async (r: DailyReport) => {
+    const detail = await fetchSettlementDetail(r.id);
+    if (detail) await printFullReport(detail, t('fin_xr_daily_report', 'DAILY X-REPORT'));
+    else await printXReport(r);
   };
 
   const shiftColumns: DataTableColumn<CashierShift>[] = [

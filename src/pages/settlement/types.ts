@@ -45,6 +45,11 @@ export interface Breakdown {
   cash_out?: CashMoveBlock;
   register?: RegisterBlock;
   shifts?: ShiftSnapshot[];
+  /** Net sales per product category (absent on snapshots taken before the detailed X-report). */
+  sales_by_category?: { category: string; qty: number; revenue: number }[];
+  cashiers?: { user_id: number | null; name: string | null; invoices: number; sales: number; refunds: number }[];
+  /** Manual cash in/out per category; `name` is set for custom categories. */
+  cash_flow_by_category?: { type: 'in' | 'out'; category: string; name: string | null; count: number; total: number }[];
 }
 
 export interface CountedLine {
