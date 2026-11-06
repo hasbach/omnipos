@@ -88,6 +88,12 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.10.4 — POS scan beeps (2026-11-07)
+- **POS:** a short high beep when an item goes into the cart (scan, barcode, search pick, "+" on a line) and a low
+  double tone whenever a scan or entry is refused (unknown barcode, disabled product, not enough stock, unit change
+  over stock, server or network error), so the cashier hears it without looking at the screen.
+- **Settings → Printers:** "Beep when scanning" switch (on by default).
+
 ### 1.10.3 — Detailed End-of-Day X-report (2026-11-06)
 - **X-report:** the End-of-Day report now prints the whole business day: period and report number, sales by payment
   method with counts, refunds and purchases, the cash drawer with cash received per currency, counted cash per
