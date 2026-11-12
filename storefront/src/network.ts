@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
 
 // Checked in order. The edge appends the real client to X-Forwarded-For, so only its LAST hop is trusted (earlier
-// entries can be typed by the client). Which one Render provides is confirmed once in production (quickstart-s2 §1.5).
+// entries can be typed by the client). Behind Cloudflare it is cf-connecting-ip (confirmed in production on the Contabo VPS) (quickstart-s2 §1.5).
 const SOURCES = ['cf-connecting-ip', 'true-client-ip', 'x-forwarded-for'] as const;
 
 let sourceLogged = false;

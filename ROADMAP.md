@@ -44,6 +44,11 @@ Other items: _(add fixes and ideas here)_
 - [x] 002 deployment (2026-10-19): Render web service `omnipos-storefront` from `render.yaml` (branch
       `002-tenant-online-store`, Starter, Frankfurt, edge caching "All files"); `myomnipos.com` bought at Hostinger,
       apex + wildcard Let's Encrypt certificates issued; redirects, headers and edge cache checked (validation.md).
+- [x] Storefront moved from Render to the Contabo VPS (2026-11-12): Coolify application (Base Directory `/storefront`)
+      behind Cloudflare (zone `myomnipos.com`, tunnel `contabo-vps`, SSL Flexible, cache rule); `render.yaml` removed,
+      wildcard route in `storefront/deploy/omnipos-wildcard.yaml`; live check on the test store: quote, order W-1007
+      placed and cancelled, `cf-cache-status: HIT`, `network source: cf-connecting-ip`. Setup: storefront/README.md.
+      Open: GitHub webhook for auto-deploy; delete the old Render service.
 - [ ] 002 live store check: a register on these branches signed into a **test** business opens a store → store and
       product pages, WhatsApp preview, pause, owner preview (quickstart §3–4). Then switch the Render service to
       `main` after the merge.

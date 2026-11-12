@@ -1,4 +1,4 @@
-// The storefront handler on plain Node http: production on Render (server.ts) and local runs (dev-server.ts).
+// The storefront handler on plain Node http: production on the Contabo VPS (server.ts) and local runs (dev-server.ts).
 // Serves the public/ assets itself, answers /healthz for the platform, and hands everything else to
 // src/http.ts. The store is picked from the Host header only — X-Forwarded-Host is client-controlled and the
 // edge cache keys on Host, so trusting it would let one request poison another store's cached page.

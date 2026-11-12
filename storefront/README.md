@@ -4,7 +4,7 @@ Public, read-only online-store pages for OmniPOS businesses — feature
 [002](../specs/002-tenant-online-store/spec.md). Server-rendered HTML from one function; every page is cacheable at
 the CDN so visitor traffic barely touches Supabase.
 
-- `server.ts` — production entry (Render web service, `render.yaml` at the repo root); `src/node-server.ts` serves
+- `server.ts` — production entry (Contabo VPS via Coolify, see Deployment below); `src/node-server.ts` serves
   `public/` and `/healthz` and hands every page to `src/http.ts`, which routes by host (`<address>.<domain>`) or
   path (`/s/<address>`).
 - `src/` — router, data source (public catalog RPCs), page renderers, i18n.
@@ -51,20 +51,20 @@ not cached or indexed; status pages also set `Referrer-Policy: no-referrer`. Clo
 
 `ORDER_GATEWAY_KEY` is the server-only secret authorising the four public order RPCs. Only its SHA-256 is stored
 in the cloud table `storefront_gateway_keys`. Run `node scripts/gateway-key.mjs` to print a new key and hash; it
-writes nothing. Set the key on Render (`sync: false` in `render.yaml`); never commit it. Without it, online-mode
+writes nothing. Set the key in Coolify (Environment Variables) and redeploy; never commit it. Without it, online-mode
 stores render with ordering off and startup logs a warning.
 
 For POSTs, `src/network.ts` chooses `CF-Connecting-IP`, then `True-Client-IP`, then the last `X-Forwarded-For`
 hop, then the socket address. It hashes `UTC date + '|' + address + '|' + ORDER_GATEWAY_KEY` with SHA-256, rotating
 daily. Only the hash is sent as `p_network` on order submission; the raw IP is never forwarded to the cloud or
-logged. Check the once-per-process `network source: ...` log on Render to verify which source production uses.
+logged. Check the once-per-process `network source: ...` log in Coolify (Logs) to verify which source production uses; behind Cloudflare it is `cf-connecting-ip`.
 
 Deploy in this order (owner setup):
 
 1. Apply `supabase/migrations/2026-10-23_retail_ordering_s2.sql` after Slice 1, then run
    `supabase/checks/2026-10-23_retail_ordering_s2_checks.sql` (the key-count check needs the next step).
 2. Generate the gateway key and insert only its hash into `storefront_gateway_keys`; recheck the key count.
-3. Set `ORDER_GATEWAY_KEY` on Render.
+3. Set `ORDER_GATEWAY_KEY` in Coolify.
 4. Merge to `main` and deploy the storefront.
 5. Release the desktop app.
 
@@ -79,39 +79,67 @@ Deploy in this order (owner setup):
 - Page weight (`src/limits.ts`): home ≤ 60 KB with 48 cards (also with ordering on), CSS ≤ 20 KB, `storefront.js`
   ≤ 10 KB, `cart.js` ≤ 16 KB, `checkout.js` ≤ 10 KB.
 
-## Render web service (deployment)
+## Deployment (Contabo VPS + Coolify + Cloudflare)
 
-The service is described by `render.yaml` (repo root): web service `omnipos-storefront`, Root Directory
-`storefront`, Node 22, `npm install --omit=dev` / `npm start` (`tsx server.ts`), health check `/healthz`, region
-Frankfurt, Starter instance, auto-deploy only when `storefront/**` changes. It is billed as its own instance next to
-the other services in the workspace.
+Since 2026-11-12 the storefront runs on the Contabo VPS, deployed by Coolify (project **OmniPOS** → application built
+from `main`, Base Directory `/storefront`, Node 22, `npm start` = `tsx server.ts`, port `10000`). Cloudflare sits in
+front for DNS, TLS and edge caching. It replaced the Render web service `omnipos-storefront` (and its `render.yaml`).
+
+```
+visitor ─HTTPS─▶ Cloudflare (myomnipos.com zone, Free, SSL "Flexible", cache rule)
+                    └─ Cloudflare Tunnel `contabo-vps` ─▶ http://127.0.0.1:80 (Coolify's Traefik) ─▶ storefront :10000
+```
+
+The VPS drops ports 80/443 from the internet on purpose; everything (including the Coolify panel at
+`coolify.salloumservices.com`) reaches it through the tunnel. Do not open those ports.
 
 Before deploying, the cloud migrations `2026-10-18_commerce_store_foundation.sql`, `2026-10-19_storefront.sql` and
 `2026-10-19b_storefront_storage.sql` must be applied (then run `supabase/checks/2026-10-19_storefront_checks.sql`).
 For ordering (003), apply `2026-10-21_retail_ordering_s1.sql` and run its checks file; don't re-run
 `2026-10-19_storefront.sql` after it (the public functions' columns changed).
 
-Step by step:
+### Coolify application
 
-1. Buy `myomnipos.com` at any registrar. Its DNS can stay there (or move to Cloudflare); Render does not need the
-   nameservers.
-2. Render → New → Blueprint → this repository, on the branch that has the storefront (`main` once 002 is merged).
-   Render reads `render.yaml` and asks for the two `sync: false` values:
-   - `SUPABASE_ANON_KEY`: the public anon key (same as `src/lib/supabase.ts`);
-   - `OMNIPOS_WEBSITE_URL`: where `https://myomnipos.com/` redirects (the OmniPOS website).
-3. Service → Settings → **Edge Caching**: turn it on with cacheable type **All files**. Every response sets its own
-   `Cache-Control` (`public, s-maxage=240` for store pages, `private, no-store` for owner previews, immutable for
-   assets and photos), so pages are cached per URL and previews never are. Each deploy purges the edge cache.
-4. Service → Settings → Custom Domains: `myomnipos.com` and `*.myomnipos.com` come from the Blueprint (add them by
-   hand if not). At the registrar, create exactly the records Render shows, typically:
-   - apex `myomnipos.com`: `A` → Render's IP (or `ALIAS`/`ANAME` → `omnipos-storefront.onrender.com`);
-   - `*`: `CNAME` → `omnipos-storefront.onrender.com`;
-   - `_acme-challenge` and `_cf-custom-hostname`: the `CNAME` values Render gives for the wildcard certificate.
-   The apex must point at Render too, or the wildcard fails verification. Wait until both domains show as verified
-   with a certificate issued.
-5. If the domain ever changes from `myomnipos.com`, update `STOREFRONT_DOMAIN` in `render.yaml` and the defaults in
-   `server/commerce.ts` (public addresses shown in the desktop app's Settings) and `storefront/src/config.ts`, then
-   release the app.
-6. Check `https://myomnipos.com/` redirects to the website, `https://www.myomnipos.com/` to the apex, a test store
-   opens at `https://<address>.myomnipos.com/`, and a second request for the same page returns
-   `cf-cache-status: HIT`. Then run the burst test above.
+Environment variables (Application → Environment Variables; **Save**, then **Redeploy** — a saved value only reaches
+the container after a redeploy):
+
+| Variable | Value |
+|---|---|
+| `NODE_VERSION` | `22` |
+| `PORT` | `10000` |
+| `STOREFRONT_DOMAIN` | `myomnipos.com` |
+| `SUPABASE_URL` | the project URL (see `src/lib/supabase.ts`) |
+| `SUPABASE_ANON_KEY` | the public anon key (same as `src/lib/supabase.ts`) |
+| `OMNIPOS_WEBSITE_URL` | where `https://myomnipos.com/` redirects (the OmniPOS website) |
+| `ORDER_GATEWAY_KEY` | secret, see "Online orders" above; never commit it |
+
+Domains: the application lists `http://myomnipos.com` (plain `http`, TLS is Cloudflare's). Coolify refuses wildcard
+hosts, so every `<address>.myomnipos.com` is routed by `deploy/omnipos-wildcard.yaml`, installed on the VPS as
+`/data/coolify/proxy/dynamic/omnipos-wildcard.yaml` (Traefik reloads it by itself). It points at the Coolify-generated
+service `http-0-<application uuid>@docker`; if the application is ever recreated, update the uuid in that file.
+
+Coolify does not auto-deploy yet (no GitHub webhook is configured): after a change under `storefront/`, press
+**Redeploy** in Coolify (or add the webhook under the application's Webhooks tab).
+
+### Cloudflare
+
+- **Zone** `myomnipos.com` (Free); Hostinger only holds the registration, its nameservers point at Cloudflare.
+- **Tunnel `contabo-vps`** (Networking → Tunnels → Routes): published applications `myomnipos.com` and
+  `*.myomnipos.com` → `http://127.0.0.1:80`. DNS: `myomnipos.com` and `*` are proxied CNAMEs to the tunnel
+  (`<tunnel id>.cfargotunnel.com`); `www` is covered by the wildcard (Traefik answers `www` with a 301 to the apex).
+- **SSL/TLS** mode `Flexible` (the tunnel hop to Traefik is plain HTTP inside the server).
+- **Cache rule** "Storefront: cache per origin headers": all requests, *Eligible for cache*, edge TTL from the origin.
+  Every response sets its own `Cache-Control` (`public, s-maxage=240` for store pages, `private, no-store` for owner
+  previews and order status pages, immutable for assets and photos), so pages are cached per URL and previews and
+  orders never are. Cloudflare does not purge on deploy: purge from the dashboard after an urgent fix.
+- The order abuse limits read `cf-connecting-ip` (the server logs `network source: cf-connecting-ip` once).
+
+### Checks after a deploy
+
+1. `https://myomnipos.com/` redirects to the website and `https://www.myomnipos.com/` to the apex.
+2. A test store opens at `https://<address>.myomnipos.com/` and a second request returns `cf-cache-status: HIT`.
+3. On the test business, a quote and an order go through (`/order/quote`, `/order`; cancel it afterwards).
+4. Run the burst test above.
+5. If the domain ever changes from `myomnipos.com`, update `STOREFRONT_DOMAIN` in Coolify, the hosts in
+   `deploy/omnipos-wildcard.yaml`, and the defaults in `server/commerce.ts` (public addresses shown in the desktop
+   app's Settings) and `storefront/src/config.ts`, then release the app.

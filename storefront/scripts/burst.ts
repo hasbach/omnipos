@@ -1,6 +1,6 @@
 // Burst test for a deployed storefront (spec 002 SC-001 / SC-002; quickstart §4). Dev tool, not deployed.
 //   npx tsx storefront/scripts/burst.ts https://abc-market.myomnipos.com / /?c=Dairy /p/<listing-id> --requests=2000 --concurrency=20
-// Reports status codes, p50 / p95 latency and the CDN cache mix from Render's edge cache (cf-cache-status header):
+// Reports status codes, p50 / p95 latency and the CDN cache mix from Cloudflare's edge cache (cf-cache-status header):
 // every response not served from the edge (MISS, EXPIRED, BYPASS, DYNAMIC, none) is a call to Supabase, so (MISS / requests) is the storefront's share of database reads (target < 5%).
 
 const args = process.argv.slice(2);

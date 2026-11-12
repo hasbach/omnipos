@@ -1,0 +1,17 @@
+# Traefik file-provider route for every store address (<address>.myomnipos.com).
+#
+# Why a file: Coolify's Domains field rejects wildcard hosts, so the apex is added in Coolify normally and this
+# route sends all other subdomains to the same Coolify-managed service. The service name is derived from the
+# Coolify application uuid (itfflfpqiv0ysch0z9oeo31y), so it survives redeploys. Plain HTTP only: the server does
+# not accept 80/443 from the internet; Cloudflare reaches it through the `contabo-vps` tunnel.
+#
+# Install on the VPS: /data/coolify/proxy/dynamic/omnipos-wildcard.yaml (Traefik reloads it on change).
+http:
+  routers:
+    omnipos-storefront-wildcard:
+      entryPoints:
+        - http
+      rule: "HostRegexp(`^[a-z0-9-]+\\.myomnipos\\.com$`)"
+      middlewares:
+        - gzip-sse@docker
+      service: http-0-itfflfpqiv0ysch0z9oeo31y@docker
