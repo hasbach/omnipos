@@ -1,5 +1,5 @@
-// Production entry (Render web service, see render.yaml at the repo root): `npm start` in storefront/.
-// Render sets PORT; the edge cache in front honours the Cache-Control headers set by src/http.ts.
+// Production entry (Coolify on the Contabo VPS, see storefront/README.md): `npm start` in storefront/.
+// PORT is set by the host (10000 by default); the Cloudflare edge cache in front honours the Cache-Control headers set by src/http.ts.
 import { loadConfig } from './src/config.js';
 import { SupabaseRpcSource } from './src/data.js';
 import { createStorefrontServer } from './src/node-server.js';

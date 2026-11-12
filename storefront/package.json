@@ -2,7 +2,7 @@
   "name": "omnipos-storefront",
   "private": true,
   "type": "module",
-  "description": "OmniPOS public online-store pages (specs/002-tenant-online-store). Deployed as its own Render web service (render.yaml).",
+  "description": "OmniPOS public online-store pages (specs/002-tenant-online-store). Deployed on the Contabo VPS through Coolify (see README.md).",
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "tsx server.ts"

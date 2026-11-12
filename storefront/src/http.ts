@@ -1,5 +1,5 @@
 // The storefront request handler, independent of the hosting platform (src/node-server.ts serves it on Node http
-// for Render and dev-server.ts; tests call it directly). Caching rules: contracts/storefront-routes.md.
+// for production and dev-server.ts; tests call it directly). Caching rules: contracts/storefront-routes.md.
 import type { StorefrontConfig } from './config.js';
 import { type DataSource, type PublicStore, type OrderGateway, SupabaseOrderGateway, UpstreamError, normalizeStore } from './data.js';
 import { url } from './escape.js';
