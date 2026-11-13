@@ -49,3 +49,11 @@ export function parsePartyRate(v: unknown): { ok: true; value: number | null } |
   if (!Number.isFinite(n) || n <= 0) return { ok: false };
   return { ok: true, value: n };
 }
+
+/** A customer's standing discount percent from a request body: ''/null/undefined/0 = none; else 0 < n <= 100. */
+export function parsePartyDiscount(v: unknown): { ok: true; value: number | null } | { ok: false } {
+  if (v === undefined || v === null || v === '') return { ok: true, value: null };
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false };
+  return { ok: true, value: n === 0 ? null : n };
+}

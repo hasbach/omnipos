@@ -381,6 +381,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 <Field label={t('prod_cost_usd', 'Cost (USD)')}>
                   <MoneyInput
                     currencySymbol="$"
+                    decimals={6}
                     value={form.cost}
                     onChange={(v) => update({ cost: v, cost_lbp: Math.round(v * rate) })}
                   />
@@ -390,7 +391,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                     currencySymbol="LL"
                     step={1}
                     value={form.cost_lbp}
-                    onChange={(v) => update({ cost_lbp: v, cost: rate ? Math.round((v / rate) * 100) / 100 : 0 })}
+                    onChange={(v) => update({ cost_lbp: v, cost: rate ? Math.round((v / rate) * 1e6) / 1e6 : 0 })}
                   />
                 </Field>
               </div>

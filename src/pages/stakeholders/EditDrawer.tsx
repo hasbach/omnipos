@@ -30,6 +30,7 @@ interface FormState {
   overrideBalance: boolean;
   balance: string;
   local_rate: string; // blank = use the global rate
+  discount_percent: string; // blank = no standing discount
 }
 
 function emptyForm(defaultType: 'customer' | 'supplier'): FormState {
@@ -44,6 +45,7 @@ function emptyForm(defaultType: 'customer' | 'supplier'): FormState {
     overrideBalance: false,
     balance: '0',
     local_rate: '',
+    discount_percent: '',
   };
 }
 
@@ -68,6 +70,7 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved, c
         overrideBalance: false,
         balance: String(stakeholder.balance ?? 0),
         local_rate: stakeholder.local_rate && stakeholder.local_rate > 0 ? String(stakeholder.local_rate) : '',
+        discount_percent: stakeholder.discount_percent && stakeholder.discount_percent > 0 ? String(stakeholder.discount_percent) : '',
       });
     } else {
       setForm(emptyForm(defaultType));
@@ -96,6 +99,12 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved, c
       if (localCur) {
         const r = Number(form.local_rate);
         payload.local_rate = form.local_rate.trim() === '' || !(r > 0) ? null : r;
+      }
+      if (form.type === 'customer') {
+        const d = Number(form.discount_percent);
+        payload.discount_percent = form.discount_percent.trim() === '' || !(d > 0) ? null : Math.min(100, d);
+      } else {
+        payload.discount_percent = null;
       }
       // The PUT/POST handler treats `balance` as an override of the derived balance — only
       // send it when the user explicitly opted in, or on create (starting balance).
@@ -184,6 +193,22 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved, c
             onChange={(v) => setForm({ ...form, credit_limit: v === 0 ? '' : String(v) })}
           />
         </Field>
+
+        {form.type === 'customer' && (
+          <Field label={t('stk_field_discount_percent', 'Loyalty discount (%)')} helper={t('stk_discount_percent_help', 'Applied automatically to the whole sale when this customer is selected in the POS. Leave empty for none.')}>
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              max="100"
+              step="any"
+              className="num"
+              placeholder="0"
+              value={form.discount_percent}
+              onChange={(e) => setForm({ ...form, discount_percent: e.target.value })}
+            />
+          </Field>
+        )}
 
         {localCur && (
           <Field

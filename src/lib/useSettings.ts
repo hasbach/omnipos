@@ -62,8 +62,10 @@ export function useSettings() {
   const allowBelowCost = settings.allow_below_cost !== '0';
   const allowNegativeStock = settings.allow_negative_stock !== '0';
   const hideOutOfStock = settings.hide_out_of_stock === '1';
+  // Product photos on the POS catalog tiles (off unless the owner turns it on).
+  const posShowImages = settings.pos_show_images === '1';
 
-  return { settings, loaded, priceLevelsEnabled, allowBelowCost, allowNegativeStock, hideOutOfStock };
+  return { settings, loaded, priceLevelsEnabled, allowBelowCost, allowNegativeStock, hideOutOfStock, posShowImages };
 }
 
 export default useSettings;

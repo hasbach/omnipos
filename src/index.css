@@ -107,6 +107,23 @@
   --app-border: var(--border);
 }
 
+/* POS sale screen: a deeper canvas than the cards on it, so cart lines, catalog tiles and the search
+   results list stand out from the background instead of blending into it. */
+.pos-main {
+  --bg: #DDE3EC;
+  --surface-2: #EEF2F7;
+  --border: #C3CCD9;
+  --border-strong: #94A3B8;
+  background: var(--bg);
+}
+.dark .pos-main {
+  --bg: #04070D;
+  --surface: #1A2436;
+  --surface-2: #121A29;
+  --border: #2E3C54;
+  --border-strong: #4B5B75;
+}
+
 @layer base {
   html {
     font-family: var(--font-sans);

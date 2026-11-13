@@ -18,7 +18,7 @@ import {
   getAuthHealth,
 } from "./session.js";
 import { EscPos } from "./printing/escpos.js";
-import { localCurrencyFor, effectiveLocalRate, isLocalCode, parsePartyRate } from "./localCurrency.js";
+import { localCurrencyFor, effectiveLocalRate, isLocalCode, parsePartyRate, parsePartyDiscount } from "./localCurrency.js";
 import { buildStatementBuffer } from "./printing/statement.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
 import { sendToPrinter } from "./printing/transport.js";
@@ -37,6 +37,7 @@ import {
   legacyPackageColumns, refundLineStates, displayFields,
 } from "./uom.js";
 import { updatePurchaseProductCost } from "./purchaseCost.js";
+import { attachProductImages, getProductImageFile } from "./posImages.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { editTransaction, getTransactionEdits } from "./invoiceEdit.js";
 import { resolveArchiveIdCollisions } from "./settlementIds.js";
@@ -972,7 +973,19 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
   app.get("/api/products", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    res.json(loadProductsWithBarcodesAndUnits(tenantId));
+    res.json(attachProductImages(tenantId, loadProductsWithBarcodesAndUnits(tenantId)));
+  });
+
+  // POS catalog photo: this register's own copy of the product's first online-store photo
+  // (downloaded once, then served from disk - see server/posImages.ts).
+  app.get("/api/pos/product-image/:id", authenticate, async (req: any, res) => {
+    const productId = Number(req.params.id);
+    const file = Number.isInteger(productId) ? await getProductImageFile(req.session.tenantId, productId) : null;
+    if (!file) return res.status(404).end();
+    // The URL carries ?v=<photo hash>, so a given URL never changes content.
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.type('image/webp');
+    res.sendFile(file, (err: any) => { if (err && !res.headersSent) res.status(404).end(); });
   });
 
   // Shared by POST and PUT: validates the product's barcodes + units (BARCODE_TAKEN is tenant-wide
@@ -1276,8 +1289,10 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       if (!rate.ok) return res.status(400).json({ error: "Exchange rate must be a number greater than 0.", code: 'INVALID_RATE', field: 'local_rate' });
       // balance is derived (baseline + tx effects). A brand-new stakeholder has no transactions,
       // so any starting balance is stored as the baseline.
-      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit, local_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0, normalizeLevel(price_level), credit_limit || null, rate.value);
+      const disc = parsePartyDiscount(req.body.discount_percent);
+      if (!disc.ok) return res.status(400).json({ error: "Discount must be a percentage between 0 and 100.", code: 'INVALID_DISCOUNT', field: 'discount_percent' });
+      const result = db.prepare("INSERT INTO stakeholders (tenant_id, name, type, email, phone, address, balance, balance_baseline, price_level, credit_limit, local_rate, discount_percent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(tenantId, name, type, email || null, phone || null, address || null, balance || 0, balance || 0, normalizeLevel(price_level), credit_limit || null, rate.value, disc.value);
       if (balance && Math.abs(Number(balance)) > 0.0000001) {
         writeBalanceLog(Number(result.lastInsertRowid), tenantId, 0, Number(balance), { source: 'opening', user_id: tenantUserId(tenantId, req.body.user_id), note: 'Opening balance at creation' });
       }
@@ -1297,12 +1312,16 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     if (rateIn && !rateIn.ok) return res.status(400).json({ error: "Exchange rate must be a number greater than 0.", code: 'INVALID_RATE', field: 'local_rate' });
     // price_level/credit_limit are optional on this endpoint (older/other callers may not send
     // them at all) — leave them untouched rather than silently resetting to 'retail'/unlimited.
-    const current = db.prepare("SELECT price_level, credit_limit, local_rate FROM stakeholders WHERE id = ? AND tenant_id = ?").get(req.params.id, tenantId) as any;
+    // discount_percent follows the same rule: undefined = untouched, null/''/0 = no standing discount.
+    const discIn = req.body.discount_percent !== undefined ? parsePartyDiscount(req.body.discount_percent) : null;
+    if (discIn && !discIn.ok) return res.status(400).json({ error: "Discount must be a percentage between 0 and 100.", code: 'INVALID_DISCOUNT', field: 'discount_percent' });
+    const current = db.prepare("SELECT price_level, credit_limit, local_rate, discount_percent FROM stakeholders WHERE id = ? AND tenant_id = ?").get(req.params.id, tenantId) as any;
+    const resolvedDiscount = discIn && discIn.ok ? discIn.value : (current?.discount_percent ?? null);
     const resolvedLocalRate = rateIn && rateIn.ok ? rateIn.value : (current?.local_rate ?? null);
     const resolvedPriceLevel = price_level !== undefined ? normalizeLevel(price_level) : (current?.price_level || 'retail');
     const resolvedCreditLimit = credit_limit !== undefined ? (credit_limit || null) : (current?.credit_limit ?? null);
-    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, address = ?, price_level = ?, credit_limit = ?, local_rate = ? WHERE id = ? AND tenant_id = ?")
-      .run(name, type, email || null, phone || null, address || null, resolvedPriceLevel, resolvedCreditLimit, resolvedLocalRate, req.params.id, tenantId);
+    db.prepare("UPDATE stakeholders SET name = ?, type = ?, email = ?, phone = ?, address = ?, price_level = ?, credit_limit = ?, local_rate = ?, discount_percent = ? WHERE id = ? AND tenant_id = ?")
+      .run(name, type, email || null, phone || null, address || null, resolvedPriceLevel, resolvedCreditLimit, resolvedLocalRate, resolvedDiscount, req.params.id, tenantId);
     // A manually-entered balance is treated as an override: set the baseline so the DERIVED
     // balance equals what was typed (baseline = entered − transaction effect), then recompute.
     if (balance !== undefined && balance !== null) {

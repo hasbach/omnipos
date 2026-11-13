@@ -93,6 +93,21 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.11.0 — POS fixes: void, LL discounts, loyalty discount, photos, updater (2026-11-13)
+- **POS:** "Void Order" button next to Quick Cash / Checkout (clears the whole sale after a confirmation).
+- **POS:** a fixed discount (line or whole sale) can be typed in the local currency: 5,000 LL is exactly 5,000 LL.
+  The sale discount no longer carries into the next sale; a percentage is capped at 100.
+- **Loyalty:** a customer can have a standing discount (%) that the POS applies when the customer is picked; a
+  cashier without the discount right may apply exactly that discount. Cloud migration
+  `2026-11-13_stakeholder_discount.sql` is needed for it to sync between registers.
+- **POS look:** darker sale canvas so cart lines, tiles and search results stand out; one colour per category.
+- **POS photos:** Settings → Printers "Show Product Photos in the POS" shows the online-store photo on the catalog
+  tile; each register keeps its own copy (offline, not part of sync).
+- **Costs:** purchase and product costs keep 6 decimals of USD, so a cost keyed in LL converts back to the same
+  LL amount (195,000 stays 195,000).
+- **Updater:** "Install Now" in the update popup downloads the update first (with real progress) instead of
+  showing "Installing" forever.
+
 ### 1.10.4 — POS scan beeps (2026-11-07)
 - **POS:** a short high beep when an item goes into the cart (scan, barcode, search pick, "+" on a line) and a low
   double tone whenever a scan or entry is refused (unknown barcode, disabled product, not enough stock, unit change

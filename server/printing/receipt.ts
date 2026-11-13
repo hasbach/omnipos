@@ -102,6 +102,24 @@ export function buildReceiptBuffer(opts: {
   if (tx.stakeholder_address) p.labeled(`${labels.address}:`, tx.stakeholder_address);
   p.hr();
 
+  // A fixed discount typed in the local currency is stored as unrounded USD (5,000 LL = $0.0558659...):
+  // print it back as the whole local amount when it is one at the global or the sale's rate, else in USD.
+  const discountText = (d: { type: string; value: number }): string => {
+    const v = Number(d.value) || 0;
+    if (d.type === 'percentage') return `${Number(v.toFixed(4))}%`;
+    const isCents = Math.abs(v * 100 - Math.round(v * 100)) < 1e-6;
+    if (!isCents && opts.localCurrency) {
+      const symbol = opts.localCurrency.symbol || opts.localCurrency.code;
+      for (const r of [opts.localCurrency.rate, tx.local_rate]) {
+        const rate = Number(r);
+        if (!(rate > 0)) continue;
+        const amt = v * rate;
+        if (Math.abs(amt - Math.round(amt)) < 0.01) return `${Math.round(amt).toLocaleString('en-US')} ${symbol}`;
+      }
+    }
+    return `$${Number(v.toFixed(2))}`;
+  };
+
   for (const item of tx.items || []) {
     let name = item.name || item.product_name || 'Item';
     // quantity/price are stored per base piece; a unit-of-measure line prints its own unit
@@ -115,7 +133,7 @@ export function buildReceiptBuffer(opts: {
     }
     p.itemLine(name, qty, lineTotal);
     if (item.discount && item.discount.value > 0) {
-      const disc = item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`;
+      const disc = `-${discountText(item.discount)}`;
       p.text(`  ${labels.discount}: ${disc}`).feed(1);
     }
   }
@@ -139,8 +157,7 @@ export function buildReceiptBuffer(opts: {
   }
 
   if (tx.discount && tx.discount.value > 0) {
-    const disc = tx.discount.type === 'percentage' ? `${tx.discount.value}%` : `$${tx.discount.value}`;
-    p.kv(labels.discount, disc);
+    p.kv(labels.discount, discountText(tx.discount));
   }
 
   if (Array.isArray(tx.payments) && tx.payments.length > 0) {

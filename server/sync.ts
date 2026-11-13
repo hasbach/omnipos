@@ -204,13 +204,14 @@ const LOCAL_ONLY_COLUMNS: Record<string, string[]> = {
   stakeholders: ['balance_baseline'],
   cash_flow: ['stakeholder_id'],
 };
-// Columns pushed only once the cloud has them (supabase/migrations/2026-10-06_local_rates.sql). They
+// Columns pushed only once the cloud has them (supabase/migrations/2026-10-06_local_rates.sql,
+// 2026-11-13_stakeholder_discount.sql). They
 // are always included in the payload; if the cloud rejects one as unknown, upsertToCloud learns that,
 // strips it and retries. The first successful push that INCLUDED a column persists a flag in
 // `_migrations` and re-marks the rows holding a value as unsynced, so values set before the cloud
 // migration get pushed once.
 export const OPTIONAL_CLOUD_COLUMNS: Record<string, string[]> = {
-  stakeholders: ['local_rate'],
+  stakeholders: ['local_rate', 'discount_percent'],
   transactions: ['local_rate', 'local_currency', 'order_global_id'],
 };
 const cloudColFlag = (table: string, col: string) => `cloud_col_ok:${table}.${col}`;

@@ -1,18 +1,28 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Package, ChevronLeft, ChevronRight, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
 import { usePosContext } from '../context/PosContext';
 import { useI18n } from '../intl/index';
 import { Badge } from './ui';
 import { formatMoney } from '../lib/format';
 import { usePosLayout } from '../hooks/usePosLayout';
+import { useSettings } from '../lib/useSettings';
 
 const TILE = {
-  sm: { min: 112, h: 'min-h-[68px]', pad: 'p-2', name: 'text-xs', price: 'text-xs' },
-  md: { min: 150, h: 'min-h-[92px]', pad: 'p-3', name: 'text-sm', price: 'text-sm' },
-  lg: { min: 210, h: 'min-h-[120px]', pad: 'p-4', name: 'text-base', price: 'text-base' },
+  sm: { min: 112, h: 'min-h-[68px]', pad: 'p-2', name: 'text-xs', price: 'text-xs', img: 'h-16' },
+  md: { min: 150, h: 'min-h-[92px]', pad: 'p-3', name: 'text-sm', price: 'text-sm', img: 'h-24' },
+  lg: { min: 210, h: 'min-h-[120px]', pad: 'p-4', name: 'text-base', price: 'text-base', img: 'h-32' },
 } as const;
 
 const COLLAPSE_KEY = 'pos_categories_collapsed';
+
+// Each category gets its own colour, used on its chip and on its product tiles so categories can be
+// told apart at a glance. Colours are dealt out in alphabetical order of the category names, so
+// neighbours never share a hue and every register shows the same colours for the same catalog.
+const CATEGORY_HUES = [212, 28, 152, 340, 184, 46, 280, 100, 4, 232, 316, 72];
+export function categoryColorMap(names: string[]): Map<string, string> {
+  const sorted = Array.from(new Set(names.filter((n) => n && n !== 'All'))).sort((a, b) => a.localeCompare(b));
+  return new Map(sorted.map((n, i) => [n, `hsl(${CATEGORY_HUES[i % CATEGORY_HUES.length]} 68% 48%)`]));
+}
 
 function readCollapsed(): boolean {
   try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
@@ -30,6 +40,12 @@ export default function ProductGrid() {
 
   const { layout } = usePosLayout();
   const tile = TILE[layout.tileSize];
+  const { posShowImages } = useSettings();
+  // Photos that failed to load (offline before the first download): fall back to the plain tile.
+  const [brokenImages, setBrokenImages] = useState<Record<string, true>>({});
+  const categoryKey = (categories as string[]).join('\u0001');
+  const categoryColors = useMemo(() => categoryColorMap(categories as string[]), [categoryKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const categoryColor = (name: string) => categoryColors.get(name) || 'var(--border-strong)';
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [canPrev, setCanPrev] = useState(false);
@@ -126,18 +142,41 @@ export default function ProductGrid() {
             >
               {categories
                 .filter((cat: string) => !collapsed || cat === selectedCategory)
-                .map((cat: string) => (
-                  <button
-                    key={cat}
-                    type="button"
-                    data-active={selectedCategory === cat}
-                    aria-pressed={selectedCategory === cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`flex-shrink-0 whitespace-nowrap px-3 py-1.5 min-h-[32px] text-xs font-semibold border transition-all rounded-lg cursor-pointer ${selectedCategory === cat ? 'bg-primary text-on-primary border-primary' : 'border-border text-text-2 hover:border-border-strong'}`}
-                  >
-                    {cat === 'All' ? t('category_all', 'All') : cat}
-                  </button>
-                ))}
+                .map((cat: string) => {
+                  const active = selectedCategory === cat;
+                  if (cat === 'All') {
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        data-active={active}
+                        aria-pressed={active}
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`flex-shrink-0 whitespace-nowrap px-3 py-1.5 min-h-[32px] text-xs font-semibold border transition-all rounded-lg cursor-pointer ${active ? 'bg-primary text-on-primary border-primary' : 'bg-surface border-border text-text-2 hover:border-border-strong'}`}
+                      >
+                        {t('category_all', 'All')}
+                      </button>
+                    );
+                  }
+                  const color = categoryColor(cat);
+
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      data-active={active}
+                      aria-pressed={active}
+                      onClick={() => setSelectedCategory(cat)}
+                      style={{ '--cat': color } as React.CSSProperties}
+                      className={`flex-shrink-0 whitespace-nowrap flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] text-xs font-semibold border transition-all rounded-lg cursor-pointer ${active
+                        ? 'bg-[var(--cat)] text-white border-[var(--cat)]'
+                        : 'bg-[color-mix(in_srgb,var(--cat)_14%,var(--surface))] border-[color-mix(in_srgb,var(--cat)_45%,var(--border))] text-text hover:border-[var(--cat)]'}`}
+                    >
+                      {!active && <span className="h-2 w-2 rounded-full bg-[var(--cat)]" aria-hidden="true" />}
+                      {cat}
+                    </button>
+                  );
+                })}
             </div>
             {!collapsed && (
               <button
@@ -168,18 +207,31 @@ export default function ProductGrid() {
       <div className="flex-1 min-h-0 overflow-y-auto p-3 grid gap-2 content-start" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${tile.min}px, 1fr))` }}>
         {paginatedProducts.map((p: any) => {
           const unit = unitPriceUSD(p, 1);
+          const showImage = posShowImages && !!p.image_url && !brokenImages[p.image_url];
           return (
           <button
             key={p.id}
             onClick={() => addToCart(p)}
             disabled={p.track_inventory !== 0 && (p.stock ?? 0) <= 0}
-            className={`${tile.pad} ${tile.h} bg-surface border border-border rounded-[var(--radius-card)] text-start hover:border-primary hover:shadow-[var(--shadow-card)] transition-all active:scale-[0.98] group flex flex-col justify-between gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
+            style={{ '--cat': categoryColor(p.category) } as React.CSSProperties}
+            className={`${tile.pad} ${tile.h} bg-surface border border-border border-s-4 border-s-[var(--cat)] rounded-[var(--radius-card)] text-start hover:border-primary hover:border-s-[var(--cat)] hover:shadow-[var(--shadow-card)] transition-all active:scale-[0.98] group flex flex-col justify-between gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
           >
+            {showImage && (
+              <img
+                src={p.image_url}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+                onError={() => setBrokenImages((b) => ({ ...b, [p.image_url]: true }))}
+                className={`${tile.img} w-full object-cover rounded-md bg-surface-2`}
+              />
+            )}
             <div className={`${tile.name} font-semibold text-text truncate group-hover:text-primary transition-colors`} title={p.name}>{p.name}</div>
             <div className="flex justify-between items-end gap-1">
               <div className="min-w-0">
                 <div className={`${tile.price} font-bold num text-text`}>{formatMoney(unit, { code: 'USD', symbol: '$' })}</div>
-                <div className="text-[10px] text-text-3 uppercase font-semibold truncate">{p.category}</div>
+                <div className="text-[10px] uppercase font-bold truncate text-[color-mix(in_srgb,var(--cat)_70%,var(--text))]">{p.category}</div>
               </div>
               {stockBadge(p)}
             </div>

@@ -333,3 +333,28 @@ export function resolveDateRangePreset(preset: DateRangePreset, now: Date = new 
       return { from: toLocalYMD(today), to: toLocalYMD(today) };
   }
 }
+
+/**
+ * Label for a discount as stored ({type, value}: percent, or a fixed USD amount). A fixed amount that
+ * was typed in the local currency is stored as unrounded USD (5,000 LL = $0.0558659...), so it is shown
+ * back in that currency when it is a whole local amount at one of the given rates; otherwise in USD.
+ */
+export function discountLabel(
+  d: { type?: string | null; value?: number | null; currency?: string; amount?: number } | null | undefined,
+  local?: { symbol?: string; code?: string; rates: Array<number | null | undefined> } | null,
+): string {
+  const v = Number(d?.value) || 0;
+  if (d?.type === 'percentage') return `${Number(v.toFixed(4))}%`;
+  const localName = local?.symbol || local?.code || d?.currency || '';
+  if (d?.currency && d.amount != null) return `${formatNumber(d.amount, { decimals: 0 })} ${localName}`;
+  const isCents = Math.abs(v * 100 - Math.round(v * 100)) < 1e-6;
+  if (!isCents && local) {
+    for (const r of local.rates) {
+      const rate = Number(r);
+      if (!(rate > 0)) continue;
+      const amt = v * rate;
+      if (Math.abs(amt - Math.round(amt)) < 0.01) return `${formatNumber(Math.round(amt), { decimals: 0 })} ${localName}`;
+    }
+  }
+  return `$${Number(v.toFixed(2))}`;
+}

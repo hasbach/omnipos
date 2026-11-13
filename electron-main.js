@@ -163,7 +163,10 @@ function launchMain(config) {
   };
 
   autoUpdater.on('checking-for-update', () => sendStatus('checking'));
-  autoUpdater.on('update-available', (info) => sendStatus('available', { version: info.version, releaseDate: info.releaseDate }));
+  autoUpdater.on('update-available', (info) => {
+    updateAvailable = true;
+    sendStatus('available', { version: info.version, releaseDate: info.releaseDate });
+  });
   autoUpdater.on('update-not-available', (info) => sendStatus('not-available', { version: info.version }));
   autoUpdater.on('download-progress', (progress) => sendStatus('progress', {
     percent: Math.round(progress.percent),
@@ -171,8 +174,43 @@ function launchMain(config) {
     total: progress.total,
     bytesPerSecond: progress.bytesPerSecond
   }));
-  autoUpdater.on('update-downloaded', (info) => sendStatus('downloaded', { version: info.version }));
-  autoUpdater.on('error', (err) => sendStatus('error', { message: err.message }));
+  // The update offer pops up as soon as an update is AVAILABLE (autoDownload is off), so "Install
+  // Now" can arrive before anything was downloaded. quitAndInstall() with no downloaded installer
+  // silently does nothing, which left the popup on "Installing..." forever. Track the download so
+  // an install request first downloads (once), then installs.
+  let updateAvailable = false;
+  let updateDownloaded = false;
+  let installWhenDownloaded = false;
+  let downloadPromise = null;
+  const ensureDownloaded = () => {
+    if (updateDownloaded) return Promise.resolve();
+    if (!downloadPromise) {
+      downloadPromise = (async () => {
+        if (!updateAvailable) {
+          // No successful check in this app session yet (downloadUpdate would fail with
+          // "Please check update first"): check, then download.
+          const result = await autoUpdater.checkForUpdates();
+          if (!result) throw new Error('Updates are only available in the installed app.');
+          if (!updateAvailable) throw new Error('No update is available right now.');
+        }
+        await autoUpdater.downloadUpdate();
+      })().finally(() => { downloadPromise = null; });
+    }
+    return downloadPromise;
+  };
+
+  autoUpdater.on('update-downloaded', (info) => {
+    updateDownloaded = true;
+    sendStatus('downloaded', { version: info.version });
+    if (installWhenDownloaded) {
+      installWhenDownloaded = false;
+      autoUpdater.quitAndInstall(false, true);
+    }
+  });
+  autoUpdater.on('error', (err) => {
+    installWhenDownloaded = false;
+    sendStatus('error', { message: err.message });
+  });
 
   // IPC: renderer requests check. Return a small SERIALIZABLE summary (the raw UpdateCheckResult
   // carries a CancellationToken that can't cross IPC) and never reject, so the renderer can always
@@ -187,9 +225,29 @@ function launchMain(config) {
     }
   });
   // IPC: renderer approves download
-  ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate());
-  // IPC: renderer requests quit-and-install
-  ipcMain.on('updater:install', () => autoUpdater.quitAndInstall(false, true));
+  ipcMain.handle('updater:download', async () => {
+    try {
+      await ensureDownloaded();
+      return { ok: true };
+    } catch (err) {
+      sendStatus('error', { message: err?.message || String(err) });
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+  // IPC: renderer requests quit-and-install (downloads first when nothing is downloaded yet)
+  ipcMain.on('updater:install', async () => {
+    if (updateDownloaded) {
+      autoUpdater.quitAndInstall(false, true);
+      return;
+    }
+    installWhenDownloaded = true;
+    try {
+      await ensureDownloaded();
+    } catch (err) {
+      installWhenDownloaded = false;
+      sendStatus('error', { message: err?.message || String(err) });
+    }
+  });
 
   // Check for updates silently 10 seconds after launch (only in production)
   if (app.isPackaged) {

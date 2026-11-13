@@ -327,8 +327,21 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [tenant]);
 
+  // Desktop app: a failed download/install must not leave the popup spinning forever.
+  useEffect(() => {
+    if (!window.electronAPI?.onUpdateStatus) return;
+    return window.electronAPI.onUpdateStatus((data: any) => {
+      if (data.event === 'error') setIsUpdating(false);
+    });
+  }, []);
+
   const handleInstallUpdate = async () => {
     setIsUpdating(true);
+    // Desktop app: the real updater downloads the installer (if needed), then quits and installs.
+    if (window.electronAPI?.installUpdate) {
+      window.electronAPI.installUpdate();
+      return;
+    }
     try {
       const res = await fetch('/api/tenant/install-update', { method: 'POST' });
       if (res.ok) {
