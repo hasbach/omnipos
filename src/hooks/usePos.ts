@@ -18,7 +18,7 @@ import {
 } from '../lib/pricing';
 import { useSettings } from '../lib/useSettings';
 import { translateServerError } from '../lib/serverErrors';
-import { formatDateTime, partyDisplayName } from '../lib/format';
+import { formatDateTime, partyDisplayName, discountLabel } from '../lib/format';
 import { orderLocal, formatLocal, effectiveLocalCurrency } from '../lib/orderTotals';
 import { findExactBarcodeMatches } from '../lib/productSearch';
 import { beep, installBeepUnlock, setBeepEnabled } from '../lib/beep';
@@ -184,6 +184,8 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   // Set just before setSelectedStakeholder while loading a tab so the stakeholder->price-level
   // defaulting effect applies the restored level instead of re-defaulting it.
   const restoringTabRef = useRef<{ priceLevel: PriceLevel; manual: boolean } | null>(null);
+  // Set alongside it: the customer change comes from loading a tab, not from the cashier picking one.
+  const skipLoyaltyRef = useRef(false);
   // Tab whose checkout just succeeded; it is closed once the success screen is dismissed.
   const finishedTabIdRef = useRef<string | null>(null);
   // Latest live sale values, for snapshotting from callbacks that may hold stale closures.
@@ -226,6 +228,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     if (s.stakeholderId !== liveSaleRef.current.selectedStakeholder) {
       // The defaulting effect will run for this change; hand it the level to restore.
       restoringTabRef.current = { priceLevel: s.priceLevel, manual: s.priceLevelManual };
+      skipLoyaltyRef.current = true; // keep the tab's own discount (see the loyalty effect)
       setSelectedStakeholder(s.stakeholderId);
     } else {
       // Same customer id => the effect won't run, so apply the level directly.
@@ -358,6 +361,29 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     }
     if (finishedTabIdRef.current === id) finishedTabIdRef.current = null;
     removeTab(id);
+  };
+
+  // "Void order": throw away the whole current sale (lines, discount, payments, customer) after a
+  // confirmation, keeping its tab open and empty for the next sale. Nothing was recorded yet, so
+  // there is nothing to reverse on the server.
+  const voidSale = async () => {
+    const live = liveSaleRef.current;
+    if (!live.cart.length) return;
+    const ok = await confirm({
+      title: t('pos_void_title', 'Void this order?'),
+      description: t('pos_void_desc', 'All {n} items, the discount and the selected customer will be cleared.', { n: live.cart.length }),
+      confirmLabel: t('pos_void_confirm', 'Void order'),
+      variant: 'danger',
+    });
+    if (!ok) return;
+    const id = activeTabIdRef.current;
+    const cleared: SaleTab = {
+      ...snapshotActive(), orderGlobalId: undefined, orderNumber: undefined,
+      cart: [], stakeholderId: walkInId, globalDiscount: { type: 'percentage', value: 0 },
+      payments: [], priceLevel: defaultLevelForWalkIn(), priceLevelManual: false,
+    };
+    commitTabs(saleTabsRef.current.map(x => (x.id === id ? cleared : x)), id);
+    loadSale(cleared);
   };
 
   // Called when the post-checkout screen is dismissed: closes the just-finished (empty) tab without
@@ -515,9 +541,12 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   }, [tenant]);
 
   const handleInstallUpdate = () => {
-    // Tell the main process to quit and apply the downloaded installer
+    // Tell the main process to install. If the installer is not downloaded yet (the popup opens as
+    // soon as an update is available), the main process downloads it first, then quits and installs;
+    // progress arrives through onUpdateStatus.
     if (window.electronAPI?.installUpdate) {
       setIsUpdating(true);
+      if (updateStatus !== 'downloaded') { setUpdateProgress(0); setUpdateStatus('downloading'); }
       window.electronAPI.installUpdate();
     } else {
       // Browser fallback: call old API route
@@ -585,6 +614,12 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
         case 'error':
           setUpdateStatus('error');
           console.error('Updater error:', data.message);
+          // An install that was waiting on the download failed: leave the "installing" state so the
+          // popup is usable again instead of spinning forever.
+          setIsUpdating(prev => {
+            if (prev) toast.error(t('pos_update_failed', 'The update could not be downloaded. Check the internet connection and try again.'));
+            return false;
+          });
           break;
       }
     });
@@ -829,6 +864,25 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStakeholder, stakeholders.length, settings.default_price_level, priceLevelsEnabled]);
 
+  // Loyalty: a customer's standing discount (stakeholders.discount_percent) becomes the sale's global
+  // discount when the customer is picked, and is removed again when the customer changes — unless the
+  // cashier replaced it by hand (then it no longer carries the `auto` marker). A sale-tab load restores
+  // that tab's own discount instead (skipLoyaltyRef).
+  const loyaltyCustomerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (stakeholders.length === 0) return;
+    if (loyaltyCustomerRef.current === selectedStakeholder) return;
+    loyaltyCustomerRef.current = selectedStakeholder;
+    if (skipLoyaltyRef.current) { skipLoyaltyRef.current = false; return; }
+    const s = stakeholders.find((x: any) => x.id === selectedStakeholder) as any;
+    const pct = selectedStakeholder !== walkInId && s?.type !== 'supplier' ? Number(s?.discount_percent) || 0 : 0;
+    setGlobalDiscount(prev => {
+      if (pct > 0) return { type: 'percentage', value: Math.min(100, pct), auto: true };
+      return prev.auto ? { type: 'percentage', value: 0 } : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStakeholder, stakeholders.length]);
+
   // --- Stock guard (allow_negative_stock off) ------------------------------------------------
   // Stock is in base pieces; a cart line consumes quantity x (uom_factor || 1) of its product.
   const stockLimited = (p: any) => !allowNegativeStock && p.track_inventory !== 0;
@@ -974,10 +1028,13 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       .filter(item => item.quantity > 0));
   };
 
-  const applyItemDiscount = (lineKey: string, type: 'percentage' | 'fixed', value: number) => {
+  // A fixed discount typed in the local currency (`local` = its code + the amount as typed) is kept as
+  // unrounded USD in `value` (the accounting base the server works in) so it comes to exactly the typed
+  // local amount: 5,000 LL stays 5,000 LL instead of becoming $0.05 = 4,475 LL.
+  const applyItemDiscount = (lineKey: string, type: 'percentage' | 'fixed', value: number, local?: { currency: string; amount: number }) => {
     setCart(prev => prev.map(item => {
       if (item.line_key === lineKey) {
-        return { ...item, discount: { type, value } };
+        return { ...item, discount: type === 'fixed' && local ? { type, value, currency: local.currency, amount: local.amount } : { type, value } };
       }
       return item;
     }));
@@ -1050,8 +1107,15 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   const localCurrency = currencies.find((c: any) => c.code !== 'USD');
   const localCode = localCurrency?.code || 'LBP';
   const lbpRate = localCurrency?.rate || activeRate || 89500;
+  // For discountLabel(): show a fixed discount back in the local currency when it was typed in it.
+  const discountLocal = localCurrency ? { symbol: localCurrency.symbol, code: localCurrency.code, rates: [localCurrency.rate] } : null;
 
   const cartUnit = (item: any) => (item.uom_id != null ? (item.units || []).find((u: any) => u.id === item.uom_id) : undefined);
+
+  // A fixed discount in the currency `code`: `value` is USD (x rate), except that one typed in this very
+  // local currency uses the amount exactly as typed.
+  const fixedDiscountIn = (d: Discount, code: string, rate: number) =>
+    (d.currency && d.currency === code && d.amount != null ? d.amount : d.value * rate);
 
   // Price of ONE unit of the line's UoM (one piece for base lines; base lines get the automatic pack break).
   const unitPriceUSD = useCallback((item: any, qty: number): number => {
@@ -1080,13 +1144,13 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     const base = unit * item.quantity;
     if (!item.discount || item.discount.value === 0) return base;
     if (item.discount.type === 'percentage') return base * (1 - item.discount.value / 100);
-    return Math.max(0, base - item.discount.value * rate); // fixed discounts are entered in USD
+    return Math.max(0, base - fixedDiscountIn(item.discount, code, rate));
   }, [unitPriceIn]);
 
-  const applyGlobalDiscount = (subtotal: number, rate: number) => {
+  const applyGlobalDiscount = (subtotal: number, rate: number, code: string) => {
     if (globalDiscount.value === 0) return subtotal;
     if (globalDiscount.type === 'percentage') return subtotal * (1 - globalDiscount.value / 100);
-    return Math.max(0, subtotal - globalDiscount.value * rate);
+    return Math.max(0, subtotal - fixedDiscountIn(globalDiscount, code, rate));
   };
 
   // USD line total (accounting base), derived from the active-currency price so what we store
@@ -1108,7 +1172,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   };
 
   const subtotalActive = cart.reduce((sum, item) => sum + itemTotalIn(item as any, activeCode, activeRate), 0);
-  const totalActive = applyGlobalDiscount(subtotalActive, activeRate);
+  const totalActive = applyGlobalDiscount(subtotalActive, activeRate, activeCode);
 
   const subtotalUSD = subtotalActive / activeRate;
   const totalUSD = totalActive / activeRate;
@@ -1117,7 +1181,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   // so they stay consistent whether the active currency is LBP or USD.
   const subtotalLBPraw = cart.reduce((sum, item) => sum + itemTotalIn(item as any, localCode, lbpRate), 0);
   const subtotalLBP = Math.round(subtotalLBPraw);
-  const totalLBP = Math.round(applyGlobalDiscount(subtotalLBPraw, lbpRate));
+  const totalLBP = Math.round(applyGlobalDiscount(subtotalLBPraw, lbpRate, localCode));
 
   // --- Credit limit -------------------------------------------------------------------------
   const selectedStakeholderObj = stakeholders.find((s: any) => s.id === selectedStakeholder) as any;
@@ -1298,12 +1362,13 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       order_global_id: orderGlobalId,
       stakeholder_id: selectedStakeholder,
       user_id: currentUser?.id || 1,
-      items: cart.map(({ units: _units, ...c }: any) => c),
+      items: cart.map(({ units: _units, image_url: _img, ...c }: any) => c),
       total_amount: totalUSD,
       currency: 'USD',
       exchange_rate: 1,
       price_currency: activeCode, // the currency the cart was priced in; the server mirrors that pricing
-      discount: globalDiscount.value > 0 ? globalDiscount : undefined,
+      // `auto` (loyalty marker) is client-only.
+      discount: globalDiscount.value > 0 ? (({ auto: _auto, ...d }) => d)(globalDiscount) : undefined,
       terminalId,
       price_level: priceLevelsEnabled ? priceLevel : 'retail',
       payments: paymentsArg
@@ -1325,6 +1390,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
           )), activeTabIdRef.current);
         }
         setCart([]);
+        setGlobalDiscount({ type: 'percentage', value: 0 }); // a sale's discount must not carry into the next sale
         setPayments([]); // Reset split payments
         setPaymentMethod('cash'); // Don't carry credit/card into the next sale
         setSelectedStakeholder(walkInId); // Reset to Walk-in default customer
@@ -1511,8 +1577,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       lines.push(`${name} ${qty} ${price}`);
       if (item.uom_name && (item.name + uomLabel).length > 15) lines.push(`  ${uomLabel.replace(/^ - /, '')}`);
       if (item.discount?.value > 0) {
-        const disc = item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`;
-        lines.push(`  (Discount: ${disc})`);
+        lines.push(`  (Discount: -${discountLabel(item.discount, discountLocal)})`);
       }
     });
 
@@ -1522,8 +1587,7 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     if (lbpTotal) lines.push(`                  ${formatLocal(lbpTotal.amount, lbpTotal.currency)}`);
 
     if (transaction.discount?.value > 0) {
-      const disc = transaction.discount.type === 'percentage' ? `${transaction.discount.value}%` : `$${transaction.discount.value}`;
-      lines.push(`Global Discount:   ${disc}`);
+      lines.push(`Global Discount:   ${discountLabel(transaction.discount, discountLocal)}`);
     }
 
     // Previous balance / This invoice / New balance — only for a real (non-Walk-in) customer, and
@@ -1741,6 +1805,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     handleCheckout,
     handleQuickCash,
 
+    voidSale,
+    localCurrency,
+    discountLocal,
     handleInstallUpdate,
     handleCheckForUpdates,
     handleDownloadUpdate,

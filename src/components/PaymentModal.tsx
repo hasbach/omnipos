@@ -30,7 +30,7 @@ export default function PaymentModal() {
     historyDate, setHistoryDate, loadingHistory, selectedHistoryTransaction, setSelectedHistoryTransaction,
     showRefundModal, setShowRefundModal, refundQuantities, setRefundQuantities,
     refundMethod, setRefundMethod,
-    tenant, showUpdateModal, setShowUpdateModal, updateVersion, isUpdating, users, currentUser,
+    tenant, showUpdateModal, setShowUpdateModal, updateVersion, isUpdating, updateStatus, updateProgress, users, currentUser,
     handleInstallUpdate, scheduleForm, setScheduleForm, handleScheduleUpdate,
     fetchDailyHistory, handleRefund, handleBarcodeSubmit,
     handleSuggestionClick, handleCheckout, printReceipt, totalUSD, dailyTransactions,
@@ -825,9 +825,14 @@ export default function PaymentModal() {
           {isUpdating ? (
             <div className="py-4 space-y-4">
               <div className="h-2 w-full bg-surface-2 rounded-full overflow-hidden">
-                <motion.div initial={{ width: 0 }} animate={{ width: '100%' }} transition={{ duration: 2 }} className="h-full bg-primary" />
+                {/* Real download progress; the installer starts by itself once it reaches 100%. */}
+                <div className="h-full bg-primary transition-[width] duration-300" style={{ width: `${updateStatus === 'downloaded' ? 100 : Math.max(3, Math.min(100, updateProgress || 0))}%` }} />
               </div>
-              <p className="text-[10px] font-bold uppercase tracking-wide animate-pulse text-text-3">{t('pos_installing', 'Installing updates... Please wait')}</p>
+              <p className="text-[10px] font-bold uppercase tracking-wide animate-pulse text-text-3">
+                {updateStatus === 'downloaded'
+                  ? t('pos_installing', 'Installing updates... Please wait')
+                  : t('pos_update_downloading', 'Downloading update... {percent}%', { percent: Math.round(updateProgress || 0) })}
+              </p>
             </div>
           ) : (
             <div className="space-y-4">

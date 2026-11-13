@@ -147,6 +147,15 @@ function txType(req: any): string | null {
   return row?.type ?? null;
 }
 
+/** True when `percent` is exactly the standing (loyalty) discount stored on this tenant's customer. */
+function isCustomerStandingDiscount(tenantId: number, stakeholderId: unknown, percent: number): boolean {
+  const id = Number(stakeholderId);
+  if (!tenantId || !Number.isFinite(id) || !(percent > 0)) return false;
+  const row = db.prepare("SELECT discount_percent FROM stakeholders WHERE id = ? AND tenant_id = ? AND type = 'customer' AND deleted_at IS NULL").get(id, tenantId) as any;
+  const own = Number(row?.discount_percent);
+  return own > 0 && Math.abs(own - percent) < 1e-9;
+}
+
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/orders', need: 'orders.view' },
@@ -169,7 +178,11 @@ export const ROUTE_RULES: RouteRule[] = [
       const type = body.type || 'sale';
       if (type === 'refund') return ['pos.refund', 'invoices.refund'];
       if (type === 'purchase') return 'purchases.edit';
-      const hasDiscount = Number(body.discount?.value) > 0 ||
+      // The customer's own standing (loyalty) discount is set by the owner on the customer, so a
+      // cashier needs no discount right to apply exactly that percentage to the whole sale.
+      const globalIsLoyalty = Number(body.discount?.value) > 0 && body.discount?.type === 'percentage'
+        && isCustomerStandingDiscount(req.session.tenantId, body.stakeholder_id, Number(body.discount.value));
+      const hasDiscount = (Number(body.discount?.value) > 0 && !globalIsLoyalty) ||
         (Array.isArray(body.items) && body.items.some((it: any) => Number(it?.discount?.value) > 0));
       if (type === 'sale') {
         // The back-office invoice editor (source 'backoffice') is invoice editing, whatever the lines hold.

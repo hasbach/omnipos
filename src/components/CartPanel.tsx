@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ShoppingCart, Banknote, Package, Plus, Minus, Trash2, Barcode, ArrowRight,
-  Percent, DollarSign, Tag, X, Pencil
+  Percent, DollarSign, Tag, X, Pencil, Ban, Gift
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePosContext } from '../context/PosContext';
 import { CURRENCIES } from '../hooks/usePos';
 import { Badge } from './ui';
-import { formatMoney, formatBalance, formatNumber } from '../lib/format';
+import { formatMoney, formatBalance, formatNumber, discountLabel } from '../lib/format';
 import { uomUnitPrice } from '../lib/pricing';
 import { usePermissions } from '../lib/usePermissions';
 import { usePosLayout } from '../hooks/usePosLayout';
@@ -27,6 +27,7 @@ export default function CartPanel() {
     creditLimit, availableCredit, t, barcodeRef, priceLevelsEnabled, belowCostOf, sellableProducts,
     selectedStakeholder, isWalkIn, prevBalanceUSD, thisSaleEffectUSD, newBalanceUSD,
     lastAdded, saleTabs = [], activeTabId, newSaleTab, switchSaleTab, closeSaleTab,
+    voidSale, localCurrency, discountLocal,
   } = pos as any;
 
   const { layout } = usePosLayout();
@@ -36,7 +37,28 @@ export default function CartPanel() {
   const canOverridePrice = can('pos.price_override');
 
   const [discountEditorId, setDiscountEditorId] = useState<string | null>(null);
-  const [discountDraft, setDiscountDraft] = useState<{ type: 'percentage' | 'fixed'; value: string }>({ type: 'percentage', value: '0' });
+  // Discount entry mode: percent, a fixed USD amount, or (when a local currency is configured) a fixed
+  // amount typed in that currency — 5,000 LL is exact, where $0.05 would only be 4,475 LL.
+  type DiscMode = 'percentage' | 'fixed' | 'local';
+  const [discountDraft, setDiscountDraft] = useState<{ type: DiscMode; value: string }>({ type: 'percentage', value: '0' });
+  const localRate = Number(localCurrency?.rate) || 0;
+  const hasLocal = !!localCurrency && localRate > 0;
+  const localLabel = localCurrency?.symbol || localCurrency?.code || '';
+  const nextMode = (m: DiscMode): DiscMode => (m === 'percentage' ? 'fixed' : m === 'fixed' && hasLocal ? 'local' : 'percentage');
+  const modeOf = (d: any): DiscMode => (d?.type === 'fixed' ? (d.currency && hasLocal ? 'local' : 'fixed') : 'percentage');
+  const modeIcon = (m: DiscMode, size: number) => (m === 'percentage' ? <Percent size={size} />
+    : m === 'fixed' ? <DollarSign size={size} />
+    : <span className="text-[11px] font-black leading-none">{localLabel}</span>);
+  const modeTitle = (m: DiscMode) => (m === 'percentage' ? t('pos_disc_mode_percent', 'Percentage discount')
+    : m === 'fixed' ? t('pos_disc_mode_usd', 'Fixed discount in USD')
+    : t('pos_disc_mode_local', 'Fixed discount in {code}', { code: localLabel }));
+  /** Typed number + mode -> the stored discount (fixed amounts are USD; a local one keeps what was typed). */
+  const buildDiscount = (mode: DiscMode, raw: number): any => {
+    const n = Number.isFinite(raw) && raw > 0 ? raw : 0;
+    if (mode === 'local') return { type: 'fixed', value: n / localRate, currency: localCurrency.code, amount: n };
+    // A percentage over 100 would turn the total negative (and the server rejects it anyway).
+    return { type: mode, value: mode === 'percentage' ? Math.min(100, n) : n };
+  };
   const [priceEditorId, setPriceEditorId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState('');
   const [highlight, setHighlight] = useState(-1);
@@ -82,12 +104,14 @@ export default function CartPanel() {
 
   const openDiscountEditor = (item: any) => {
     setDiscountEditorId(item.line_key);
-    setDiscountDraft({ type: item.discount?.type || 'percentage', value: String(item.discount?.value ?? 0) });
+    const mode = modeOf(item.discount);
+    setDiscountDraft({ type: mode, value: String((mode === 'local' ? item.discount?.amount : item.discount?.value) ?? 0) });
   };
 
   const saveDiscountEditor = () => {
     if (discountEditorId == null) return;
-    applyItemDiscount(discountEditorId, discountDraft.type, parseFloat(discountDraft.value) || 0);
+    const d = buildDiscount(discountDraft.type, parseFloat(discountDraft.value) || 0);
+    applyItemDiscount(discountEditorId, d.type, d.value, d.currency ? { currency: d.currency, amount: d.amount } : undefined);
     setDiscountEditorId(null);
   };
 
@@ -192,7 +216,7 @@ export default function CartPanel() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 ref={suggestionsRef}
-                className="absolute start-3 end-3 top-full mt-1 bg-surface border border-border shadow-[var(--shadow-modal)] z-50 rounded-lg max-h-[60vh] overflow-y-auto"
+                className="absolute start-3 end-3 top-full mt-1 bg-surface border-2 border-primary shadow-[0_18px_40px_rgb(0_0_0/0.45)] z-50 rounded-lg max-h-[60vh] overflow-y-auto"
               >
                 {suggestions.map((p: any, idx: number) => {
                   // A typed unit barcode adds that unit (carton/pack) instead of a single piece.
@@ -307,7 +331,7 @@ export default function CartPanel() {
                           className={`px-2 h-8 min-w-[40px] rounded text-[10px] font-bold border cursor-pointer whitespace-nowrap ${item.discount?.value ? 'bg-accent text-white border-accent' : 'border-border text-text-3 hover:text-text hover:border-border-strong'}`}
                         >
                           <Tag size={10} className="inline me-1" />
-                          {item.discount?.value ? (item.discount.type === 'percentage' ? `-${item.discount.value}%` : `-$${item.discount.value}`) : t('discount_short', 'DISC')}
+                          {item.discount?.value ? `-${discountLabel(item.discount, discountLocal)}` : t('discount_short', 'DISC')}
                         </button>}
                         {allowPriceOverride && canOverridePrice && (
                           item.unit_price != null ? (
@@ -372,17 +396,19 @@ export default function CartPanel() {
                   {discountEditorId === item.line_key && (
                     <div className="mt-2 pt-2 border-t border-border flex items-center gap-2">
                       <button
-                        onClick={() => setDiscountDraft(d => ({ ...d, type: d.type === 'percentage' ? 'fixed' : 'percentage' }))}
+                        onClick={() => setDiscountDraft(d => ({ ...d, type: nextMode(d.type) }))}
+                        title={modeTitle(discountDraft.type)}
+                        aria-label={modeTitle(discountDraft.type)}
                         className="p-2 min-h-[36px] min-w-[36px] flex items-center justify-center bg-surface-2 rounded-[var(--radius-input)] border border-border cursor-pointer text-text"
                       >
-                        {discountDraft.type === 'percentage' ? <Percent size={14} /> : <DollarSign size={14} />}
+                        {modeIcon(discountDraft.type, 14)}
                       </button>
                       <input
                         autoFocus
                         type="number"
                         className="flex-1 h-9 rounded-[var(--radius-input)] border border-border bg-surface px-3 text-sm num text-text outline-none focus:border-primary"
                         value={discountDraft.value}
-                        onChange={(e) => setDiscountDraft(d => ({ ...d, value: d.type === 'fixed' ? clampMoneyInput(e.target.value) : e.target.value }))}
+                        onChange={(e) => setDiscountDraft(d => ({ ...d, value: d.type !== 'percentage' ? clampMoneyInput(e.target.value) : e.target.value }))}
                         onKeyDown={(e) => { if (e.key === 'Enter') saveDiscountEditor(); if (e.key === 'Escape') setDiscountEditorId(null); }}
                       />
                       <button onClick={saveDiscountEditor} className="px-3 h-9 bg-primary text-on-primary rounded-[var(--radius-input)] text-xs font-bold cursor-pointer">{t('save', 'Save')}</button>
@@ -446,22 +472,33 @@ export default function CartPanel() {
             </div>
           </div>
 
-          {(canDiscount || creditLimit > 0 || (!isWalkIn && cart.length > 0)) && (
+          {(canDiscount || creditLimit > 0 || globalDiscount.auto || (!isWalkIn && cart.length > 0)) && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+              {globalDiscount.auto && globalDiscount.value > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 h-6 rounded-full bg-accent-soft text-accent font-bold">
+                  <Gift size={12} /> {t('pos_loyalty_discount', 'Loyalty discount')} -{discountLabel(globalDiscount, discountLocal)}
+                </span>
+              )}
               {canDiscount && <div className="flex items-center gap-2">
                 <span className="text-[10px] font-bold uppercase text-text-3">{t('global_discount_label', 'Global Discount:')}</span>
                 <div className="flex items-center gap-1 bg-bg p-0.5 rounded border border-border">
                   <button
-                    onClick={() => setGlobalDiscount((prev: any) => ({ ...prev, type: prev.type === 'percentage' ? 'fixed' : 'percentage' }))}
-                    className="h-7 w-7 flex items-center justify-center hover:bg-surface-2 rounded cursor-pointer text-text"
+                    onClick={() => setGlobalDiscount((prev: any) => buildDiscount(nextMode(modeOf(prev)), 0))}
+                    title={modeTitle(modeOf(globalDiscount))}
+                    aria-label={modeTitle(modeOf(globalDiscount))}
+                    className="h-7 min-w-7 px-1 flex items-center justify-center hover:bg-surface-2 rounded cursor-pointer text-text"
                   >
-                    {globalDiscount.type === 'percentage' ? <Percent size={12} /> : <DollarSign size={12} />}
+                    {modeIcon(modeOf(globalDiscount), 12)}
                   </button>
                   <input
                     type="number"
-                    className="w-14 bg-transparent border-none text-xs font-mono font-bold focus:ring-0 p-0 num text-text"
-                    value={globalDiscount.value}
-                    onChange={(e) => setGlobalDiscount((prev: any) => ({ ...prev, value: parseFloat(prev.type === 'fixed' ? clampMoneyInput(e.target.value) : e.target.value) || 0 }))}
+                    aria-label={t('global_discount_label', 'Global Discount:')}
+                    className={`${modeOf(globalDiscount) === 'local' ? 'w-20' : 'w-14'} bg-transparent border-none text-xs font-mono font-bold focus:ring-0 p-0 num text-text`}
+                    value={modeOf(globalDiscount) === 'local' ? (globalDiscount.amount ?? 0) : globalDiscount.value}
+                    onChange={(e) => setGlobalDiscount((prev: any) => {
+                      const mode = modeOf(prev);
+                      return buildDiscount(mode, parseFloat(mode !== 'percentage' ? clampMoneyInput(e.target.value) : e.target.value) || 0);
+                    })}
                   />
                 </div>
               </div>}
@@ -493,6 +530,14 @@ export default function CartPanel() {
           )}
 
           <div className="flex gap-2">
+            <button
+              disabled={cart.length === 0 || isProcessing}
+              onClick={() => voidSale?.()}
+              title={t('pos_void_order', 'Void Order')}
+              className="shrink-0 px-4 py-2 min-h-[52px] border-2 border-danger text-danger font-bold uppercase tracking-wide flex items-center justify-center gap-2 hover:bg-danger hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer rounded-[var(--radius-input)]"
+            >
+              <Ban size={18} /> {t('pos_void_order', 'Void Order')}
+            </button>
             <button
               disabled={cart.length === 0 || isProcessing}
               onClick={handleQuickCash}

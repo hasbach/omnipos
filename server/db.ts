@@ -411,6 +411,8 @@ try { db.exec("ALTER TABLE stakeholders ADD COLUMN price_level TEXT DEFAULT 'ret
 try { db.exec("ALTER TABLE stakeholders ADD COLUMN credit_limit REAL;"); } catch {}
 // A party's own local-currency exchange rate (units per USD); NULL = use the global currencies rate.
 try { db.exec("ALTER TABLE stakeholders ADD COLUMN local_rate REAL;"); } catch {}
+// Loyalty: a standing discount (percent off the whole sale) the POS applies when this customer is picked. NULL/0 = none.
+try { db.exec("ALTER TABLE stakeholders ADD COLUMN discount_percent REAL;"); } catch {}
 // Every column added to a live transactional table must also exist on its archived twin and be
 // copied by /api/tenant/settlement — settlement moves rows between them.
 for (const t of ['transactions', 'archived_transactions']) {

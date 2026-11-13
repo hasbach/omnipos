@@ -59,6 +59,8 @@ export interface Product {
   unit: string;
   units?: ProductUnit[]; // extra units of measure (packs, cartons...)
   active?: number; // 1 = active (default), 0 = disabled (can't be sold, hidden from the POS)
+  /** Local URL of the product's photo (first online-store listing photo), when it has one. */
+  image_url?: string;
 }
 
 export interface Stakeholder {
@@ -73,11 +75,19 @@ export interface Stakeholder {
   credit_limit?: number; // NULL/0 = unlimited
   /** Party-specific local-currency rate (LL per $1); null/undefined = use the global rate. */
   local_rate?: number | null;
+  /** Loyalty: standing discount percent applied to the whole sale when this customer is picked. */
+  discount_percent?: number | null;
 }
 
 export interface Discount {
   type: 'percentage' | 'fixed';
+  /** Percent, or a fixed amount in USD (the accounting base; kept unrounded when entered in the local currency). */
   value: number;
+  /** Fixed discounts typed in the local currency: its code and the amount as typed (value = amount / rate). */
+  currency?: string;
+  amount?: number;
+  /** Set by the customer's standing (loyalty) discount, so it is removed again when the customer changes. */
+  auto?: boolean;
 }
 
 export interface CartItem extends Product {

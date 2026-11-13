@@ -329,7 +329,7 @@ function PosMain() {
   const mainRef = useRef<HTMLElement | null>(null);
   const { layout } = usePosLayout();
   return (
-    <main ref={mainRef} className="flex-1 flex overflow-hidden min-h-0">
+    <main ref={mainRef} className="pos-main flex-1 flex overflow-hidden min-h-0">
       <div
         className="flex flex-col min-w-0 min-h-0 border-e border-border"
         style={layout.hideCatalog ? { flex: '1 1 0%' } : { width: `${layout.cartPct}%`, flex: '0 0 auto' }}
