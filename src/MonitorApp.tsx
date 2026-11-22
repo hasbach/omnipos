@@ -192,24 +192,24 @@ function MonitorAppInner() {
   if (tenant.email === 'hasbach') {
     return (
       <div className="h-screen w-screen bg-app-bg text-app-ink flex flex-col overflow-hidden">
-        <header className="flex justify-between items-center p-4 border-b border-app-border bg-app-surface">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-app-ink text-app-bg rounded-lg">
+        <header className="flex items-center justify-between gap-2 p-3 sm:p-4 border-b border-app-border bg-app-surface">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="p-2 bg-app-ink text-app-bg rounded-lg shrink-0">
               <ShoppingCart size={16} />
             </div>
-            <div>
-              <h1 className="font-bold text-sm uppercase">{tenant.name}</h1>
-              <p className="text-[10px] opacity-50 font-mono tracking-widest">{t('web_super_admin', 'SUPER ADMIN')}</p>
+            <div className="min-w-0">
+              <h1 className="font-bold text-sm uppercase truncate" title={tenant.name}>{tenant.name}</h1>
+              <p className="text-[10px] opacity-50 font-mono tracking-widest truncate">{t('web_super_admin', 'SUPER ADMIN')}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <LanguageSwitch />
-            <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
+            <button onClick={handleLogout} className="shrink-0 whitespace-nowrap text-xs font-bold uppercase opacity-70 hover:opacity-100 px-3 py-1.5 sm:px-4 sm:py-2 border border-app-border rounded-lg cursor-pointer">
               {t('web_logout', 'Logout')}
             </button>
           </div>
         </header>
-        <main className="flex-1 overflow-y-auto p-4 md:p-8">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-8">
           <SuperAdminWeb />
         </main>
       </div>
@@ -218,38 +218,38 @@ function MonitorAppInner() {
 
   return (
     <div className="h-screen w-screen bg-app-bg text-app-ink flex flex-col overflow-hidden">
-      <header className="flex justify-between items-center p-4 border-b border-app-border bg-app-surface">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-app-ink text-app-bg rounded-lg">
+      <header className="flex flex-wrap items-center justify-between gap-2 p-3 sm:p-4 border-b border-app-border bg-app-surface">
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          <div className="p-2 bg-app-ink text-app-bg rounded-lg shrink-0">
             <ShoppingCart size={16} />
           </div>
-          <div>
-            <h1 className="font-bold text-sm uppercase">{tenant.name}</h1>
-            <p className="text-[10px] opacity-50 font-mono tracking-widest">{t('web_live_monitor_badge', 'LIVE MONITOR')}</p>
+          <div className="min-w-0">
+            <h1 className="font-bold text-sm uppercase truncate" title={tenant.name}>{tenant.name}</h1>
+            <p className="text-[10px] opacity-50 font-mono tracking-widest truncate">{t('web_live_monitor_badge', 'LIVE MONITOR')}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center bg-app-bg border border-app-border rounded-lg p-1">
-            <button
-              onClick={() => setView('monitor')}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all ${view === 'monitor' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
-            >
-              <Activity size={12} /> {t('web_live_monitor_tab', 'Live Monitor')}
-            </button>
-            <button
-              onClick={() => setView('sale')}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all ${view === 'sale' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
-            >
-              <Banknote size={12} /> {t('web_make_a_sale', 'Make a Sale')}
-            </button>
-          </div>
+        <div className="flex items-center gap-2 shrink-0 md:order-3">
           <LanguageSwitch />
-          <button onClick={handleLogout} className="text-xs font-bold uppercase opacity-50 hover:opacity-100 px-4 py-2 border border-app-border rounded-lg">
+          <button onClick={handleLogout} className="shrink-0 whitespace-nowrap text-xs font-bold uppercase opacity-70 hover:opacity-100 px-3 py-1.5 sm:px-4 sm:py-2 border border-app-border rounded-lg cursor-pointer">
             {t('web_logout', 'Logout')}
           </button>
         </div>
+        <div className="w-full md:w-auto md:order-2 flex items-center bg-app-bg border border-app-border rounded-lg p-1">
+          <button
+            onClick={() => setView('monitor')}
+            className={`flex-1 md:flex-initial justify-center px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${view === 'monitor' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
+          >
+            <Activity size={12} /> {t('web_live_monitor_tab', 'Live Monitor')}
+          </button>
+          <button
+            onClick={() => setView('sale')}
+            className={`flex-1 md:flex-initial justify-center px-3 py-1.5 rounded-md text-xs font-bold uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${view === 'sale' ? 'bg-app-ink text-app-bg' : 'opacity-50 hover:opacity-100'}`}
+          >
+            <Banknote size={12} /> {t('web_make_a_sale', 'Make a Sale')}
+          </button>
+        </div>
       </header>
-      <main className="flex-1 overflow-y-auto p-4 md:p-8">
+      <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-8">
         {view === 'monitor' ? <LiveMonitorWeb tenant={tenant} /> : <OnlineSale tenant={tenant} />}
       </main>
     </div>

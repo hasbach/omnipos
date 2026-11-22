@@ -1,4 +1,31 @@
+import { api } from '../../lib/api';
+
 export type PrintResult = { success: boolean; error: string | null };
+
+export type ThermalLine =
+  | { kind: 'center'; text: string; bold?: boolean }
+  | { kind: 'section'; text: string }
+  | { kind: 'kv'; label: string; value: string; bold?: boolean; indent?: boolean }
+  | { kind: 'text'; text: string; bold?: boolean }
+  | { kind: 'hr'; char?: string }
+  | { kind: 'feed'; lines?: number };
+
+/**
+ * Sends a structured thermal report to the configured ESC/POS receipt printer (supports both
+ * image-mode Arabic and code-page text mode, USB or network). Falls back to silent HTML printing
+ * only when no ESC/POS receipt printer is configured.
+ */
+export async function printThermalReport(lines: ThermalLine[], fallbackHtml: string): Promise<PrintResult> {
+  try {
+    await api.post('/api/print/xreport', { lines });
+    return { success: true, error: null };
+  } catch (err: any) {
+    if (err?.status === 404 || err?.code === 'no_receipt_printer') {
+      return printReportHtml(fallbackHtml);
+    }
+    return { success: false, error: err?.message || String(err) };
+  }
+}
 
 /**
  * Prints a full HTML document the way POS receipts are printed: silently to the OS default printer

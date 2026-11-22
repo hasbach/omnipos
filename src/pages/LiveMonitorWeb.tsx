@@ -137,28 +137,28 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
   }
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto">
+    <div className="space-y-5 sm:space-y-8 max-w-7xl mx-auto">
       {/* Real-time Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6">
+        <div className="p-5 sm:p-8 bg-app-surface border border-app-border rounded-2xl sm:rounded-3xl shadow-sm min-w-0">
           <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">{t('web_sales_today', 'Sales Today')}</p>
-          <p className="text-4xl font-black font-mono">{formatMoney(stats.todayTotal, { code: 'USD', symbol: '$' })}</p>
+          <p className="text-2xl sm:text-4xl font-black font-mono truncate">{formatMoney(stats.todayTotal, { code: 'USD', symbol: '$' })}</p>
         </div>
-        <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
+        <div className="p-5 sm:p-8 bg-app-surface border border-app-border rounded-2xl sm:rounded-3xl shadow-sm min-w-0">
           <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">{t('web_transactions', 'Transactions')}</p>
-          <p className="text-4xl font-black font-mono">{stats.todayCount}</p>
+          <p className="text-2xl sm:text-4xl font-black font-mono truncate">{stats.todayCount}</p>
         </div>
-        <div className="p-8 bg-app-surface border border-app-border rounded-3xl shadow-sm">
+        <div className="p-5 sm:p-8 bg-app-surface border border-app-border rounded-2xl sm:rounded-3xl shadow-sm min-w-0">
           <p className="text-[10px] font-black uppercase opacity-50 tracking-widest mb-1">{t('web_active_staff', 'Active Staff')}</p>
-          <p className="text-4xl font-black font-mono">{stats.activeUsers.size}</p>
+          <p className="text-2xl sm:text-4xl font-black font-mono truncate">{stats.activeUsers.size}</p>
         </div>
       </div>
 
       {/* Activity Feed */}
-      <div className="bg-app-surface border border-app-border rounded-[40px] overflow-hidden shadow-xl">
-        <div className="p-8 border-b border-app-border flex items-center justify-between bg-app-bg/10">
+      <div className="bg-app-surface border border-app-border rounded-2xl sm:rounded-[40px] overflow-hidden shadow-xl">
+        <div className="p-4 sm:p-8 border-b border-app-border flex flex-wrap items-center justify-between gap-2 bg-app-bg/10">
           <div className="flex items-center gap-3">
-            <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse" />
+            <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse shrink-0" />
             <h2 className="font-black uppercase tracking-widest text-xs">{t('web_live_cloud_feed', 'Live Cloud Feed')}</h2>
           </div>
           <span className="text-[10px] font-bold opacity-30 uppercase">{t('web_showing_last_50', 'Showing last 50 events')}</span>
@@ -171,30 +171,30 @@ export default function LiveMonitorWeb({ tenant }: { tenant: Tenant }) {
                   key={activity.global_id || activity.local_id}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  className="p-6 flex items-center justify-between hover:bg-app-bg/20 transition-colors group"
+                  className="p-4 sm:p-6 flex items-center justify-between gap-3 hover:bg-app-bg/20 transition-colors group"
                 >
-                  <div className="flex items-center gap-6">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl ${
+                  <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1">
+                    <div className={`w-10 h-10 sm:w-12 sm:h-12 shrink-0 rounded-xl sm:rounded-2xl flex items-center justify-center font-black text-lg sm:text-xl ${
                       activity.type === 'sale' ? 'bg-emerald-500/10 text-emerald-600' : 
                       activity.type === 'refund' ? 'bg-red-500/10 text-red-600' : 'bg-blue-500/10 text-blue-600'
                     }`}>
                       {activity.type === 'sale' ? '$' : activity.type === 'refund' ? 'R' : 'P'}
                     </div>
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <p className="font-black uppercase tracking-tight">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <p className="font-black uppercase tracking-tight text-sm sm:text-base">
                           {activity.type === 'sale' ? t('web_type_sale', 'Sale') : activity.type === 'refund' ? t('web_type_refund', 'Refund') : activity.type === 'purchase' ? t('web_type_purchase', 'Purchase') : activity.type}
                         </p>
                         <span className="text-[10px] font-bold opacity-30">{formatDateTime(activity.created_at, lang)}</span>
                       </div>
-                      <p className="text-xs font-bold opacity-50">
+                      <p className="text-xs font-bold opacity-50 truncate">
                         {t('web_processed_by', 'Processed by')} <span className="text-app-ink">{activity.user_name}</span>
                         {activity.stakeholder_name && <> {t('web_for', 'for')} <span className="text-app-ink">{partyDisplayName(activity.stakeholder_name, t)}</span></>}
                       </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className={`text-xl font-black font-mono ${activity.type === 'refund' ? 'text-red-500' : 'text-app-ink'}`}>
+                  <div className="text-end shrink-0">
+                    <p className={`text-base sm:text-xl font-black font-mono ${activity.type === 'refund' ? 'text-red-500' : 'text-app-ink'}`}>
                       {activity.type === 'refund' ? '-' : ''}{formatMoney(activity.total_amount, { code: 'USD', symbol: '$' })}
                     </p>
                     <p className="text-[10px] font-black uppercase opacity-30 tracking-widest">{activity.currency}</p>

@@ -93,6 +93,30 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.12.0 — Cash accounts & savings, combined Money Out report, Arabic printing & POS/monitor fixes (2026-11-23)
+- **Cash accounts & savings:** named accounts (`Cash Drawer` built-in default plus custom Savings / Safe / Bank accounts)
+  with derived continuous multi-currency balances that persist across End-of-Day settlements; atomic internal transfers
+  (`Drawer ↔ Savings`, zero P&L impact); source account selector on Cash In/Out, balance payments, and cash purchases;
+  admin edits on transfers update both linked legs atomically with an audit trail. Cloud migration
+  `supabase/migrations/2026-11-23_cash_accounts.sql` is additive and optional until applied.
+- **Money Out report & Dashboard KPIs:** combined real-money outflows (direct purchase payments + supplier payments +
+  expenses & other cash-flow outs + cash refunds, excluding unpaid credit and internal transfers) on Dashboard Today /
+  This Month, Reports → Overview, and a new **Reports → Money Out** tab with category breakdown, account filter, and
+  Excel / PDF / Print export.
+- **Live Monitor (mobile):** responsive header that truncates long business names, keeps Logout and language controls
+  always visible, and stacks the Live Monitor / Make a Sale switcher cleanly on narrow screens.
+- **Arabic printing & X-reports:** fixed Arabic text-mode receipt `kv()` / `labeled()` spacing (spaces no longer reversed
+  to the wrong side of Arabic labels; CP864 `لإ` fallback); End-of-Day and Cash-Out X-reports now print through the
+  configured ESC/POS thermal printer (image-mode and text-mode Arabic) via `POST /api/print/xreport`, falling back to
+  silent HTML only when no ESC/POS printer is configured.
+- **Receipt & invoice numbers:** receipts print both the permanent invoice number and terminal sequence (`#ID (T1-0005)`);
+  Invoices list, detail drawer, and search support both `#ID` and `T1-0005`.
+- **Receipt toggles (restaurants):** Settings → Printers toggles to show/hide customer balance (`receipt_show_balance`)
+  and payment breakdown (`receipt_show_payments`) on receipts (both on by default).
+- **POS category size:** adjustable Category button size (`Small` / `Medium` / `Large`) in the POS layout menu.
+- **Purchases LBP cost fix:** applying suggested selling prices after a new purchase now preserves the updated `cost_lbp`
+  and updates local-currency selling prices instead of overwriting them with pre-purchase values.
+
 ### 1.11.0 — POS fixes: void, LL discounts, loyalty discount, photos, updater (2026-11-13)
 - **POS:** "Void Order" button next to Quick Cash / Checkout (clears the whole sale after a confirmation).
 - **POS:** a fixed discount (line or whole sale) can be typed in the local currency: 5,000 LL is exactly 5,000 LL.

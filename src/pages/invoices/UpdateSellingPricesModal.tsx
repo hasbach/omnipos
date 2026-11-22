@@ -9,6 +9,7 @@ import type { Product } from '../../types';
 export interface PriceSuggestionRow {
   product: Product; // snapshot BEFORE the purchase changed its cost
   newCost: number; // this product's cost after the purchase was applied
+  newCostLbp?: number | null; // this product's updated local-currency cost after the purchase
 }
 
 export interface UpdateSellingPricesModalProps {
@@ -22,6 +23,7 @@ interface Suggestion {
   productId: number;
   name: string;
   newCost: number;
+  newCostLbp: number | null;
   markup: number;
   suggestedRetail: number;
   suggestedWholesale: number | null;
@@ -34,8 +36,19 @@ export function UpdateSellingPricesModal({ open, onClose, rows, onApplied }: Upd
   const toast = useToast();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [localRate, setLocalRate] = useState<number | null>(null);
 
-  const suggestions: Suggestion[] = rows.map(({ product, newCost }) => {
+  useEffect(() => {
+    if (!open) return;
+    api.get<Array<{ code: string; rate: number }>>('/api/currencies')
+      .then((list) => {
+        const local = Array.isArray(list) ? list.find((c) => c.code && c.code.toUpperCase() !== 'USD' && c.rate > 0) : null;
+        setLocalRate(local ? Number(local.rate) : null);
+      })
+      .catch(() => {});
+  }, [open]);
+
+  const suggestions: Suggestion[] = rows.map(({ product, newCost, newCostLbp }) => {
     const oldCost = product.cost || 0;
     const markup = markupPct(product.price, oldCost);
     const suggestedRetail = Number(priceFromMarkup(newCost, markup).toFixed(2));
@@ -45,7 +58,17 @@ export function UpdateSellingPricesModal({ open, onClose, rows, onApplied }: Upd
     const suggestedSuperWholesale = product.price_super_wholesale
       ? Number(priceFromMarkup(newCost, markupPct(product.price_super_wholesale, oldCost)).toFixed(2))
       : null;
-    return { productId: product.id, name: product.name, newCost, markup, suggestedRetail, suggestedWholesale, suggestedSuperWholesale, product };
+    return {
+      productId: product.id,
+      name: product.name,
+      newCost,
+      newCostLbp: newCostLbp ?? (localRate ? Math.round(newCost * localRate * 100) / 100 : product.cost_lbp ?? null),
+      markup,
+      suggestedRetail,
+      suggestedWholesale,
+      suggestedSuperWholesale,
+      product,
+    };
   });
 
   useEffect(() => {
@@ -74,11 +97,11 @@ export function UpdateSellingPricesModal({ open, onClose, rows, onApplied }: Upd
         await api.put(`/api/products/${p.id}`, {
           name: p.name,
           price: s.suggestedRetail,
-          price_lbp: p.price_lbp,
+          price_lbp: localRate ? Math.round(s.suggestedRetail * localRate) : p.price_lbp,
           package_price: p.package_price,
           package_price_lbp: p.package_price_lbp,
           cost: s.newCost,
-          cost_lbp: p.cost_lbp,
+          cost_lbp: s.newCostLbp ?? p.cost_lbp,
           units_per_package: p.units_per_package,
           reorder_point: p.reorder_point,
           track_inventory: p.track_inventory,
@@ -87,9 +110,9 @@ export function UpdateSellingPricesModal({ open, onClose, rows, onApplied }: Upd
           unit: p.unit,
           barcodes: p.barcodes && p.barcodes.length ? p.barcodes : [p.barcode],
           price_wholesale: s.suggestedWholesale ?? p.price_wholesale,
-          price_wholesale_lbp: p.price_wholesale_lbp,
+          price_wholesale_lbp: s.suggestedWholesale != null && localRate ? Math.round(s.suggestedWholesale * localRate) : p.price_wholesale_lbp,
           price_super_wholesale: s.suggestedSuperWholesale ?? p.price_super_wholesale,
-          price_super_wholesale_lbp: p.price_super_wholesale_lbp,
+          price_super_wholesale_lbp: s.suggestedSuperWholesale != null && localRate ? Math.round(s.suggestedSuperWholesale * localRate) : p.price_super_wholesale_lbp,
           min_price: p.min_price,
         });
         count += 1;

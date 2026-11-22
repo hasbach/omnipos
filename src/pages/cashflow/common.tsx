@@ -6,7 +6,7 @@ export type Translate = (key: string, fallback?: string) => string;
 
 export const CATEGORIES = [
   'top_up', 'loan_in', 'loan_repayment', 'owner_withdrawal', 'expense',
-  'supplier_payment', 'customer_collection', 'other',
+  'supplier_payment', 'customer_collection', 'transfer', 'other',
 ] as const;
 export type Category = typeof CATEGORIES[number];
 
@@ -14,18 +14,29 @@ export type Category = typeof CATEGORIES[number];
 export const CATEGORY_TYPES: Record<Category, Array<'in' | 'out'>> = {
   top_up: ['in'], loan_in: ['in'], customer_collection: ['in'],
   loan_repayment: ['out'], owner_withdrawal: ['out'], expense: ['out'], supplier_payment: ['out'],
+  transfer: ['in', 'out'],
   other: ['in', 'out'],
 };
 
 const CATEGORY_FALLBACK: Record<Category, string> = {
   top_up: 'Top-up (owner adds float)', loan_in: 'Loan received', loan_repayment: 'Loan repayment',
   owner_withdrawal: 'Owner withdrawal', expense: 'Expense', supplier_payment: 'Supplier payment',
-  customer_collection: 'Customer collection', other: 'Other',
+  customer_collection: 'Customer collection', transfer: 'Account transfer', other: 'Other',
 };
 
 /** Translated label of a BUILT-IN category. Use useCashFlowCategories().label() for anything that may be custom. */
 export function builtinCategoryLabel(key: Category, t: Translate): string {
   return t(`cf_cat_${key}`, CATEGORY_FALLBACK[key]);
+}
+
+export interface CashAccount {
+  id: number;
+  name: string;
+  kind: 'drawer' | 'savings' | 'bank';
+  is_default: number;
+  active: number;
+  balance_usd: number;
+  by_currency: Record<string, number>;
 }
 
 export interface CashFlowRow {
@@ -42,6 +53,9 @@ export interface CashFlowRow {
   archived?: boolean;
   user_name?: string | null;
   amount_usd?: number;
+  account_id?: number | null;
+  account_name?: string | null;
+  transfer_id?: string | null;
 }
 
 /** Server error code -> localized text; falls back to the server's own message. */
@@ -59,6 +73,11 @@ export function cashFlowErrorMessage(err: any, t: Translate): string {
     case 'CASHFLOW_CATEGORY_DIRECTION_IN_USE': return t('cf_err_cat_direction_in_use', 'Movements of the opposite type already use this category, so its direction cannot be narrowed.');
     case 'CASHFLOW_CATEGORY_NOT_FOUND': return t('cf_err_cat_not_found', 'This category no longer exists.');
     case 'CASHFLOW_NOT_FOUND': return t('cf_err_not_found', 'This entry no longer exists.');
+    case 'TRANSFER_SAME_ACCOUNT': return t('acc_err_same_account', 'Source and destination accounts must be different.');
+    case 'ACCOUNT_NAME_TAKEN': return t('acc_err_name_taken', 'An account with this name already exists.');
+    case 'ACCOUNT_NAME_INVALID': return t('acc_err_name_invalid', 'Account name must be 1 to 50 characters.');
+    case 'ACCOUNT_NOT_FOUND': return t('acc_err_not_found', 'Cash account not found.');
+    case 'ACCOUNT_INACTIVE': return t('acc_err_inactive', 'This cash account is inactive.');
   }
   return err?.message || String(err);
 }

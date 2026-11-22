@@ -74,6 +74,9 @@ export function buildReceiptBuffer(opts: {
   localCurrency?: { code: string; symbol?: string | null; rate: number } | null;
   // code -> symbol for every tenant currency, so a sale stored under an older local code still prints its symbol.
   currencySymbols?: Record<string, string>;
+  // Optional visibility flags (default true for backward compatibility). Restaurants can turn these off.
+  showBalance?: boolean;
+  showPayments?: boolean;
 }): Buffer {
   const width = paperWidthToColumns(opts.paperWidth);
   const p = new EscPos(width, opts.arabic);
@@ -90,9 +93,12 @@ export function buildReceiptBuffer(opts: {
   if (opts.businessPhone) p.text(opts.businessPhone).feed(1);
   p.hr();
 
-  const receiptNo = tx.terminal_id && tx.terminal_sequence
+  const termNo = tx.terminal_id && tx.terminal_sequence
     ? `${tx.terminal_id}-${String(tx.terminal_sequence).padStart(4, '0')}`
-    : `#${tx.id ?? 'N/A'}`;
+    : null;
+  const receiptNo = termNo && tx.id != null
+    ? `#${tx.id} (${termNo})`
+    : termNo ?? `#${tx.id ?? 'N/A'}`;
   const title = tx.type === 'refund' ? labels.refundTitle : labels.receiptTitle;
 
   p.align('left');
@@ -160,7 +166,7 @@ export function buildReceiptBuffer(opts: {
     p.kv(labels.discount, discountText(tx.discount));
   }
 
-  if (Array.isArray(tx.payments) && tx.payments.length > 0) {
+  if (opts.showPayments !== false && Array.isArray(tx.payments) && tx.payments.length > 0) {
     p.hr();
     for (const pay of tx.payments) {
       p.kv(paymentMethodLabel(language, pay.method), `${Number(pay.amount).toFixed(2)} ${pay.currency}`);
@@ -168,7 +174,7 @@ export function buildReceiptBuffer(opts: {
   }
 
   // Previous / this / new balance, for a non-Walk-in customer/supplier with a known balance.
-  if (tx.stakeholder_name && tx.stakeholder_name !== 'Walk-in Customer' && tx.stakeholder_balance != null && tx.balance_effect != null) {
+  if (opts.showBalance !== false && tx.stakeholder_name && tx.stakeholder_name !== 'Walk-in Customer' && tx.stakeholder_balance != null && tx.balance_effect != null) {
     p.hr();
     const newBalance = tx.stakeholder_balance;
     const prevBalance = newBalance - tx.balance_effect;

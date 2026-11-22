@@ -37,7 +37,12 @@ export function cashFlowColumns(opts: {
       header: t('cf_category', 'Category'),
       sortValue: (row) => categoryLabel(row.category),
       sortable: true,
-      render: (row) => <span className="text-text-2">{categoryLabel(row.category)}</span>,
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-text-2">{categoryLabel(row.category)}</span>
+          {row.account_name && <Badge variant="neutral">{row.account_name}</Badge>}
+        </div>
+      ),
     },
     {
       key: 'amount',

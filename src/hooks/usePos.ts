@@ -1556,11 +1556,14 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       ...(printSettings.business_phone ? [center(printSettings.business_phone)] : []),
       "================================",
       `Date: ${formatDateTime(transaction.created_at, lang)}`,
-      `Receipt: ${
-        transaction.terminal_id && transaction.terminal_sequence
+      `Receipt: ${(() => {
+        const termNo = transaction.terminal_id && transaction.terminal_sequence
           ? `${transaction.terminal_id}-${String(transaction.terminal_sequence).padStart(4, '0')}`
-          : `#${transaction.id || 'N/A'}`
-      }`,
+          : null;
+        return termNo && transaction.id != null
+          ? `#${transaction.id} (${termNo})`
+          : termNo ?? `#${transaction.id || 'N/A'}`;
+      })()}`,
       `Customer: ${stakeholder}`,
       ...(customer?.address ? [`Address: ${customer.address}`] : []),
       "--------------------------------",
@@ -1590,10 +1593,17 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       lines.push(`Global Discount:   ${discountLabel(transaction.discount, discountLocal)}`);
     }
 
+    if (printSettings.receipt_show_payments !== '0' && Array.isArray(transaction.payments) && transaction.payments.length > 0) {
+      lines.push("--------------------------------");
+      transaction.payments.forEach((pay: any) => {
+        lines.push(`${String(pay.method || '').toUpperCase().padEnd(16)} ${Number(pay.amount || 0).toFixed(2)} ${pay.currency || 'USD'}`);
+      });
+    }
+
     // Previous balance / This invoice / New balance — only for a real (non-Walk-in) customer, and
     // only when the transaction carries the fields to compute them: balance_before/balance_after
     // fresh off checkout, or stakeholder_balance/balance_effect from a re-fetched GET /api/transactions/:id.
-    if (customer && customer.name !== 'Walk-in Customer') {
+    if (printSettings.receipt_show_balance !== '0' && customer && customer.name !== 'Walk-in Customer') {
       let balanceBefore: number | null = null;
       let balanceAfter: number | null = null;
       if (transaction.balance_before != null || transaction.balance_after != null) {

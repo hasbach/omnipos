@@ -12,7 +12,7 @@ import { formatMoney, formatDateTime, resolveDateRangePreset, partyDisplayName, 
 import type { Product, Stakeholder } from '../types';
 import InvoiceDetailDrawer from './invoices/InvoiceDetailDrawer';
 import InvoiceEditor from './invoices/InvoiceEditor';
-import { payStatus, type CurrencyRow, type InvoiceListRow } from './invoices/types';
+import { formatReceiptNumber, payStatus, type CurrencyRow, type InvoiceListRow } from './invoices/types';
 
 const USD: CurrencyRow = { code: 'USD', symbol: '$', rate: 1 };
 
@@ -105,6 +105,7 @@ export default function InvoiceManagement() {
   const handleExport = () => {
     const sheet = filteredRows.map((r) => ({
       '#': r.id,
+      Receipt: formatReceiptNumber(r) || '',
       Type: r.type,
       Party: r.stakeholder_name ? partyDisplayName(r.stakeholder_name, t) : '',
       Date: formatDateTime(r.created_at, lang),
@@ -123,7 +124,20 @@ export default function InvoiceManagement() {
   };
 
   const columns: DataTableColumn<InvoiceListRow>[] = [
-    { key: 'id', header: t('inv_col_number', '#'), sortable: true, render: (r) => <span className="num font-medium">#{r.id}</span> },
+    {
+      key: 'id',
+      header: t('inv_col_number', '#'),
+      sortable: true,
+      render: (r) => {
+        const rec = formatReceiptNumber(r);
+        return (
+          <div className="flex flex-col">
+            <span className="num font-medium">#{r.id}</span>
+            {rec && <span className="num text-[11px] text-text-3">{rec}</span>}
+          </div>
+        );
+      },
+    },
     { key: 'created_at', header: t('inv_col_date', 'Date'), sortable: true, sortValue: (r) => new Date(r.created_at).getTime(), render: (r) => <span className="num text-text-2">{formatDateTime(r.created_at, lang)}</span> },
     {
       key: 'type', header: t('inv_col_type', 'Type'), sortable: true,

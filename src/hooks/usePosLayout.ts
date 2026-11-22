@@ -12,6 +12,7 @@ export interface PosLayout {
   cartPct: number; // width of the cart pane as % of the POS area
   density: PosDensity;
   tileSize: PosTileSize;
+  categorySize: PosTileSize;
   hideCatalog: boolean;
 }
 
@@ -24,6 +25,7 @@ export const DEFAULT_POS_LAYOUT: PosLayout = {
   cartPct: CART_PCT_DEFAULT,
   density: 'compact',
   tileSize: 'md',
+  categorySize: 'sm',
   hideCatalog: false,
 };
 
@@ -37,6 +39,7 @@ function sanitize(raw: any): PosLayout {
     cartPct: typeof raw.cartPct === 'number' && Number.isFinite(raw.cartPct) ? clampCartPct(raw.cartPct) : d.cartPct,
     density: raw.density === 'comfortable' || raw.density === 'compact' ? raw.density : d.density,
     tileSize: raw.tileSize === 'sm' || raw.tileSize === 'md' || raw.tileSize === 'lg' ? raw.tileSize : d.tileSize,
+    categorySize: raw.categorySize === 'sm' || raw.categorySize === 'md' || raw.categorySize === 'lg' ? raw.categorySize : d.categorySize,
     hideCatalog: raw.hideCatalog === true,
   };
 }
@@ -61,7 +64,8 @@ function update(patch: Partial<PosLayout>, save = true) {
   const next = sanitize({ ...state, ...patch });
   if (
     next.cartPct !== state.cartPct || next.density !== state.density ||
-    next.tileSize !== state.tileSize || next.hideCatalog !== state.hideCatalog
+    next.tileSize !== state.tileSize || next.categorySize !== state.categorySize ||
+    next.hideCatalog !== state.hideCatalog
   ) {
     state = next;
     listeners.forEach((l) => l());
@@ -80,8 +84,9 @@ export function usePosLayout() {
   const commit = useCallback(() => persist(), []);
   const setDensity = useCallback((density: PosDensity) => update({ density }), []);
   const setTileSize = useCallback((tileSize: PosTileSize) => update({ tileSize }), []);
+  const setCategorySize = useCallback((categorySize: PosTileSize) => update({ categorySize }), []);
   const setHideCatalog = useCallback((hideCatalog: boolean) => update({ hideCatalog }), []);
   const reset = useCallback(() => update({ ...DEFAULT_POS_LAYOUT }), []);
 
-  return { layout, setCartPct, commit, setDensity, setTileSize, setHideCatalog, reset };
+  return { layout, setCartPct, commit, setDensity, setTileSize, setCategorySize, setHideCatalog, reset };
 }

@@ -130,7 +130,11 @@ export default function PurchaseManagement() {
           const before = products.find((p) => p.id === it.product_id);
           const after = freshProducts.find((p) => p.id === it.product_id);
           if (!before || !after) return null;
-          return { product: before, newCost: after.cost ?? before.cost ?? 0 } as PriceSuggestionRow;
+          return {
+            product: before,
+            newCost: after.cost ?? before.cost ?? 0,
+            newCostLbp: after.cost_lbp ?? before.cost_lbp ?? null,
+          } as PriceSuggestionRow;
         })
         .filter(Boolean) as PriceSuggestionRow[];
       if (rows.length > 0 && can('products.edit')) {

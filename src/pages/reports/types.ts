@@ -24,6 +24,12 @@ export interface ReportSummary {
   tax: number;
   cash_in: number;
   cash_out: number;
+  total_outflows?: number;
+  purchases_paid?: number;
+  supplier_payments?: number;
+  expenses_out?: number;
+  other_out?: number;
+  refunds_paid?: number;
   tx_count: number;
   sale_count: number;
   avg_ticket: number;
@@ -43,6 +49,41 @@ export interface ProfitAndLoss {
   gross_profit: number;
   expenses: number;
   net_profit: number;
+}
+
+export interface OutflowRow {
+  uid: string;
+  date: string;
+  created_at: string;
+  source: 'purchase' | 'supplier_payment' | 'expense' | 'other' | 'refund';
+  category: string;
+  category_label: string | null;
+  counterparty: string | null;
+  description: string | null;
+  method: string;
+  currency: string;
+  amount: number;
+  amount_usd: number;
+  account_id: number | null;
+  account_name: string | null;
+  archived: boolean;
+}
+
+export interface OutflowsReport {
+  from: string;
+  to: string;
+  totals: {
+    total_outflows: number;
+    purchases_paid: number;
+    supplier_payments: number;
+    expenses: number;
+    other_out: number;
+    refunds_paid: number;
+    count: number;
+  };
+  by_category: Array<{ key: string; label: string | null; source: string; count: number; total_usd: number }>;
+  by_day: Array<{ date: string; total_usd: number }>;
+  rows: OutflowRow[];
 }
 
 export interface SalesTrendPoint {

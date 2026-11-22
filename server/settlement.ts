@@ -88,20 +88,36 @@ function archivedSource(tenantId: number, reportId: number): Source {
   };
 }
 
-// Cash register movements since `since` (exclusive) up to `until` (inclusive) — the exact formula
-// /api/cash-flow/summary has always used.
+// Cash register movements since `since` (exclusive) up to `until` (inclusive) — scoped to the
+// physical Cash Drawer (account_id IS NULL or the tenant's default drawer account). Purchases or
+// expenses paid from a Savings/Safe account do not touch the drawer; transfers out of the drawer
+// into Savings DO reduce expected drawer cash.
+function drawerAccountId(tenantId: number): number | null {
+  try {
+    const row = db.prepare("SELECT id FROM cash_accounts WHERE tenant_id = ? AND is_default = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1").get(tenantId) as any;
+    return row ? row.id : null;
+  } catch {
+    return null;
+  }
+}
+
 function registerMovements(src: Source, since: string, until: string) {
+  const drawerId = drawerAccountId(src.tenantId);
+  const payAccClause = drawerId != null ? " AND (p.account_id IS NULL OR p.account_id = ?)" : " AND p.account_id IS NULL";
+  const cfAccClause = drawerId != null ? " AND (account_id IS NULL OR account_id = ?)" : " AND account_id IS NULL";
+  const accParam = drawerId != null ? [drawerId] : [];
+
   const cashOf = (type: string) => (db.prepare(`
     SELECT IFNULL(SUM(p.amount / p.exchange_rate), 0) as total
     FROM ${src.pay} p JOIN ${src.tx} t ON p.transaction_id = t.id
-    WHERE ${src.txWhere} AND t.type = ? AND p.method = 'cash' AND p.created_at > ? AND p.created_at <= ?
-  `).get(...src.txParams, type, since, until) as any).total as number;
+    WHERE ${src.txWhere} AND t.type = ? AND p.method = 'cash'${payAccClause} AND p.created_at > ? AND p.created_at <= ?
+  `).get(...src.txParams, type, ...accParam, since, until) as any).total as number;
   const flow = db.prepare(`
     SELECT
       IFNULL(SUM(CASE WHEN type = 'in' THEN amount / exchange_rate ELSE 0 END), 0) as total_in,
       IFNULL(SUM(CASE WHEN type = 'out' THEN amount / exchange_rate ELSE 0 END), 0) as total_out
-    FROM ${src.cf} WHERE ${src.cfWhere} AND created_at > ? AND created_at <= ?
-  `).get(...src.cfParams, since, until) as any;
+    FROM ${src.cf} WHERE ${src.cfWhere}${cfAccClause} AND created_at > ? AND created_at <= ?
+  `).get(...src.cfParams, ...accParam, since, until) as any;
   return {
     cashSales: cashOf("sale"),
     cashRefunds: cashOf("refund"),

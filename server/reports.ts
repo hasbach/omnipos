@@ -191,19 +191,196 @@ function round2(n: number): number {
 // ---------------------------------------------------------------------------
 
 function cashFlowTotals(tenantId: number, from: string, to: string, excludeSupplierPayments = false): { cash_in: number; cash_out: number } {
-  const supplierFilter = excludeSupplierPayments ? " AND (reason IS NULL OR (reason NOT LIKE 'Payment to supplier%' AND reason NOT LIKE 'Payment on invoice%'))" : "";
+  const supplierFilter = excludeSupplierPayments ? " AND (reason IS NULL OR (reason NOT LIKE 'Payment to supplier%' AND reason NOT LIKE 'Payment on invoice%')) AND COALESCE(category, 'other') != 'supplier_payment'" : "";
   const row = db.prepare(`
     SELECT
       IFNULL(SUM(CASE WHEN type = 'in' THEN amount / exchange_rate ELSE 0 END), 0) as cash_in,
       IFNULL(SUM(CASE WHEN type = 'out' THEN amount / exchange_rate ELSE 0 END), 0) as cash_out
     FROM (
-      SELECT type, amount, exchange_rate, reason, created_at FROM cash_flow WHERE tenant_id = ?
+      SELECT type, amount, exchange_rate, category, reason, created_at FROM cash_flow WHERE tenant_id = ?
       UNION ALL
-      SELECT type, amount, exchange_rate, reason, created_at FROM archived_cash_flow WHERE tenant_id = ?
+      SELECT type, amount, exchange_rate, category, reason, created_at FROM archived_cash_flow WHERE tenant_id = ?
     )
-    WHERE date(created_at,'localtime') BETWEEN ? AND ?${supplierFilter}
+    WHERE date(created_at,'localtime') BETWEEN ? AND ? AND COALESCE(category, 'other') != 'transfer'${supplierFilter}
   `).get(tenantId, tenantId, from, to) as any;
   return { cash_in: row.cash_in || 0, cash_out: row.cash_out || 0 };
+}
+
+function tableHasColumn(table: string, col: string): boolean {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as any[];
+    return cols.some((c) => c.name === col);
+  } catch {
+    return false;
+  }
+}
+
+export function computeOutflowsReport(tenantId: number, from: string, to: string, accountId?: number | null) {
+  const hasAccounts = tableHasColumn("cash_flow", "account_id") && tableHasColumn("payments", "account_id");
+  const accMap = new Map<number, string>();
+  if (hasAccounts) {
+    try {
+      const accs = db.prepare("SELECT id, name FROM cash_accounts WHERE tenant_id = ?").all(tenantId) as any[];
+      for (const a of accs) accMap.set(a.id, a.name);
+    } catch { /* cash_accounts not yet created */ }
+  }
+
+  const accColPay = hasAccounts ? "pay.account_id" : "NULL";
+  const accColArchPay = hasAccounts ? "apay.account_id" : "NULL";
+  const accColCf = hasAccounts ? "c.account_id" : "NULL";
+  const accFilterPay = hasAccounts && accountId != null ? " AND pay.account_id = ?" : "";
+  const accFilterArchPay = hasAccounts && accountId != null ? " AND apay.account_id = ?" : "";
+  const accFilterCf = hasAccounts && accountId != null ? " AND c.account_id = ?" : "";
+  const accParam = hasAccounts && accountId != null ? [accountId] : [];
+
+  // 1. Real-money payments on purchases and refunds (live + archived)
+  const payRows = db.prepare(`
+    SELECT pay.id as id, t.id as tx_id, t.type as tx_type, pay.method as method, pay.currency as currency,
+           pay.amount as amount, IFNULL(NULLIF(pay.exchange_rate, 0), 1) as exchange_rate,
+           pay.created_at as created_at, date(pay.created_at,'localtime') as local_date,
+           s.name as counterparty, t.reference as reference, t.notes as notes,
+           ${accColPay} as account_id, 0 as archived
+    FROM payments pay
+    JOIN transactions t ON t.id = pay.transaction_id
+    LEFT JOIN stakeholders s ON s.id = t.stakeholder_id
+    WHERE t.tenant_id = ? AND t.type IN ('purchase','refund') AND pay.${REAL_MONEY_SQL}
+      AND date(pay.created_at,'localtime') BETWEEN ? AND ?${accFilterPay}
+    UNION ALL
+    SELECT apay.id, at.id, at.type, apay.method, apay.currency,
+           apay.amount, IFNULL(NULLIF(apay.exchange_rate, 0), 1),
+           apay.created_at, date(apay.created_at,'localtime'),
+           s.name, at.reference, at.notes,
+           ${accColArchPay}, 1
+    FROM archived_payments apay
+    JOIN archived_transactions at ON at.id = apay.transaction_id
+    LEFT JOIN stakeholders s ON s.id = at.stakeholder_id
+    WHERE at.tenant_id = ? AND at.type IN ('purchase','refund') AND apay.${REAL_MONEY_SQL}
+      AND date(apay.created_at,'localtime') BETWEEN ? AND ?${accFilterArchPay}
+  `).all(tenantId, from, to, ...accParam, tenantId, from, to, ...accParam) as any[];
+
+  // 2. Cash-flow outflows (live + archived), excluding internal account transfers
+  const cfRows = db.prepare(`
+    SELECT c.id as id, COALESCE(c.category, 'other') as category, c.counterparty as counterparty,
+           c.reason as reason, c.currency as currency, c.amount as amount,
+           IFNULL(NULLIF(c.exchange_rate, 0), 1) as exchange_rate,
+           c.created_at as created_at, date(c.created_at,'localtime') as local_date,
+           ${accColCf} as account_id, 0 as archived
+    FROM cash_flow c
+    WHERE c.tenant_id = ? AND c.type = 'out' AND COALESCE(c.category, 'other') != 'transfer'
+      AND date(c.created_at,'localtime') BETWEEN ? AND ?${accFilterCf}
+    UNION ALL
+    SELECT c.id, COALESCE(c.category, 'other'), c.counterparty, c.reason, c.currency, c.amount,
+           IFNULL(NULLIF(c.exchange_rate, 0), 1), c.created_at, date(c.created_at,'localtime'),
+           ${accColCf}, 1
+    FROM archived_cash_flow c
+    WHERE c.tenant_id = ? AND c.type = 'out' AND COALESCE(c.category, 'other') != 'transfer'
+      AND date(c.created_at,'localtime') BETWEEN ? AND ?${accFilterCf}
+  `).all(tenantId, from, to, ...accParam, tenantId, from, to, ...accParam) as any[];
+
+  const customCatNames = new Map<string, string>();
+  try {
+    const customCats = db.prepare("SELECT key, name FROM cash_flow_categories WHERE tenant_id = ?").all(tenantId) as any[];
+    for (const cc of customCats) customCatNames.set(cc.key, cc.name);
+  } catch { /* ignore */ }
+
+  let purchases_paid = 0;
+  let supplier_payments = 0;
+  let expenses = 0;
+  let other_out = 0;
+  let refunds_paid = 0;
+
+  const byCat = new Map<string, { key: string; label: string | null; source: string; count: number; total_usd: number }>();
+  const byDay = new Map<string, number>();
+  const rows: any[] = [];
+
+  const bump = (catKey: string, label: string | null, source: string, day: string, usd: number) => {
+    const c = byCat.get(catKey) || { key: catKey, label, source, count: 0, total_usd: 0 };
+    c.count++;
+    c.total_usd += usd;
+    byCat.set(catKey, c);
+    byDay.set(day, (byDay.get(day) || 0) + usd);
+  };
+
+  for (const r of payRows) {
+    const usd = (Number(r.amount) || 0) / (Number(r.exchange_rate) || 1);
+    const source = r.tx_type === 'purchase' ? 'purchase' : 'refund';
+    if (source === 'purchase') purchases_paid += usd;
+    else refunds_paid += usd;
+    const catKey = source === 'purchase' ? 'purchase_payment' : 'refund_payout';
+    bump(catKey, null, source, r.local_date, usd);
+    rows.push({
+      uid: `pay-${r.archived ? 'a' : 'l'}-${r.id}`,
+      date: r.local_date,
+      created_at: r.created_at,
+      source,
+      category: catKey,
+      category_label: null,
+      counterparty: r.counterparty || null,
+      description: r.reference || r.notes || `#${r.tx_id}`,
+      method: r.method || 'cash',
+      currency: r.currency || 'USD',
+      amount: round2(Number(r.amount) || 0),
+      amount_usd: round2(usd),
+      account_id: r.account_id ?? null,
+      account_name: r.account_id != null ? (accMap.get(r.account_id) || null) : null,
+      archived: !!r.archived,
+    });
+  }
+
+  for (const r of cfRows) {
+    const usd = (Number(r.amount) || 0) / (Number(r.exchange_rate) || 1);
+    const reasonStr = String(r.reason || '');
+    const isSupplier = r.category === 'supplier_payment' || reasonStr.startsWith('Payment to supplier') || reasonStr.startsWith('Payment on invoice');
+    const isOther = r.category === 'owner_withdrawal' || r.category === 'loan_repayment' || r.category === 'other';
+    const source = isSupplier ? 'supplier_payment' : isOther ? 'other' : 'expense';
+    if (source === 'supplier_payment') supplier_payments += usd;
+    else if (source === 'expense') expenses += usd;
+    else other_out += usd;
+    const catKey = isSupplier ? 'supplier_payment' : r.category;
+    const catLabel = customCatNames.get(catKey) || null;
+    bump(catKey, catLabel, source, r.local_date, usd);
+    rows.push({
+      uid: `cf-${r.archived ? 'a' : 'l'}-${r.id}`,
+      date: r.local_date,
+      created_at: r.created_at,
+      source,
+      category: catKey,
+      category_label: catLabel,
+      counterparty: r.counterparty || null,
+      description: r.reason || null,
+      method: 'cash',
+      currency: r.currency || 'USD',
+      amount: round2(Number(r.amount) || 0),
+      amount_usd: round2(usd),
+      account_id: r.account_id ?? null,
+      account_name: r.account_id != null ? (accMap.get(r.account_id) || null) : null,
+      archived: !!r.archived,
+    });
+  }
+
+  rows.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+  const total_outflows = purchases_paid + supplier_payments + expenses + other_out + refunds_paid;
+
+  return {
+    from,
+    to,
+    totals: {
+      total_outflows: round2(total_outflows),
+      purchases_paid: round2(purchases_paid),
+      supplier_payments: round2(supplier_payments),
+      expenses: round2(expenses),
+      other_out: round2(other_out),
+      refunds_paid: round2(refunds_paid),
+      count: rows.length,
+    },
+    by_category: Array.from(byCat.values())
+      .map((c) => ({ ...c, total_usd: round2(c.total_usd) }))
+      .sort((a, b) => b.total_usd - a.total_usd),
+    by_day: Array.from(byDay.entries())
+      .map(([date, total_usd]) => ({ date, total_usd: round2(total_usd) }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    rows,
+  };
 }
 
 function purchasesTotal(tenantId: number, from: string, to: string): number {
@@ -357,6 +534,7 @@ export function setupReportRoutes(app: any, authenticate: any) {
 
       const purchases = purchasesTotal(tenantId, from, to);
       const { cash_in, cash_out } = cashFlowTotals(tenantId, from, to);
+      const outflows = computeOutflowsReport(tenantId, from, to).totals;
       const { sale_count } = saleTxSummary(tenantId, from, to);
       const tx_count = txCount(tenantId, from, to);
       const avg_ticket = sale_count > 0 ? sales / sale_count : 0;
@@ -379,6 +557,12 @@ export function setupReportRoutes(app: any, authenticate: any) {
         tax: round2(tax),
         cash_in: round2(cash_in),
         cash_out: round2(cash_out),
+        total_outflows: outflows.total_outflows,
+        purchases_paid: outflows.purchases_paid,
+        supplier_payments: outflows.supplier_payments,
+        expenses_out: outflows.expenses,
+        other_out: outflows.other_out,
+        refunds_paid: outflows.refunds_paid,
         tx_count,
         sale_count,
         avg_ticket: round2(avg_ticket),
@@ -994,6 +1178,18 @@ export function setupReportRoutes(app: any, authenticate: any) {
         expenses: round2(expenses),
         net_profit: round2(net_profit),
       });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/reports/outflows", authenticate, (req: any, res: any) => {
+    try {
+      const tenantId = req.session.tenantId;
+      const { from, to } = resolveRange(req.query);
+      const rawAcc = req.query.account_id;
+      const accountId = rawAcc !== undefined && rawAcc !== "" && rawAcc !== "all" ? Number(rawAcc) : null;
+      res.json(computeOutflowsReport(tenantId, from, to, Number.isFinite(accountId as number) ? accountId : null));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -221,6 +221,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/reports/statement/:id', need: ['reports.view', 'parties.view'] },
   { method: 'GET', pattern: '/api/reports/statement/:id/html', need: ['reports.view', 'parties.view'] },
   { method: 'POST', pattern: '/api/print/statement', need: ['reports.view', 'parties.view'] },
+  { method: 'POST', pattern: '/api/print/xreport', need: [...SETTLEMENT_ANY, 'settlement.view'] },
   { method: 'GET', pattern: '/api/stakeholders/:id/balance-log', need: ['reports.view', 'parties.view'] },
   // Closed-day history is its own permission: neither reports.view nor cash-out / close grants it.
   { method: 'GET', pattern: '/api/reports/daily', need: 'settlement.view' },
@@ -243,6 +244,10 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'POST', pattern: '/api/cash-flow', need: 'cash_flow.add' },
   { method: 'PUT', pattern: '/api/cash-flow/:id', need: 'cash_flow.edit' },
   { method: 'DELETE', pattern: '/api/cash-flow/:id', need: 'cash_flow.edit' },
+  { method: 'GET', pattern: '/api/cash-accounts', need: ['cash_flow.view', 'cash_flow.add', 'cash_flow.edit', 'purchases.view', 'purchases.edit', 'reports.view', 'settings.manage', ...SETTLEMENT_ANY] },
+  { method: 'POST', pattern: '/api/cash-accounts', need: ['settings.manage', 'cash_flow.edit'] },
+  { method: 'PUT', pattern: '/api/cash-accounts/:id', need: ['settings.manage', 'cash_flow.edit'] },
+  { method: 'POST', pattern: '/api/cash-accounts/transfer', need: 'cash_flow.add' },
   { method: 'POST', pattern: '/api/balance-payment', need: ['cash_flow.add', 'parties.edit'] },
 
   // --- settlement / end of day ---

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Banknote, TrendingUp, Receipt, Percent, ArrowRight, PackageX, Users2, FileText,
+  Banknote, TrendingUp, Receipt, Percent, ArrowRight, PackageX, Users2, FileText, ArrowUpRight,
 } from 'lucide-react';
 import { Card, CardHeader, CardBody, StatCard, Badge, Skeleton, EmptyState } from '../components/ui';
 import { LineChart } from '../components/ui/charts/LineChart';
@@ -122,9 +122,12 @@ export default function Overview() {
 
       <section className="space-y-2">
         <h2 className="text-xs font-semibold uppercase tracking-[0.04em] text-text-3">{t('ov_section_today', "Today")}</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard label={t('ov_kpi_net_sales', 'Net sales')} value={usd(today?.net_sales || 0)} icon={Banknote} delta={deltaPct(today?.net_sales || 0, yesterday?.net_sales || 0)} />
           <StatCard label={t('ov_kpi_profit', 'Profit')} value={usd(today?.gross_profit || 0)} icon={TrendingUp} delta={deltaPct(today?.gross_profit || 0, yesterday?.gross_profit || 0)} />
+          <Link to="/dashboard/reports?tab=outflows" className="block">
+            <StatCard label={t('ov_kpi_money_out', 'Money out')} value={usd(today?.total_outflows || 0)} icon={ArrowUpRight} delta={deltaPct(today?.total_outflows || 0, yesterday?.total_outflows || 0)} />
+          </Link>
           <StatCard label={t('ov_kpi_transactions', 'Transactions')} value={today?.tx_count || 0} icon={Receipt} delta={deltaPct(today?.tx_count || 0, yesterday?.tx_count || 0)} />
           <StatCard label={t('ov_kpi_avg_ticket', 'Avg. ticket')} value={usd(today?.avg_ticket || 0)} icon={Percent} delta={deltaPct(today?.avg_ticket || 0, yesterday?.avg_ticket || 0)} />
         </div>
@@ -132,9 +135,12 @@ export default function Overview() {
 
       <section className="space-y-2">
         <h2 className="text-xs font-semibold uppercase tracking-[0.04em] text-text-3">{t('ov_section_this_month', 'This month')}</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard label={t('ov_kpi_net_sales', 'Net sales')} value={usd(month?.net_sales || 0)} icon={Banknote} />
           <StatCard label={t('ov_kpi_gross_profit', 'Gross profit')} value={usd(month?.gross_profit || 0)} icon={TrendingUp} />
+          <Link to="/dashboard/reports?tab=outflows" className="block">
+            <StatCard label={t('ov_kpi_money_out', 'Money out')} value={usd(month?.total_outflows || 0)} icon={ArrowUpRight} />
+          </Link>
           <StatCard label={t('ov_kpi_margin', 'Margin')} value={`${(month?.margin_pct || 0).toFixed(1)}%`} icon={Percent} />
           <StatCard label={t('ov_kpi_receivables', 'Receivables')} value={usd(month?.receivables || 0)} icon={Users2} />
         </div>

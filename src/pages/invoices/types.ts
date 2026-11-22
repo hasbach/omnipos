@@ -34,6 +34,13 @@ export interface InvoiceListRow {
   notes?: string | null;
   /** Set on a refund row — the sale it refunds (server's TX_LIVE_COLUMNS/TX_ARCHIVED_COLUMNS). */
   original_transaction_id?: number | null;
+  terminal_id?: string | null;
+  terminal_sequence?: number | null;
+}
+
+export function formatReceiptNumber(row: { terminal_id?: string | null; terminal_sequence?: number | null }): string | null {
+  if (!row.terminal_id || !row.terminal_sequence) return null;
+  return `${row.terminal_id}-${String(row.terminal_sequence).padStart(4, '0')}`;
 }
 
 /** Row shape returned by GET /api/purchases. */
@@ -73,6 +80,7 @@ export interface PaymentDraft {
   exchange_rate: number;
   created_at?: string;
   removed?: boolean; // existing payment marked for removal (omitted from the PUT payments array)
+  account_id?: number | null;
 }
 
 export function payStatus(total: number, paid: number): PayStatus {

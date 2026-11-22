@@ -9,6 +9,7 @@ import { parseRegisterScope, registerWindow } from "./settlement.js";
 import { ValidationError, validationErrorBody } from "./errors.js";
 import { adjustStakeholderBaseline } from "./balance.js";
 import { effectiveLocalRate, isLocalCode } from "./localCurrency.js";
+import { ensureDefaultCashAccount, resolveAccountId } from "./cashAccounts.js";
 import { randomBytes } from "node:crypto";
 
 export const CASH_FLOW_CATEGORIES = [
@@ -33,7 +34,7 @@ const CATEGORY_TYPES: Record<CashFlowCategory, Array<"in" | "out">> = {
 // Automatic rows written by other modules (balance payments, payments on archived invoices).
 export const AUTO_CATEGORY = { collect: "customer_collection", pay: "supplier_payment" } as const;
 
-const EDITABLE_FIELDS = ["type", "amount", "currency", "exchange_rate", "category", "counterparty", "reason"] as const;
+const EDITABLE_FIELDS = ["type", "amount", "currency", "exchange_rate", "category", "counterparty", "reason", "account_id"] as const;
 
 function tenantUserId(tenantId: number, requested: any): number | null {
   if (requested) {
@@ -125,9 +126,12 @@ export function editCashFlow(tenantId: number, id: number, userId: number | null
   let { amount, rate } = validateMoney(body.amount !== undefined ? body.amount : row.amount, body.exchange_rate !== undefined ? body.exchange_rate : (row.exchange_rate || 1));
   const currency = body.currency !== undefined ? (cleanText(body.currency, 10) || "USD") : (row.currency || "USD");
   // A row with no category reads as 'other'; keep that unless the caller sets one.
-  const category = validateCategory(body.category !== undefined ? body.category : (row.category || "other"), type, tenantId, row.category || "other");
+  const category = row.transfer_id ? "transfer" : validateCategory(body.category !== undefined ? body.category : (row.category || "other"), type, tenantId, row.category || "other");
   const counterparty = body.counterparty !== undefined ? cleanText(body.counterparty) : (row.counterparty ?? null);
   const reason = body.reason !== undefined ? (cleanText(body.reason, 500) ?? "") : (row.reason ?? "");
+  const accountId = body.account_id !== undefined
+    ? resolveAccountId(tenantId, body.account_id, false)
+    : (row.account_id ?? null);
 
   // Only balance-payment rows move the baseline. Invoice-payment cash rows do not.
   let stakeholder: any;
@@ -149,8 +153,22 @@ export function editCashFlow(tenantId: number, id: number, userId: number | null
     (entry.category === AUTO_CATEGORY.pay && entry.type === "out")
       ? entry.amount / (entry.exchange_rate || 1) : 0;
 
-  const before = snapshot({ ...row, category: row.category || "other" });
-  const after = { type, amount, currency, exchange_rate: rate, category, counterparty, reason };
+  // If editing one leg of a linked transfer, locate its sibling leg (live or archived) so both stay in sync.
+  let sibling: { row: any; archived: boolean } | null = null;
+  if (row.transfer_id) {
+    const liveSib = db.prepare("SELECT * FROM cash_flow WHERE tenant_id = ? AND transfer_id = ? AND id != ? LIMIT 1").get(tenantId, row.transfer_id, id) as any;
+    if (liveSib) sibling = { row: liveSib, archived: false };
+    else {
+      const archSib = db.prepare("SELECT * FROM archived_cash_flow WHERE tenant_id = ? AND transfer_id = ? AND id != ? LIMIT 1").get(tenantId, row.transfer_id, id) as any;
+      if (archSib) sibling = { row: archSib, archived: true };
+    }
+    if (sibling && accountId != null && sibling.row.account_id === accountId) {
+      throw new ValidationError("Source and destination accounts must be different.", 400, { code: "TRANSFER_SAME_ACCOUNT", field: "account_id" });
+    }
+  }
+
+  const before = snapshot({ ...row, category: row.category || "other", account_id: row.account_id ?? null });
+  const after = { type: row.transfer_id ? row.type : type, amount, currency, exchange_rate: rate, category, counterparty, reason, account_id: accountId };
   if (JSON.stringify(before) === JSON.stringify(after)) {
     throw new ValidationError("Nothing was changed.", 400, { code: "CASHFLOW_NO_CHANGES" });
   }
@@ -164,30 +182,58 @@ export function editCashFlow(tenantId: number, id: number, userId: number | null
         source: "balance_payment_edit", reference_id: id, user_id: userId, note: editReason,
       });
     }
-    db.prepare(`UPDATE ${table} SET type = ?, amount = ?, currency = ?, exchange_rate = ?, category = ?, counterparty = ?, reason = ? WHERE id = ? AND tenant_id = ?`)
-      .run(type, amount, currency, rate, category, counterparty, reason, id, tenantId);
+    db.prepare(`UPDATE ${table} SET type = ?, amount = ?, currency = ?, exchange_rate = ?, category = ?, counterparty = ?, reason = ?, account_id = ? WHERE id = ? AND tenant_id = ?`)
+      .run(after.type, amount, currency, rate, category, counterparty, reason, accountId, id, tenantId);
     db.prepare("INSERT INTO cash_flow_edits (tenant_id, cash_flow_id, archived, user_id, edit_reason, before_json, after_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(tenantId, id, archived ? 1 : 0, userId, editReason, JSON.stringify(before), JSON.stringify(after));
+
+    // Mirror amount/currency/rate/reason onto the paired transfer leg atomically.
+    if (sibling) {
+      const sibTable = sibling.archived ? "archived_cash_flow" : "cash_flow";
+      const sibBefore = snapshot({ ...sibling.row, category: sibling.row.category || "transfer", account_id: sibling.row.account_id ?? null });
+      let sibCounterparty = sibling.row.counterparty;
+      if (accountId != null && accountId !== row.account_id) {
+        const acc = db.prepare("SELECT name FROM cash_accounts WHERE id = ? AND tenant_id = ?").get(accountId, tenantId) as any;
+        if (acc) sibCounterparty = acc.name;
+      }
+      const sibAfter = {
+        type: sibling.row.type,
+        amount,
+        currency,
+        exchange_rate: rate,
+        category: "transfer",
+        counterparty: sibCounterparty,
+        reason,
+        account_id: sibling.row.account_id ?? null,
+      };
+      db.prepare(`UPDATE ${sibTable} SET amount = ?, currency = ?, exchange_rate = ?, counterparty = ?, reason = ? WHERE id = ? AND tenant_id = ?`)
+        .run(amount, currency, rate, sibCounterparty, reason, sibling.row.id, tenantId);
+      db.prepare("INSERT INTO cash_flow_edits (tenant_id, cash_flow_id, archived, user_id, edit_reason, before_json, after_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(tenantId, sibling.row.id, sibling.archived ? 1 : 0, userId, editReason, JSON.stringify(sibBefore), JSON.stringify(sibAfter));
+    }
   })();
 
   logAction(tenantId, userId, "Cash Flow Edited",
     `#${id}${archived ? " (settled)" : ""}: ${before.amount} ${before.currency} → ${amount} ${currency}. Reason: ${editReason}`);
-  return { archived, before, after, balanceAdjusted: balanceDelta !== 0 };
+  return { archived, before, after, balanceAdjusted: balanceDelta !== 0, transferSynced: !!sibling };
 }
 
 interface AnalyticsFilters {
   from: string | null; to: string | null; type: string | null; category: string | null;
-  q: string | null; counterparty: string | null;
+  q: string | null; counterparty: string | null; account_id: number | null;
 }
 
 function parseFilters(query: any): AnalyticsFilters {
   const date = (v: any) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
   const str = (v: any) => (typeof v === "string" && v.trim() && v !== "all" ? v.trim() : null);
   const type = str(query.type);
+  const rawAcc = query.account_id;
+  const accNum = rawAcc !== undefined && rawAcc !== "" && rawAcc !== "all" ? Number(rawAcc) : NaN;
   return {
     from: date(query.from), to: date(query.to),
     type: type === "in" || type === "out" ? type : null,
     category: str(query.category), q: str(query.q), counterparty: str(query.counterparty),
+    account_id: Number.isInteger(accNum) && accNum > 0 ? accNum : null,
   };
 }
 
@@ -196,16 +242,16 @@ function parseFilters(query: any): AnalyticsFilters {
 const UNION_SQL = `
   SELECT c.id, 0 AS archived, NULL AS settlement_id, c.tenant_id, c.user_id, c.type, c.amount, c.currency,
          IFNULL(NULLIF(c.exchange_rate, 0), 1) AS exchange_rate, COALESCE(c.category, 'other') AS category,
-         c.counterparty, c.reason, c.created_at, ${EDIT_COUNT_SQL} AS edit_count
+         c.counterparty, c.reason, c.account_id, c.transfer_id, c.created_at, ${EDIT_COUNT_SQL} AS edit_count
     FROM cash_flow c WHERE c.tenant_id = @tenant
   UNION ALL
   SELECT c.id, 1, c.settlement_id, c.tenant_id, c.user_id, c.type, c.amount, c.currency,
          IFNULL(NULLIF(c.exchange_rate, 0), 1), COALESCE(c.category, 'other'),
-         c.counterparty, c.reason, c.created_at, ${EDIT_COUNT_SQL}
+         c.counterparty, c.reason, c.account_id, c.transfer_id, c.created_at, ${EDIT_COUNT_SQL}
     FROM archived_cash_flow c WHERE c.tenant_id = @tenant
 `;
 
-function whereFor(f: AnalyticsFilters, opts: { ignoreFrom?: boolean; ignoreTypeCategory?: boolean } = {}) {
+function whereFor(f: AnalyticsFilters, opts: { ignoreFrom?: boolean; ignoreTypeCategory?: boolean; drawerId?: number | null } = {}) {
   const parts: string[] = [];
   const params: Record<string, any> = {};
   if (f.from && !opts.ignoreFrom) { parts.push("date(created_at, 'localtime') >= @from"); params.from = f.from; }
@@ -213,6 +259,14 @@ function whereFor(f: AnalyticsFilters, opts: { ignoreFrom?: boolean; ignoreTypeC
   if (!opts.ignoreTypeCategory) {
     if (f.type) { parts.push("type = @type"); params.type = f.type; }
     if (f.category) { parts.push("category = @category"); params.category = f.category; }
+  }
+  if (f.account_id != null) {
+    if (opts.drawerId != null && f.account_id === opts.drawerId) {
+      parts.push("(account_id = @acc OR account_id IS NULL)");
+    } else {
+      parts.push("account_id = @acc");
+    }
+    params.acc = f.account_id;
   }
   if (f.counterparty) { parts.push("LOWER(IFNULL(counterparty, '')) LIKE @cp ESCAPE '\\'"); params.cp = `%${escapeLike(f.counterparty.toLowerCase())}%`; }
   if (f.q) {
@@ -226,15 +280,22 @@ function escapeLike(s: string) { return s.replace(/[\\%_]/g, (m) => `\\${m}`); }
 
 export function computeCashFlowAnalytics(tenantId: number, query: any) {
   const f = parseFilters(query);
-  const { sql: where, params } = whereFor(f);
+  const drawer = ensureDefaultCashAccount(tenantId);
+  const { sql: where, params } = whereFor(f, { drawerId: drawer.id });
   const base = `WITH u AS (${UNION_SQL}) `;
   const p = { tenant: tenantId, ...params };
   const usd = "amount / exchange_rate";
+  // Exclude internal account transfers from headline in/out totals unless filtering by a specific
+  // account or explicitly viewing transfers (prevents double-counting internal moves).
+  const excludeTransfers = f.category !== "transfer" && f.account_id == null;
+  const totalsWhere = excludeTransfers
+    ? (where ? `${where} AND category != 'transfer'` : "WHERE category != 'transfer'")
+    : where;
 
   const t = db.prepare(`${base} SELECT
       IFNULL(SUM(CASE WHEN type = 'in' THEN ${usd} ELSE 0 END), 0) AS total_in,
       IFNULL(SUM(CASE WHEN type = 'out' THEN ${usd} ELSE 0 END), 0) AS total_out,
-      COUNT(*) AS count FROM u ${where}`).get(p) as any;
+      COUNT(*) AS count FROM u ${totalsWhere}`).get(p) as any;
 
   const by_category = (db.prepare(`${base} SELECT category, type, COUNT(*) AS count, SUM(${usd}) AS total
       FROM u ${where} GROUP BY category, type ORDER BY total DESC`).all(p) as any[])
@@ -257,10 +318,12 @@ export function computeCashFlowAnalytics(tenantId: number, query: any) {
     .map((r) => ({ counterparty: r.counterparty, borrowed: r.borrowed, repaid: r.repaid, outstanding: r.borrowed - r.repaid }))
     .sort((a, b) => b.outstanding - a.outstanding);
 
-  const rows = (db.prepare(`${base} SELECT f.*, us.name AS user_name, f.amount / f.exchange_rate AS amount_usd
-      FROM (SELECT * FROM u ${where}) f LEFT JOIN users us ON us.id = f.user_id
+  const rows = (db.prepare(`${base} SELECT f.*, us.name AS user_name, ca.name AS account_name, f.amount / f.exchange_rate AS amount_usd
+      FROM (SELECT * FROM u ${where}) f
+      LEFT JOIN users us ON us.id = f.user_id
+      LEFT JOIN cash_accounts ca ON ca.id = f.account_id
       ORDER BY f.created_at DESC, f.id DESC LIMIT 5000`).all(p) as any[])
-    .map((r) => ({ ...r, archived: !!r.archived, edited: r.edit_count > 0 }));
+    .map((r) => ({ ...r, archived: !!r.archived, edited: r.edit_count > 0, account_name: r.account_name || drawer.name }));
 
   return {
     totals: { in: t.total_in, out: t.total_out, net: t.total_in - t.total_out, count: t.count },
@@ -310,12 +373,15 @@ export function setupCashFlowRoutes(app: any, authenticate: any, broadcast: Func
   // The live, open register (everything since the last close) — the Cash Flow page's "today" view.
   app.get("/api/cash-flow", authenticate, (req: any, res: any) => {
     const tenantId = req.session.tenantId;
+    const drawer = ensureDefaultCashAccount(tenantId);
     const { since } = registerWindow(tenantId, parseRegisterScope(req.query.scope)); // ?scope=day = since the last settlement
     const entries = db.prepare(`
-      SELECT c.*, COALESCE(c.category, 'other') AS category, ${EDIT_COUNT_SQL} AS edit_count
-      FROM cash_flow c WHERE c.tenant_id = ? AND c.created_at > ? ORDER BY c.created_at DESC, c.id DESC
+      SELECT c.*, COALESCE(c.category, 'other') AS category, ca.name AS account_name, ${EDIT_COUNT_SQL} AS edit_count
+      FROM cash_flow c
+      LEFT JOIN cash_accounts ca ON ca.id = c.account_id
+      WHERE c.tenant_id = ? AND c.created_at > ? ORDER BY c.created_at DESC, c.id DESC
     `).all(tenantId, since) as any[];
-    res.json(entries.map((e) => ({ ...e, edited: e.edit_count > 0 })));
+    res.json(entries.map((e) => ({ ...e, edited: e.edit_count > 0, account_name: e.account_name || drawer.name })));
   });
 
   app.post("/api/cash-flow", authenticate, (req: any, res: any) => {
@@ -328,14 +394,15 @@ export function setupCashFlowRoutes(app: any, authenticate: any, broadcast: Func
       const category = validateCategory(req.body.category, type, tenantId);
       const counterparty = cleanText(req.body.counterparty);
       const reason = req.body.reason ?? "";
+      const accountId = resolveAccountId(tenantId, req.body.account_id, true);
 
-      db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(tenantId, userId, type, amount, currency || "USD", rate, reason, category, counterparty);
+      const info = db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(tenantId, userId, type, amount, currency || "USD", rate, reason, category, counterparty, accountId);
 
       logAction(tenantId, userId, `Cash ${type === "in" ? "In" : "Out"}`,
         `Amount: ${amount} ${currency || "USD"}, Category: ${category}${counterparty ? `, ${counterparty}` : ""}, Reason: ${reason}`);
       broadcast({ type: "CASH_FLOW_UPDATED" }, tenantId);
-      res.json({ success: true });
+      res.json({ success: true, id: Number(info.lastInsertRowid) });
     } catch (e) { fail(res, e); }
   });
 

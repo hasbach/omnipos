@@ -29,7 +29,7 @@ function Segmented<T extends string>({ label, value, options, onChange }: {
 
 export default function PosLayoutMenu() {
   const { t } = useI18n();
-  const { layout, setDensity, setTileSize, setHideCatalog, reset } = usePosLayout();
+  const { layout, setDensity, setTileSize, setCategorySize, setHideCatalog, reset } = usePosLayout();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -76,6 +76,16 @@ export default function PosLayoutMenu() {
             label={t('pos_layout_tiles', 'Catalog tile size')}
             value={layout.tileSize}
             onChange={setTileSize}
+            options={[
+              { value: 'sm', label: t('pos_layout_small', 'Small') },
+              { value: 'md', label: t('pos_layout_medium', 'Medium') },
+              { value: 'lg', label: t('pos_layout_large', 'Large') },
+            ]}
+          />
+          <Segmented<PosTileSize>
+            label={t('pos_layout_categories', 'Category button size')}
+            value={layout.categorySize}
+            onChange={setCategorySize}
             options={[
               { value: 'sm', label: t('pos_layout_small', 'Small') },
               { value: 'md', label: t('pos_layout_medium', 'Medium') },

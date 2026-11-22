@@ -567,6 +567,28 @@ db.exec(`
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_cfc_tenant_key ON cash_flow_categories(tenant_id, key);
 `);
+// Cash accounts (Cash Drawer + Savings / Safe / Reserve funds). Created before the sync-metadata
+// block so it gets global_id/updated_at/deleted_at + triggers.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cash_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'savings' CHECK(kind IN ('drawer', 'savings', 'bank')),
+    is_default INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ca_tenant ON cash_accounts(tenant_id);
+`);
+for (const t of ["cash_flow", "archived_cash_flow"]) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN account_id INTEGER;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN transfer_id TEXT;`); } catch {}
+}
+for (const t of ["payments", "archived_payments"]) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN account_id INTEGER;`); } catch {}
+}
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_atx_settlement ON archived_transactions(settlement_id);
   CREATE INDEX IF NOT EXISTS idx_acf_settlement ON archived_cash_flow(settlement_id);

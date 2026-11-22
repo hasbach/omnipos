@@ -138,6 +138,21 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const [newPayAmount, setNewPayAmount] = useState<number>(0);
   const [newPayMethod, setNewPayMethod] = useState<PaymentMethod>('cash');
   const [newPayCurrency, setNewPayCurrency] = useState<string>('USD');
+  const [cashAccounts, setCashAccounts] = useState<Array<{ id: number; name: string; is_default: number }>>([]);
+  const [newPayAccountId, setNewPayAccountId] = useState<string>('');
+
+  useEffect(() => {
+    if (!open || txType !== 'purchase') return;
+    api.get<Array<{ id: number; name: string; is_default: number }>>('/api/cash-accounts')
+      .then((rows) => {
+        if (Array.isArray(rows) && rows.length > 0) {
+          setCashAccounts(rows);
+          const def = rows.find((a) => a.is_default === 1) || rows[0];
+          setNewPayAccountId(String(def.id));
+        }
+      })
+      .catch(() => {});
+  }, [open, txType]);
   // Currency the invoice is keyed in. Line prices stay USD internally; this only changes how they
   // are shown/typed (display = usd × rate) and what currency/exchange_rate metadata is saved.
   const [entryCurrency, setEntryCurrency] = useState<string>('USD');
@@ -414,6 +429,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       method: newPayMethod,
       currency: cur.code,
       exchange_rate: cur.rate,
+      account_id: txType === 'purchase' && newPayMethod === 'cash' && newPayAccountId ? Number(newPayAccountId) : undefined,
     }]);
     setNewPayAmount(0);
     setDirty(true);
@@ -477,7 +493,13 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
         toast.success(t('inv_editor_saved_toast', 'Invoice #{id} saved.').replace('{id}', String(tx.id)));
         onSaved(tx.id);
       } else {
-        const payload: any[] = payments.map((p) => ({ amount: p.amount, method: p.method, currency: p.currency, exchange_rate: p.exchange_rate }));
+        const payload: any[] = payments.map((p) => ({
+          amount: p.amount,
+          method: p.method,
+          currency: p.currency,
+          exchange_rate: p.exchange_rate,
+          account_id: p.account_id ?? undefined,
+        }));
         const body = {
           stakeholder_id: partyId,
           user_id: currentUserId(),
@@ -791,7 +813,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
               {payments.map((p, i) => (
                 <div key={p._key}>
                   <div className={['flex items-center justify-between rounded-md border border-border px-2 py-1.5 text-sm', p.removed ? 'opacity-40 line-through' : '', fieldErrors[`payments.${i}`] ? 'border-danger' : ''].join(' ')}>
-                    <span className="text-text-2">{t(`inv_editor_payment_method_${p.method}`, p.method)}</span>
+                    <span className="text-text-2">
+                      {t(`inv_editor_payment_method_${p.method}`, p.method)}
+                      {p.account_id && cashAccounts.length > 1 ? ` · ${cashAccounts.find((a) => a.id === p.account_id)?.name || ''}` : ''}
+                    </span>
                     <span className="num text-text">{formatMoney(p.amount, currencies.find((c) => c.code === p.currency) || USD)}</span>
                     <button type="button" className="text-danger hover:opacity-70 cursor-pointer text-xs" onClick={() => removePayment(p._key)}>×</button>
                   </div>
@@ -811,6 +836,13 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                 ]} />
                 <Select value={newPayCurrency} onChange={(e) => setNewPayCurrency(e.target.value)} options={effOptions.filter((c) => currencies.some((x) => x.code === c.code)).map((c) => ({ value: c.code, label: c.code }))} />
               </div>
+              {txType === 'purchase' && newPayMethod === 'cash' && cashAccounts.length > 1 && (
+                <Select
+                  value={newPayAccountId}
+                  onChange={(e) => setNewPayAccountId(e.target.value)}
+                  options={cashAccounts.map((a) => ({ value: String(a.id), label: `${t('acc_pay_from', 'Pay from account')}: ${a.name}` }))}
+                />
+              )}
               <div className="flex gap-2">
                 <Button
                   variant="secondary"

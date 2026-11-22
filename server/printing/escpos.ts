@@ -127,7 +127,8 @@ export class EscPos {
   kv(label: string, value: string): this {
     if (needsRaster(label + value)) {
       if (this.arabic) {
-        const row = this.textRow([label + ' '.repeat(Math.max(1, this.width - this.cols(label) - this.cols(value))), value]);
+        const pad = ' '.repeat(Math.max(1, this.width - this.cols(label) - this.cols(value)));
+        const row = this.textRow([label, pad, value]);
         if (row) return this.pushLine(row);
       }
       if (this.rasterLines([{ text: label, align: 'left' }, { text: value, align: 'right' }], false)) return this.feed(1);
@@ -231,7 +232,7 @@ export class EscPos {
     const rows = lines.map((line, i) => {
       const lead = i === 0 ? label : '';
       const gap = rtl ? this.width - this.cols(lead) - this.cols(line) : indent - this.cols(lead);
-      return this.textRow([lead + ' '.repeat(Math.max(1, gap)), line]);
+      return this.textRow(lead ? [lead, ' '.repeat(Math.max(1, gap)), line] : [' '.repeat(Math.max(1, gap)), line]);
     });
     if (!rows.every(Boolean)) return false;
     rows.forEach(row => this.pushLine(row!));

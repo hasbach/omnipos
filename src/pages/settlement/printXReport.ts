@@ -1,5 +1,5 @@
 import { formatDate, formatDateTime } from '../../lib/format';
-import { printReportHtml, type PrintResult } from './printReport';
+import { printThermalReport, type PrintResult, type ThermalLine } from './printReport';
 import { effectiveOf, type SettlementCorrection } from './types';
 
 type T = (key: string, fallback?: string) => string;
@@ -41,7 +41,44 @@ export function printXReport(report: any, opts: PrintXReportOptions): Promise<Pr
     })
     .join('');
 
-  return printReportHtml(`<!doctype html>
+  const timeStr = new Date().toLocaleTimeString(lang === 'ar' ? 'ar-LB' : lang === 'fr' ? 'fr-FR' : 'en-US');
+  const lines: ThermalLine[] = [
+    ...(businessName ? [{ kind: 'center' as const, text: businessName, bold: true }] : []),
+    { kind: 'center', text: title, bold: true },
+    { kind: 'center', text: `${t('fin_xr_date', 'Date')}: ${formatDate(report.date, lang)}` },
+    { kind: 'center', text: `${t('fin_xr_time', 'Time')}: ${timeStr}` },
+    { kind: 'hr' },
+    { kind: 'kv', label: t('fin_xr_opening_bal', 'Opening Bal:'), value: `$${(report.opening_balance || 0).toFixed(2)}` },
+    { kind: 'kv', label: t('fin_xr_cash_sales', 'Cash Sales:'), value: `+$${(report.total_sales || 0).toFixed(2)}` },
+    ...((report.total_refunds || 0) > 0 ? [{ kind: 'kv' as const, label: t('fin_xr_cash_refunds', 'Cash Refunds:'), value: `-$${report.total_refunds.toFixed(2)}` }] : []),
+    { kind: 'kv', label: t('fin_xr_cash_purchases', 'Cash Purchases:'), value: `-$${(report.total_purchases || 0).toFixed(2)}` },
+    { kind: 'kv', label: t('fin_xr_manual_in', 'Manual In:'), value: `+$${(report.total_cash_in || 0).toFixed(2)}` },
+    { kind: 'kv', label: t('fin_xr_manual_out', 'Manual Out:'), value: `-$${(report.total_cash_out || 0).toFixed(2)}` },
+    ...(adjustments !== 0 ? [{ kind: 'kv' as const, label: t('sd_xr_adjustments', 'Adjustments:'), value: signed(adjustments) }] : []),
+    { kind: 'hr' },
+    { kind: 'kv', label: t('fin_xr_expected_bal', 'Expected Bal:'), value: `$${expected.toFixed(2)}`, bold: true },
+    { kind: 'kv', label: `${t('fin_xr_actual_bal', 'Actual Bal:')}${isCorrected && report.corrected_actual_balance != null ? ' ' + t('sd_xr_corrected_flag', '(corrected)') : ''}`, value: `$${actual.toFixed(2)}` },
+    ...(report.corrected_actual_balance != null ? [{ kind: 'kv' as const, label: t('sd_xr_original_actual', 'Originally counted:'), value: `$${(report.actual_balance || 0).toFixed(2)}`, indent: true }] : []),
+    { kind: 'kv', label: t('fin_xr_difference', 'Difference:'), value: `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}`, bold: true },
+  ];
+  if (corrections.length > 0) {
+    lines.push({ kind: 'section', text: t('sd_xr_corrections', 'CORRECTIONS') });
+    for (const c of corrections) {
+      const what = c.kind === 'counted'
+        ? `${t('sd_corr_kind_counted', 'Counted cash')} ${c.currency || ''}: ${c.old_value ?? 0} -> ${c.new_value ?? 0}`
+        : `${t('sd_corr_kind_adjustment', 'Adjustment')}: ${signed(c.amount_usd)}`;
+      lines.push({ kind: 'text', text: what });
+      lines.push({ kind: 'text', text: `${c.user_name || ''} · ${formatDateTime(c.created_at, lang)}` });
+      if (c.reason) lines.push({ kind: 'text', text: c.reason });
+    }
+  }
+  if (report.notes) {
+    lines.push({ kind: 'section', text: t('fin_xr_notes', 'Notes:') });
+    lines.push({ kind: 'text', text: String(report.notes) });
+  }
+  lines.push({ kind: 'hr' }, { kind: 'center', text: `${businessName || t('fin_xr_business_fallback', 'Business')} · ${title}` });
+
+  const html = `<!doctype html>
       <html dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
         <head>
           <meta charset="utf-8">
@@ -61,7 +98,7 @@ export function printXReport(report: any, opts: PrintXReportOptions): Promise<Pr
           <h1>${esc(title)}</h1>
           <div class="meta">
             ${t('fin_xr_date', 'Date')}: ${esc(formatDate(report.date, lang))}<br>
-            ${t('fin_xr_time', 'Time')}: ${esc(new Date().toLocaleTimeString(lang === 'ar' ? 'ar-LB' : lang === 'fr' ? 'fr-FR' : 'en-US'))}
+            ${t('fin_xr_time', 'Time')}: ${esc(timeStr)}
           </div>
           <div class="row"><span>${t('fin_xr_opening_bal', 'Opening Bal:')}</span> <span>$${(report.opening_balance || 0).toFixed(2)}</span></div>
           <div class="row"><span>${t('fin_xr_cash_sales', 'Cash Sales:')}</span> <span>+$${(report.total_sales || 0).toFixed(2)}</span></div>
@@ -79,5 +116,6 @@ export function printXReport(report: any, opts: PrintXReportOptions): Promise<Pr
           <div class="footer">${esc(businessName || t('fin_xr_business_fallback', 'Business'))}<br>${esc(title)}</div>
         </body>
       </html>
-    `);
+    `;
+  return printThermalReport(lines, html);
 }

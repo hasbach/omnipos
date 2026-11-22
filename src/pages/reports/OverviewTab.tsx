@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Banknote, TrendingUp, PackageMinus, Receipt, Percent, RotateCcw,
-  ShoppingCart, Wallet, ArrowDownToLine, ArrowUpFromLine, Boxes,
+  ShoppingCart, Wallet, ArrowDownToLine, ArrowUpFromLine, Boxes, ArrowUpRight,
 } from 'lucide-react';
 import { Card, CardHeader, CardBody, StatCard, Select, Skeleton } from '../../components/ui';
 import { LineChart } from '../../components/ui/charts/LineChart';
@@ -138,6 +138,7 @@ export function OverviewTab({ range, localCurrency, businessName }: ReportTabPro
         <StatCard label={t('rep_kpi_refunds', 'Refunds')} value={usd(summary.refunds)} icon={RotateCcw} />
         <StatCard label={t('rep_kpi_purchases', 'Purchases')} value={usd(summary.purchases)} icon={ShoppingCart} />
         <StatCard label={t('rep_kpi_collected', 'Cash collected')} value={usd(summary.collected)} icon={Wallet} />
+        <StatCard label={t('rep_kpi_total_outflows', 'Total money out')} value={usd(summary.total_outflows || 0)} icon={ArrowUpRight} />
         <StatCard label={t('rep_kpi_receivables', 'Receivables')} value={usd(summary.receivables)} icon={ArrowDownToLine} />
         <StatCard label={t('rep_kpi_payables', 'Payables')} value={usd(summary.payables)} icon={ArrowUpFromLine} />
         <StatCard

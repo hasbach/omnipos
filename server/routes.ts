@@ -21,11 +21,13 @@ import { EscPos } from "./printing/escpos.js";
 import { localCurrencyFor, effectiveLocalRate, isLocalCode, parsePartyRate, parsePartyDiscount } from "./localCurrency.js";
 import { buildStatementBuffer } from "./printing/statement.js";
 import { buildReceiptBuffer, buildTestPrintBuffer, buildArabicTestBuffer } from "./printing/receipt.js";
+import { buildThermalReportBuffer } from "./printing/xreport.js";
 import { sendToPrinter } from "./printing/transport.js";
 import { setupReportRoutes } from "./reports.js";
 import { setupImportRoutes } from "./importer.js";
 import { setupTenantResetRoutes } from "./tenantReset.js";
 import { setupCashFlowRoutes } from "./cashFlow.js";
+import { setupCashAccountRoutes, resolveAccountId } from "./cashAccounts.js";
 import { randomUUID } from 'node:crypto';
 import { callRpc } from './cloudCall.js';
 import { loadCompletableOrder, orderEffectiveState, orderSaleExists, orderPricedItems } from './orderSale.js';
@@ -361,6 +363,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   setupTenantResetRoutes(app, authenticate, broadcast, { purgeCloudTransactionalData });
   setupSettlementRoutes(app, authenticate, broadcast);
   setupCashFlowRoutes(app, authenticate, broadcast);
+  setupCashAccountRoutes(app, authenticate, broadcast);
   setupCommerceRoutes(app, authenticate);
   setupOrderRoutes(app, authenticate, broadcast);
   // API Routes
@@ -724,8 +727,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
       // Move payments
       db.prepare(`
-      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id)
-      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id 
+      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id)
+      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id
       FROM payments WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
@@ -764,8 +767,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       // used to just delete these with no trace anywhere, which meant every itemized cash-in/out
       // and its reason was permanently unrecoverable after every settlement.
       db.prepare(`
-        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id)
-        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id
+        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id)
+        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id
         FROM cash_flow WHERE tenant_id = ?
       `).run(tenantId);
 
@@ -1872,12 +1875,15 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       let totalPaid = 0;
       if (payments && payments.length > 0) {
         const insertPayment = db.prepare(`
-        INSERT INTO payments (transaction_id, amount, method, currency, exchange_rate)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO payments (transaction_id, amount, method, currency, exchange_rate, account_id)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
         for (const payment of payments) {
           const payRate = type !== 'refund' && isLocalCode(localCur, payment.currency) ? localCur!.rate : payment.exchange_rate;
-          insertPayment.run(transactionId, payment.amount, payment.method, payment.currency, payRate);
+          const payAccId = payment.method === 'cash' && (payment.account_id != null || req.body.account_id != null)
+            ? resolveAccountId(tenantId, payment.account_id ?? req.body.account_id, true)
+            : null;
+          insertPayment.run(transactionId, payment.amount, payment.method, payment.currency, payRate, payAccId);
           // BALANCE MATH (server/paymentMethods.ts): store_credit is not money either, exactly
           // like credit — it stays "unpaid" so its effect keeps consuming the positive balance.
           if (isRealMoney(payment.method)) {
@@ -2139,9 +2145,11 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     }
 
     if (req.query.q) {
-      // Invoice number, reference, or party name.
-      filter += " AND (CAST(id AS TEXT) = ? OR reference LIKE ? OR stakeholder_id IN (SELECT id FROM stakeholders WHERE tenant_id = ? AND name LIKE ?))";
-      filterParams.push(String(req.query.q), `%${req.query.q}%`, tenantId, `%${req.query.q}%`);
+      // Invoice number (#ID), terminal receipt number (e.g. T1-0005), reference, or party name.
+      const qRaw = String(req.query.q).trim();
+      const qNoHash = qRaw.replace(/^#/, '');
+      filter += " AND (CAST(id AS TEXT) = ? OR (terminal_id IS NOT NULL AND terminal_sequence IS NOT NULL AND (terminal_id || '-' || printf('%04d', terminal_sequence)) LIKE ?) OR reference LIKE ? OR stakeholder_id IN (SELECT id FROM stakeholders WHERE tenant_id = ? AND name LIKE ?))";
+      filterParams.push(qNoHash, `%${qRaw}%`, `%${qRaw}%`, tenantId, `%${qRaw}%`);
     }
     // Callers that page through history (Invoices screen) can ask for more than the POS's 200.
     const limit = Math.min(Math.max(parseInt(String(req.query.limit || 200), 10) || 200, 1), 5000);
@@ -2579,7 +2587,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   app.post("/api/balance-payment", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const userId = tenantUserId(tenantId, req.body.user_id);
-    const { stakeholder_id, amount, currency, exchange_rate, direction } = req.body;
+    const { stakeholder_id, amount, currency, exchange_rate, direction, account_id } = req.body;
     // direction: 'collect' = customer pays us, 'pay' = we pay supplier
 
     if (!stakeholder_id || !amount || amount <= 0) {
@@ -2588,6 +2596,14 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
     const stakeholder = db.prepare("SELECT * FROM stakeholders WHERE id = ? AND tenant_id = ?").get(stakeholder_id, tenantId) as any;
     if (!stakeholder) return res.status(404).json({ error: "Stakeholder not found" });
+
+    let resolvedAccId: number;
+    try {
+      resolvedAccId = resolveAccountId(tenantId, account_id, true);
+    } catch (e: any) {
+      if (e instanceof ValidationError) return res.status(e.status).json(validationErrorBody(e));
+      return res.status(400).json({ error: e?.message || "Invalid account" });
+    }
 
     const cur = currency || 'USD';
     // A local-currency payment converts at the party's own rate (else the global one), never the client's.
@@ -2601,13 +2617,13 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       // toward zero via the stakeholder's BASELINE (negative = owes, so a payment adds toward 0).
       if (direction === 'collect') {
         adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD, { source: 'balance_collection', user_id: userId, note: bpNote });
-        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty, stakeholder_id) VALUES (?, ?, 'in', ?, ?, ?, ?, 'customer_collection', ?, ?)")
-          .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`, stakeholder.name, stakeholder_id);
+        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty, stakeholder_id, account_id) VALUES (?, ?, 'in', ?, ?, ?, ?, 'customer_collection', ?, ?, ?)")
+          .run(tenantId, userId, amount, cur, exRate, `Balance collection from ${stakeholder.name}`, stakeholder.name, stakeholder_id, resolvedAccId);
       } else {
         // Paying a supplier → reduce their outstanding (move toward zero), cash goes out
         adjustStakeholderBaseline(stakeholder_id, tenantId, amountUSD, { source: 'supplier_payment', user_id: userId, note: bpNote });
-        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty, stakeholder_id) VALUES (?, ?, 'out', ?, ?, ?, ?, 'supplier_payment', ?, ?)")
-          .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`, stakeholder.name, stakeholder_id);
+        db.prepare("INSERT INTO cash_flow (tenant_id, user_id, type, amount, currency, exchange_rate, reason, category, counterparty, stakeholder_id, account_id) VALUES (?, ?, 'out', ?, ?, ?, ?, 'supplier_payment', ?, ?, ?)")
+          .run(tenantId, userId, amount, cur, exRate, `Payment to supplier ${stakeholder.name}`, stakeholder.name, stakeholder_id, resolvedAccId);
       }
     });
 
@@ -3123,6 +3139,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         localCurrency: localCurrencyFor(tenantId),
         currencySymbols: Object.fromEntries((db.prepare("SELECT code, symbol FROM currencies WHERE tenant_id = ? AND deleted_at IS NULL").all(tenantId) as any[])
           .filter((c) => c.symbol).map((c) => [c.code, c.symbol])),
+        showBalance: settings.receipt_show_balance !== '0',
+        showPayments: settings.receipt_show_payments !== '0',
       });
 
       await sendToPrinter(printer, buffer);
@@ -3149,6 +3167,31 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     } catch (err: any) {
       console.error('Print statement error:', err.message);
       res.status(500).json({ error: err.message || 'Failed to print statement' });
+    }
+  });
+
+  // End-of-Day / Cash-Out X-report on the configured ESC/POS receipt printer (works in both
+  // image-mode Arabic and code-page text mode). Returns 404 no_receipt_printer when none is
+  // configured so the client falls back to silent HTML printing.
+  app.post("/api/print/xreport", authenticate, async (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const { lines, printerId } = req.body || {};
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return res.status(400).json({ error: "Report lines are required" });
+    }
+    try {
+      const printer = resolveReceiptPrinter(tenantId, printerId);
+      if (!printer) return res.status(404).json({ error: "No enabled receipt printer configured", code: "no_receipt_printer" });
+      const buffer = buildThermalReportBuffer({
+        lines,
+        paperWidth: printer.paper_width,
+        arabic: printerArabicMode(printer),
+      });
+      await sendToPrinter(printer, buffer);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Print X-report error:', err.message);
+      res.status(500).json({ error: err.message || 'Failed to print report' });
     }
   });
 

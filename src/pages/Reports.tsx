@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Printer } from 'lucide-react';
 import { PageHeader, Toolbar, DateRangePicker, Tabs, Button } from '../components/ui';
 import { useI18n } from '../intl/index';
@@ -11,6 +12,7 @@ import { ProductsTab } from './reports/ProductsTab';
 import { CategoriesTab } from './reports/CategoriesTab';
 import { CustomersTab, SuppliersTab, CashiersTab } from './reports/PartiesTabs';
 import { PaymentsTab } from './reports/PaymentsTab';
+import { OutflowsTab } from './reports/OutflowsTab';
 import { InventoryTab } from './reports/InventoryTab';
 import { AgingTab } from './reports/AgingTab';
 import { CustomBuilderTab } from './reports/CustomBuilderTab';
@@ -27,12 +29,14 @@ interface CurrencyRow {
 }
 
 type TabKey =
-  | 'overview' | 'products' | 'categories' | 'customers' | 'suppliers' | 'cashiers'
+  | 'overview' | 'outflows' | 'products' | 'categories' | 'customers' | 'suppliers' | 'cashiers'
   | 'payments' | 'inventory' | 'aging' | 'custom-builder' | 'statement' | 'daily-yearly';
 
 export default function Reports() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<TabKey>('overview');
+  const [searchParams] = useSearchParams();
+  const initialTab = (searchParams.get('tab') as TabKey) || 'overview';
+  const [tab, setTab] = useState<TabKey>(initialTab);
   const [range, setRange] = useState<DateRange>(() => resolveDateRangePreset('this_month'));
   const [businessName, setBusinessName] = useState('');
   const [localCurrency, setLocalCurrency] = useState<CurrencyLike | null>(null);
@@ -58,6 +62,7 @@ export default function Reports() {
   const tabItems = useMemo(
     () => [
       { value: 'overview', label: t('rep_tab_overview', 'Overview / P&L') },
+      { value: 'outflows', label: t('rep_tab_outflows', 'Money out') },
       { value: 'products', label: t('rep_tab_products', 'Products') },
       { value: 'categories', label: t('rep_tab_categories', 'Categories') },
       { value: 'customers', label: t('rep_tab_customers', 'Customers') },
@@ -100,6 +105,7 @@ export default function Reports() {
 
       <div className="pt-2">
         {tab === 'overview' && <OverviewTab {...tabProps} />}
+        {tab === 'outflows' && <OutflowsTab {...tabProps} />}
         {tab === 'products' && <ProductsTab {...tabProps} />}
         {tab === 'categories' && <CategoriesTab {...tabProps} />}
         {tab === 'customers' && <CustomersTab {...tabProps} />}

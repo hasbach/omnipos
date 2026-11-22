@@ -49,6 +49,9 @@ function fromSettings(s: Record<string, string>) {
     pos_scan_beep: s.pos_scan_beep !== '0',
     // Missing key = off.
     pos_show_images: s.pos_show_images === '1',
+    // Missing key = on (backward compatible).
+    receipt_show_balance: s.receipt_show_balance !== '0',
+    receipt_show_payments: s.receipt_show_payments !== '0',
   };
 }
 
@@ -72,6 +75,8 @@ export function PrintersSection({ settings, onSaved }: PrintersSectionProps) {
         show_receipt_dialog: receiptForm.show_receipt_dialog ? '1' : '0',
         pos_scan_beep: receiptForm.pos_scan_beep ? '1' : '0',
         pos_show_images: receiptForm.pos_show_images ? '1' : '0',
+        receipt_show_balance: receiptForm.receipt_show_balance ? '1' : '0',
+        receipt_show_payments: receiptForm.receipt_show_payments ? '1' : '0',
       });
       toast.success(t('set_saved_toast'));
       onSaved();
@@ -244,6 +249,26 @@ export function PrintersSection({ settings, onSaved }: PrintersSectionProps) {
               <Switch
                 checked={receiptForm.pos_show_images}
                 onChange={(v) => setReceiptForm({ ...receiptForm, pos_show_images: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+              <div className="pe-4">
+                <p className="text-sm font-medium text-text">{t('set_receipt_show_balance', 'Show Customer Balance on Receipt')}</p>
+                <p className="text-xs text-text-3">{t('set_receipt_show_balance_help', 'Prints Previous Balance, This Invoice, and New Balance on customer receipts. Turn off for restaurants or cash-only counters.')}</p>
+              </div>
+              <Switch
+                checked={receiptForm.receipt_show_balance}
+                onChange={(v) => setReceiptForm({ ...receiptForm, receipt_show_balance: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+              <div className="pe-4">
+                <p className="text-sm font-medium text-text">{t('set_receipt_show_payments', 'Show Payment Details on Receipt')}</p>
+                <p className="text-xs text-text-3">{t('set_receipt_show_payments_help', 'Prints the paid amount and payment method breakdown under the total. Turn off for simpler restaurant receipts.')}</p>
+              </div>
+              <Switch
+                checked={receiptForm.receipt_show_payments}
+                onChange={(v) => setReceiptForm({ ...receiptForm, receipt_show_payments: v })}
               />
             </div>
           </div>

@@ -13,6 +13,12 @@ const TILE = {
   lg: { min: 210, h: 'min-h-[120px]', pad: 'p-4', name: 'text-base', price: 'text-base', img: 'h-32' },
 } as const;
 
+const CAT_CHIP = {
+  sm: { btn: 'px-3 py-1.5 min-h-[32px] text-xs font-semibold', dot: 'h-2 w-2', arrow: 'h-8 w-8' },
+  md: { btn: 'px-4 py-2 min-h-[42px] text-sm font-bold', dot: 'h-2.5 w-2.5', arrow: 'h-10 w-10' },
+  lg: { btn: 'px-5 py-2.5 min-h-[52px] text-base font-bold', dot: 'h-3 w-3', arrow: 'h-12 w-12' },
+} as const;
+
 const COLLAPSE_KEY = 'pos_categories_collapsed';
 
 // Each category gets its own colour, used on its chip and on its product tiles so categories can be
@@ -40,6 +46,7 @@ export default function ProductGrid() {
 
   const { layout } = usePosLayout();
   const tile = TILE[layout.tileSize];
+  const catChip = CAT_CHIP[layout.categorySize];
   const { posShowImages } = useSettings();
   // Photos that failed to load (offline before the first download): fall back to the plain tile.
   const [brokenImages, setBrokenImages] = useState<Record<string, true>>({});
@@ -100,7 +107,7 @@ export default function ProductGrid() {
     return <Badge variant="neutral">{stock} {p.unit}</Badge>;
   };
 
-  const arrowCls = 'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-border text-text-2 hover:border-border-strong disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer';
+  const arrowCls = `flex ${catChip.arrow} flex-shrink-0 items-center justify-center rounded-lg border border-border text-text-2 hover:border-border-strong disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer`;
   const toggleLabel = collapsed ? t('pos_categories_expand', 'Show all categories') : t('pos_categories_collapse', 'Show only the selected category');
 
   return (
@@ -152,7 +159,7 @@ export default function ProductGrid() {
                         data-active={active}
                         aria-pressed={active}
                         onClick={() => setSelectedCategory(cat)}
-                        className={`flex-shrink-0 whitespace-nowrap px-3 py-1.5 min-h-[32px] text-xs font-semibold border transition-all rounded-lg cursor-pointer ${active ? 'bg-primary text-on-primary border-primary' : 'bg-surface border-border text-text-2 hover:border-border-strong'}`}
+                        className={`flex-shrink-0 whitespace-nowrap ${catChip.btn} border transition-all rounded-lg cursor-pointer ${active ? 'bg-primary text-on-primary border-primary' : 'bg-surface border-border text-text-2 hover:border-border-strong'}`}
                       >
                         {t('category_all', 'All')}
                       </button>
@@ -168,11 +175,11 @@ export default function ProductGrid() {
                       aria-pressed={active}
                       onClick={() => setSelectedCategory(cat)}
                       style={{ '--cat': color } as React.CSSProperties}
-                      className={`flex-shrink-0 whitespace-nowrap flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] text-xs font-semibold border transition-all rounded-lg cursor-pointer ${active
+                      className={`flex-shrink-0 whitespace-nowrap flex items-center gap-1.5 ${catChip.btn} border transition-all rounded-lg cursor-pointer ${active
                         ? 'bg-[var(--cat)] text-white border-[var(--cat)]'
                         : 'bg-[color-mix(in_srgb,var(--cat)_14%,var(--surface))] border-[color-mix(in_srgb,var(--cat)_45%,var(--border))] text-text hover:border-[var(--cat)]'}`}
                     >
-                      {!active && <span className="h-2 w-2 rounded-full bg-[var(--cat)]" aria-hidden="true" />}
+                      {!active && <span className={`${catChip.dot} rounded-full bg-[var(--cat)]`} aria-hidden="true" />}
                       {cat}
                     </button>
                   );

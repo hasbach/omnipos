@@ -178,7 +178,10 @@ for (const forms of Object.values(FORMS)) {
   const chains: [number, number[]][] = [[iso, [fin, ini, med]], [fin, [iso, med, ini]], [ini, [med, iso, fin]], [med, [ini, fin, iso]]];
   for (const [form, alts] of chains) if (form) FORM_FALLBACK[form] = alts.filter(Boolean);
 }
-for (const [iso, fin] of Object.values(LAM_ALEF)) { FORM_FALLBACK[iso] = [fin]; FORM_FALLBACK[fin] = [iso]; }
+for (const [iso, fin] of Object.values(LAM_ALEF)) {
+  FORM_FALLBACK[iso] = [fin, 0xFEFB, 0xFEFC];
+  FORM_FALLBACK[fin] = [iso, 0xFEFC, 0xFEFB];
+}
 
 function toCp864Glyphs(visual: string): string {
   return [...visual].map(ch => {

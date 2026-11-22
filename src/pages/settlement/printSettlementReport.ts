@@ -1,6 +1,6 @@
 import { formatDateTime } from '../../lib/format';
 import { CATEGORIES, builtinCategoryLabel, type Category } from '../cashflow/common';
-import { printReportHtml, type PrintResult } from './printReport';
+import { printThermalReport, type PrintResult, type ThermalLine } from './printReport';
 import { effectiveOf, type Breakdown, type CountedLine, type FlowBlock, type SettlementDetail } from './types';
 
 type T = (key: string, fallback?: string) => string;
@@ -232,7 +232,158 @@ export function buildSettlementReportHtml(detail: SettlementDetail, opts: PrintS
 </html>`;
 }
 
-/** Prints the End-of-Day X-report to the default printer, like a POS receipt (no print dialog). */
+export function buildSettlementReportLines(detail: SettlementDetail, opts: PrintSettlementOptions): ThermalLine[] {
+  const { t, lang, businessName } = opts;
+  const title = opts.title || t('fin_xr_end_of_day', 'END OF DAY');
+  const report = detail.report;
+  const rec: Breakdown = detail.recorded || {};
+  const extra: Breakdown = detail.rebuilt || {};
+  const reg = rec.register;
+  const eff = effectiveOf(report);
+  const adjustments = Number(report.adjustments_total || 0);
+  const corrections = detail.corrections || [];
+  const methodLabel = (m: string) => t(`pm_${m}`, m);
+  const lines: ThermalLine[] = [];
+
+  const kv = (label: string, value: string, bold = false, indent = false) =>
+    lines.push({ kind: 'kv', label, value, bold, indent });
+
+  // A. Header
+  lines.push({ kind: 'center', text: businessName || t('fin_xr_business_fallback', 'Business'), bold: true });
+  lines.push({ kind: 'center', text: title, bold: true });
+  lines.push({ kind: 'hr' });
+  const periodStart = rec.period_start || report.period_start;
+  const periodEnd = rec.period_end || report.settled_at || report.created_at;
+  kv(t('xr_report_no', 'Report #'), String(report.id));
+  kv(t('xr_from', 'From'), periodStart && !periodStart.startsWith('0000') ? formatDateTime(periodStart, lang) : t('sd_period_first', 'First closing'));
+  if (periodEnd) kv(t('xr_to', 'To'), formatDateTime(periodEnd, lang));
+  if (report.user_name) kv(t('sd_closed_by', 'Closed by'), report.user_name);
+  kv(t('xr_printed', 'Printed'), formatDateTime(new Date(), lang));
+  if (report.changed_after_close) {
+    lines.push({ kind: 'center', text: `*** ${t('sd_badge_changed', 'Changed after closing')} ***`, bold: true });
+  }
+
+  // B. Sales summary
+  const pushFlow = (label: string, b: FlowBlock | undefined) => {
+    if (!b) return;
+    kv(`${label} (${b.count || 0})`, usd(b.total || 0), true);
+    for (const m of METHODS) {
+      if (Math.abs(b.by_method?.[m] || 0) > EPS) kv(methodLabel(m), usd(b.by_method![m]!), false, true);
+    }
+  };
+  if (rec.sales) {
+    lines.push({ kind: 'section', text: t('xr_sec_sales', 'SALES SUMMARY') });
+    pushFlow(t('xr_sales', 'Sales'), rec.sales);
+    pushFlow(t('xr_refunds', 'Refunds'), rec.refunds);
+    kv(t('xr_net_sales', 'Net sales'), usd((rec.sales.total || 0) - (rec.refunds?.total || 0)), true);
+    pushFlow(t('xr_purchases', 'Purchases'), rec.purchases);
+  }
+
+  // C. Cash drawer
+  if (reg) {
+    lines.push({ kind: 'section', text: t('xr_sec_drawer', 'CASH DRAWER') });
+    kv(t('sd_row_opening', 'Opening balance'), usd(reg.opening));
+    kv(t('sd_row_cash_sales', 'Cash sales'), signedUsd(reg.cash_sales));
+    if (Math.abs(reg.cash_refunds) > EPS) kv(t('sd_row_cash_refunds', 'Cash refunds'), signedUsd(-reg.cash_refunds));
+    if (Math.abs(reg.cash_purchases) > EPS) kv(t('sd_row_cash_purchases', 'Cash purchases'), signedUsd(-reg.cash_purchases));
+    kv(t('sd_row_cash_in', 'Cash in'), signedUsd(reg.cash_in));
+    kv(t('sd_row_cash_out', 'Cash out'), signedUsd(-reg.cash_out));
+    if (Math.abs(adjustments) > EPS) kv(t('sd_xr_adjustments', 'Adjustments:').replace(/:\s*$/, ''), signedUsd(adjustments));
+    kv(t('xr_expected_cash', 'Expected cash'), usd(eff.expected), true);
+    const byCur = rec.sales?.cash_by_currency || {};
+    const curs = Object.keys(byCur).filter((c) => Math.abs(byCur[c]) > EPS);
+    if (curs.length > 1 || (curs.length === 1 && curs[0] !== 'USD')) {
+      lines.push({ kind: 'text', text: t('xr_cash_sales_by_currency', 'Cash sales received') });
+      for (const c of curs) kv(c, native(c, byCur[c]), false, true);
+    }
+  }
+
+  // D. Counted cash
+  lines.push({ kind: 'section', text: t('xr_sec_counted', 'COUNTED CASH') });
+  const countedLines: CountedLine[] = detail.corrected_counted || detail.counted || [];
+  for (const l of countedLines.filter((x) => Math.abs(x.amount) > EPS || countedLines.length === 1)) {
+    kv(
+      l.currency === 'USD' ? 'USD' : `${l.currency} @ ${num(l.rate, l.rate >= 100 ? 0 : 2)}`,
+      l.currency === 'USD' ? usd(l.amount) : `${native(l.currency, l.amount, l.rate)} = ${usd(l.amount_usd ?? l.amount / l.rate)}`,
+    );
+  }
+  const diff = eff.actual - eff.expected;
+  kv(t('xr_total_counted', 'Total counted') + (detail.corrected_counted ? ` ${t('sd_xr_corrected_flag', '(corrected)')}` : ''), usd(eff.actual), true);
+  if (detail.corrected_counted) kv(t('sd_xr_original_actual', 'Originally counted:').replace(/:\s*$/, ''), usd(report.actual_balance || 0), false, true);
+  kv(t('xr_expected_cash', 'Expected cash'), usd(eff.expected));
+  kv(Math.abs(diff) <= EPS ? t('xr_balanced', 'Balanced') : diff > 0 ? t('xr_over', 'Over') : t('xr_short', 'Short'), signedUsd(diff), true);
+
+  // E. Shifts
+  const shiftList = rec.shifts || [];
+  if (shiftList.length) {
+    lines.push({ kind: 'section', text: t('xr_sec_shifts', 'SHIFTS') });
+    for (const s of shiftList) {
+      kv(s.user_name || '—', s.created_at ? formatDateTime(s.created_at, lang) : '', true);
+      kv(t('xr_expected', 'Expected'), usd(s.expected_cash), false, true);
+      kv(t('xr_counted', 'Counted'), usd(s.actual_cash), false, true);
+      kv(t('xr_difference', 'Difference'), signedUsd(s.difference), false, true);
+    }
+  }
+
+  // F. Cash in/out by category
+  const cfCats = rec.cash_flow_by_category || extra.cash_flow_by_category || [];
+  const catLabel = (key: string, name: string | null) =>
+    (CATEGORIES as readonly string[]).includes(key) ? builtinCategoryLabel(key as Category, t) : name || key;
+  const cfIn = cfCats.filter((c) => c.type === 'in');
+  const cfOut = cfCats.filter((c) => c.type === 'out');
+  if (cfIn.length || cfOut.length) {
+    lines.push({ kind: 'section', text: t('xr_sec_cash_flow', 'CASH IN / OUT') });
+    if (cfIn.length) {
+      kv(t('sd_row_cash_in', 'Cash in'), usd(reg?.cash_in ?? cfIn.reduce((s, c) => s + c.total, 0)), true);
+      for (const c of cfIn) kv(`${catLabel(c.category, c.name)} (${c.count})`, usd(c.total), false, true);
+    }
+    if (cfOut.length) {
+      kv(t('sd_row_cash_out', 'Cash out'), usd(reg?.cash_out ?? cfOut.reduce((s, c) => s + c.total, 0)), true);
+      for (const c of cfOut) kv(`${catLabel(c.category, c.name)} (${c.count})`, usd(c.total), false, true);
+    }
+  }
+
+  // G. Sales by category
+  const cats = (rec.sales_by_category || extra.sales_by_category || []).filter((c) => Math.abs(c.revenue) > EPS || Math.abs(c.qty) > EPS);
+  if (cats.length) {
+    lines.push({ kind: 'section', text: t('xr_sec_categories', 'SALES BY CATEGORY') });
+    for (const c of cats) {
+      kv(`${c.category === 'Uncategorized' ? t('xr_uncategorized', 'Uncategorized') : c.category} x ${qtyFmt(c.qty)}`, usd(c.revenue));
+    }
+  }
+
+  // H. Sales by cashier
+  const cashiers = rec.cashiers || extra.cashiers || [];
+  if (cashiers.length) {
+    lines.push({ kind: 'section', text: t('xr_sec_cashiers', 'SALES BY CASHIER') });
+    for (const c of cashiers) {
+      kv(`${c.name || t('xr_unknown_user', 'Unknown')} (${c.invoices})`, usd(c.sales), true);
+      if (Math.abs(c.refunds) > EPS) kv(t('xr_refunds', 'Refunds'), signedUsd(-c.refunds), false, true);
+    }
+  }
+
+  // Corrections & notes
+  if (corrections.length) {
+    lines.push({ kind: 'section', text: t('sd_xr_corrections', 'CORRECTIONS') });
+    for (const c of corrections) {
+      const what = c.kind === 'counted'
+        ? `${t('sd_corr_kind_counted', 'Counted cash')} ${c.currency || ''}: ${c.old_value ?? 0} -> ${c.new_value ?? 0}`
+        : `${t('sd_corr_kind_adjustment', 'Adjustment')}: ${signedUsd(c.amount_usd)}`;
+      lines.push({ kind: 'text', text: what });
+      lines.push({ kind: 'text', text: `${c.user_name || ''} · ${formatDateTime(c.created_at, lang)}` });
+      if (c.reason) lines.push({ kind: 'text', text: c.reason });
+    }
+  }
+  const notes = (report.notes || '').trim();
+  if (notes) {
+    lines.push({ kind: 'section', text: t('sd_notes', 'Notes') });
+    lines.push({ kind: 'text', text: notes });
+  }
+  lines.push({ kind: 'hr' }, { kind: 'center', text: `${title} · #${report.id}` });
+  return lines;
+}
+
+/** Prints the End-of-Day X-report to the configured ESC/POS printer (image or text mode), falling back to silent HTML. */
 export function printSettlementReport(detail: SettlementDetail, opts: PrintSettlementOptions): Promise<PrintResult> {
-  return printReportHtml(buildSettlementReportHtml(detail, opts));
+  return printThermalReport(buildSettlementReportLines(detail, opts), buildSettlementReportHtml(detail, opts));
 }

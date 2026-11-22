@@ -125,7 +125,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
         th,td{padding:4px 2px;border-bottom:1px solid #E2E8F0;text-align:start;}
         .totals{margin-top:12px;text-align:end;} .totals p{font-weight:bold;}
       </style></head><body>
-      <h1>Invoice #${invoice.id} — ${invoice.type === 'refund' ? t('inv_type_refund', 'Refund') : invoice.type === 'purchase' ? t('inv_type_purchase', 'Purchase') : t('inv_type_sale', 'Sale')}</h1>
+      <h1>Invoice #${invoice.id}${invoice.terminal_id && invoice.terminal_sequence ? ` (${invoice.terminal_id}-${String(invoice.terminal_sequence).padStart(4, '0')})` : ''} — ${invoice.type === 'refund' ? t('inv_type_refund', 'Refund') : invoice.type === 'purchase' ? t('inv_type_purchase', 'Purchase') : t('inv_type_sale', 'Sale')}</h1>
       <p>${invoice.stakeholder_name ? partyDisplayName(invoice.stakeholder_name, t) : ''}</p>
       <p>${formatDateTime(invoice.created_at, lang)}</p>
       <table><thead><tr><th>${t('inv_detail_col_product', 'Product')}</th><th>${t('inv_detail_col_qty', 'Qty')}</th><th>${t('inv_editor_col_unit_price', 'Price')}</th><th>${t('inv_detail_col_line_total', 'Line total')}</th></tr></thead>
@@ -152,8 +152,11 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
       onClose={onClose}
       size="lg"
       title={invoice ? (
-        <span className="inline-flex items-center gap-2">
+        <span className="inline-flex flex-wrap items-center gap-2">
           {t('inv_detail_title', 'Invoice #{id}').replace('{id}', String(invoice.id))}
+          {invoice.terminal_id && invoice.terminal_sequence ? (
+            <Badge variant="neutral">{`${invoice.terminal_id}-${String(invoice.terminal_sequence).padStart(4, '0')}`}</Badge>
+          ) : null}
           {typeBadge(invoice.type, t)}
           {invoice.archived ? <Badge variant="neutral">{t('inv_flag_settled', 'Settled')}</Badge> : null}
           {invoice.edit_count > 0 ? <Badge variant="warning">{t('inv_flag_edited_many', 'Edited ×{n}').replace('{n}', String(invoice.edit_count))}</Badge> : null}

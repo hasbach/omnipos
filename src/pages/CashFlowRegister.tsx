@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, Banknote, PiggyBank, Receipt, ShoppingBag, Users, Wallet } from 'lucide-react';
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, PiggyBank, Plus, Receipt, ShoppingBag, Users, Wallet } from 'lucide-react';
 import {
+  Badge,
   Button,
+  Card,
+  CardBody,
   DataTable,
   Field,
   Input,
@@ -17,7 +20,7 @@ import { AnalyticsPanel } from './cashflow/AnalyticsPanel';
 import { BalancePaymentModal } from './cashflow/BalancePaymentModal';
 import { CashFlowEditModal } from './cashflow/EditModal';
 import { cashFlowColumns } from './cashflow/columns';
-import { FitStat, STAT_GRID, cashFlowErrorMessage, type CashFlowRow } from './cashflow/common';
+import { FitStat, STAT_GRID, cashFlowErrorMessage, type CashAccount, type CashFlowRow } from './cashflow/common';
 import { useCashFlowCategories } from './cashflow/useCashFlowCategories';
 import { useI18n } from '../intl/index';
 import { formatMoney } from '../lib/format';
@@ -60,8 +63,10 @@ export default function CashFlowRegister() {
   const { can } = usePermissions();
   const canAdd = can('cash_flow.add');
   const canEditEntries = can('cash_flow.edit');
+  const canManageAccounts = can('settings.manage') || can('cash_flow.edit');
   const canBalancePayment = canAdd || can('parties.edit'); // POST /api/balance-payment
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'register' | 'analytics'>('register');
@@ -82,23 +87,43 @@ export default function CashFlowRegister() {
   const [category, setCategory] = useState('other');
   const [counterparty, setCounterparty] = useState('');
   const [currencyCode, setCurrencyCode] = useState('USD');
+  const [movementAccountId, setMovementAccountId] = useState('');
   const [submittingMovement, setSubmittingMovement] = useState(false);
+
+  // Transfer modal
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferFromId, setTransferFromId] = useState('');
+  const [transferToId, setTransferToId] = useState('');
+  const [transferAmount, setTransferAmount] = useState<number | ''>('');
+  const [transferCurrency, setTransferCurrency] = useState('USD');
+  const [transferReason, setTransferReason] = useState('');
+  const [submittingTransfer, setSubmittingTransfer] = useState(false);
+
+  // New account modal
+  const [newAccOpen, setNewAccOpen] = useState(false);
+  const [newAccName, setNewAccName] = useState('');
+  const [newAccKind, setNewAccKind] = useState<'savings' | 'bank'>('savings');
+  const [submittingNewAcc, setSubmittingNewAcc] = useState(false);
 
   // Balance payment modal
   const [balanceOpen, setBalanceOpen] = useState(false);
 
   const currentCurrency = currencies.find((c) => c.code === currencyCode) || currencies[0];
+  const transferCurrObj = currencies.find((c) => c.code === transferCurrency) || currencies[0];
+  const defaultAccount = accounts.find((a) => a.is_default === 1) || accounts[0];
 
   const fetchData = useCallback(async () => {
     try {
-      const [entriesRes, summaryRes, currenciesRes] = await Promise.all([
+      const [entriesRes, summaryRes, currenciesRes, accountsRes] = await Promise.all([
         api.get<CashFlowEntry[]>(`/api/cash-flow?scope=${scope}`),
         api.get<Summary>(`/api/cash-flow/summary?scope=${scope}`),
         api.get<Currency[]>('/api/currencies'),
+        api.get<CashAccount[]>('/api/cash-accounts').catch(() => [] as CashAccount[]),
       ]);
       setEntries(entriesRes || []);
       setSummary(summaryRes || null);
       if (Array.isArray(currenciesRes) && currenciesRes.length > 0) setCurrencies(currenciesRes);
+      if (Array.isArray(accountsRes)) setAccounts(accountsRes);
     } catch (err: any) {
       toast.error(err.message || String(err));
     } finally {
@@ -125,7 +150,61 @@ export default function CashFlowRegister() {
     setCategory(type === 'in' ? 'top_up' : 'expense');
     setCounterparty('');
     setCurrencyCode('USD');
+    setMovementAccountId(defaultAccount ? String(defaultAccount.id) : '');
     setMovementOpen(true);
+  };
+
+  const openTransferModal = () => {
+    const def = defaultAccount || accounts[0];
+    const other = accounts.find((a) => a.id !== def?.id);
+    setTransferFromId(def ? String(def.id) : '');
+    setTransferToId(other ? String(other.id) : '');
+    setTransferAmount('');
+    setTransferCurrency('USD');
+    setTransferReason('');
+    setTransferOpen(true);
+  };
+
+  const handleSubmitTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const numAmount = typeof transferAmount === 'number' ? transferAmount : parseFloat(String(transferAmount));
+    if (!numAmount || numAmount <= 0 || !transferFromId || !transferToId) return;
+    setSubmittingTransfer(true);
+    try {
+      await api.post('/api/cash-accounts/transfer', {
+        from_account_id: Number(transferFromId),
+        to_account_id: Number(transferToId),
+        amount: numAmount,
+        currency: transferCurrObj.code,
+        exchange_rate: transferCurrObj.rate,
+        reason: transferReason.trim(),
+      });
+      setTransferOpen(false);
+      toast.success(t('acc_transfer_recorded', 'Transfer recorded.'));
+      fetchData();
+    } catch (err: any) {
+      toast.error(cashFlowErrorMessage(err, t));
+    } finally {
+      setSubmittingTransfer(false);
+    }
+  };
+
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAccName.trim()) return;
+    setSubmittingNewAcc(true);
+    try {
+      await api.post('/api/cash-accounts', { name: newAccName.trim(), kind: newAccKind });
+      setNewAccOpen(false);
+      setNewAccName('');
+      setNewAccKind('savings');
+      toast.success(t('acc_created_toast', 'Account created.'));
+      fetchData();
+    } catch (err: any) {
+      toast.error(cashFlowErrorMessage(err, t));
+    } finally {
+      setSubmittingNewAcc(false);
+    }
   };
 
   const quickReasons = useMemo(() => {
@@ -148,6 +227,7 @@ export default function CashFlowRegister() {
         reason,
         category,
         counterparty: counterparty.trim() || undefined,
+        account_id: movementAccountId ? Number(movementAccountId) : undefined,
       });
       setMovementOpen(false);
       toast.success(t('fin_cfr_movement_recorded', 'Movement recorded.'));
@@ -174,6 +254,11 @@ export default function CashFlowRegister() {
             {canBalancePayment && (
               <Button variant="secondary" onClick={() => setBalanceOpen(true)}>
                 <Users size={15} /> {t('fin_cfr_balance_payment', 'Balance Payment')}
+              </Button>
+            )}
+            {canAdd && accounts.length > 1 && (
+              <Button variant="secondary" onClick={openTransferModal}>
+                <ArrowLeftRight size={15} /> {t('acc_transfer_btn', 'Transfer')}
               </Button>
             )}
             {canAdd && (
@@ -241,6 +326,50 @@ export default function CashFlowRegister() {
         {t('fin_cfr_formula', 'Opening + Sales − Refunds − Purchases + In − Out = Expected')}
       </p>
 
+      {/* Cash Accounts & Savings strip */}
+      <Card>
+        <CardBody className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-text">{t('acc_section_title', 'Cash Accounts & Savings')}</h2>
+              <p className="text-xs text-text-3">{t('acc_section_subtitle', 'Set aside cash from the drawer into savings or reserve accounts, and spend from them without affecting the register.')}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {canAdd && accounts.length > 1 && (
+                <Button variant="secondary" size="sm" onClick={openTransferModal}>
+                  <ArrowLeftRight size={14} /> {t('acc_transfer_btn', 'Transfer')}
+                </Button>
+              )}
+              {canManageAccounts && (
+                <Button variant="secondary" size="sm" onClick={() => setNewAccOpen(true)}>
+                  <Plus size={14} /> {t('acc_new_btn', 'New account')}
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+            {accounts.map((acc) => {
+              const nativeParts = Object.entries(acc.by_currency || {})
+                .map(([code, amt]) => `${amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${code}`);
+              return (
+                <div key={acc.id} className="rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-semibold text-text">{acc.is_default ? t('acc_default_drawer', 'Cash Drawer') : acc.name}</span>
+                    <Badge variant={acc.is_default ? 'primary' : 'neutral'}>
+                      {acc.kind === 'drawer' ? t('acc_kind_drawer', 'Drawer') : acc.kind === 'bank' ? t('acc_kind_bank', 'Bank') : t('acc_kind_savings', 'Savings')}
+                    </Badge>
+                  </div>
+                  <p className="mt-1.5 num text-lg font-bold text-text">{formatMoney(acc.balance_usd, USD)}</p>
+                  {nativeParts.length > 0 && (
+                    <p className="mt-0.5 num text-xs text-text-3 truncate">{nativeParts.join(' · ')}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardBody>
+      </Card>
+
       <div>
         <h2 className="mb-2 text-sm font-semibold text-text">{t('fin_cfr_movements', 'Movements')}</h2>
         <DataTable
@@ -256,7 +385,7 @@ export default function CashFlowRegister() {
       </>
       )}
 
-      <CashFlowEditModal row={editing} currencies={currencies} onClose={() => setEditing(null)} onSaved={fetchData} />
+      <CashFlowEditModal row={editing} currencies={currencies} accounts={accounts} onClose={() => setEditing(null)} onSaved={fetchData} />
 
       {/* Cash In / Cash Out modal */}
       <Modal
@@ -278,6 +407,15 @@ export default function CashFlowRegister() {
         }
       >
         <form id="cfr-movement-form" className="flex flex-col gap-4" onSubmit={handleSubmitMovement}>
+          {accounts.length > 1 && (
+            <Field label={movementType === 'out' ? t('acc_pay_from', 'Pay from account') : t('acc_deposit_to', 'Deposit into account')}>
+              <Select
+                value={movementAccountId}
+                onChange={(e) => setMovementAccountId(e.target.value)}
+                options={accounts.map((a) => ({ value: String(a.id), label: a.is_default ? t('acc_default_drawer', 'Cash Drawer') : a.name }))}
+              />
+            </Field>
+          )}
           <Field label={t('fin_currency', 'Currency')}>
             <Select
               value={currencyCode}
@@ -324,6 +462,93 @@ export default function CashFlowRegister() {
       </Modal>
 
       <BalancePaymentModal open={balanceOpen} onClose={() => setBalanceOpen(false)} onRecorded={fetchData} />
+
+      {/* Transfer Between Accounts modal */}
+      <Modal
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        title={t('acc_transfer_title', 'Transfer Between Accounts')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setTransferOpen(false)}>{t('fin_cancel', 'Cancel')}</Button>
+            <Button type="submit" form="cfr-transfer-form" loading={submittingTransfer}>
+              {t('acc_transfer_submit', 'Transfer')}
+            </Button>
+          </>
+        }
+      >
+        <form id="cfr-transfer-form" className="flex flex-col gap-4" onSubmit={handleSubmitTransfer}>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label={t('acc_from', 'From account')}>
+              <Select
+                value={transferFromId}
+                onChange={(e) => setTransferFromId(e.target.value)}
+                options={accounts.map((a) => ({ value: String(a.id), label: a.is_default ? t('acc_default_drawer', 'Cash Drawer') : a.name }))}
+              />
+            </Field>
+            <Field label={t('acc_to', 'To account')}>
+              <Select
+                value={transferToId}
+                onChange={(e) => setTransferToId(e.target.value)}
+                options={accounts.map((a) => ({ value: String(a.id), label: a.is_default ? t('acc_default_drawer', 'Cash Drawer') : a.name }))}
+              />
+            </Field>
+          </div>
+          <Field label={t('fin_currency', 'Currency')}>
+            <Select
+              value={transferCurrency}
+              onChange={(e) => setTransferCurrency(e.target.value)}
+              options={currencies.map((c) => ({ value: c.code, label: `${c.code} (rate ${c.rate})` }))}
+            />
+          </Field>
+          <Field label={`${t('fin_amount', 'Amount')} (${transferCurrObj.symbol})`}>
+            <MoneyInput value={transferAmount} onChange={setTransferAmount} currencySymbol={transferCurrObj.symbol} autoFocus />
+          </Field>
+          <Field label={t('fin_reason', 'Reason')}>
+            <Input
+              value={transferReason}
+              onChange={(e) => setTransferReason(e.target.value)}
+              placeholder={t('acc_transfer_reason_placeholder', 'e.g. Daily rent & electricity savings')}
+            />
+          </Field>
+        </form>
+      </Modal>
+
+      {/* New Account modal */}
+      <Modal
+        open={newAccOpen}
+        onClose={() => setNewAccOpen(false)}
+        title={t('acc_new_title', 'New Cash Account')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setNewAccOpen(false)}>{t('fin_cancel', 'Cancel')}</Button>
+            <Button type="submit" form="cfr-new-acc-form" loading={submittingNewAcc}>
+              {t('acc_create_btn', 'Create account')}
+            </Button>
+          </>
+        }
+      >
+        <form id="cfr-new-acc-form" className="flex flex-col gap-4" onSubmit={handleCreateAccount}>
+          <Field label={t('acc_name_label', 'Account name')} required>
+            <Input
+              value={newAccName}
+              onChange={(e) => setNewAccName(e.target.value)}
+              placeholder={t('acc_name_placeholder', 'e.g. Savings Money, Rent Reserve, Safe')}
+              autoFocus
+            />
+          </Field>
+          <Field label={t('acc_kind_label', 'Account type')}>
+            <Select
+              value={newAccKind}
+              onChange={(e) => setNewAccKind(e.target.value as 'savings' | 'bank')}
+              options={[
+                { value: 'savings', label: t('acc_kind_savings', 'Savings / Safe') },
+                { value: 'bank', label: t('acc_kind_bank', 'Bank / Wallet') },
+              ]}
+            />
+          </Field>
+        </form>
+      </Modal>
     </div>
   );
 }

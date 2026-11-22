@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Combobox, Field, Modal, MoneyInput, useToast } from '../../components/ui';
+import { Button, Combobox, Field, Modal, MoneyInput, Select, useToast } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { formatMoney, partyDisplayName } from '../../lib/format';
 import { api } from '../../lib/api';
 import { effectiveLocalCurrency, formatRate, formatLocal } from '../../lib/orderTotals';
+import type { CashAccount } from './common';
 
 interface Currency {
   id?: number;
@@ -36,6 +37,8 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
 
   const [stakeholders, setStakeholders] = useState<Stakeholder[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>(DEFAULT_CURRENCIES);
+  const [accounts, setAccounts] = useState<CashAccount[]>([]);
+  const [accountId, setAccountId] = useState('');
   const [direction, setDirection] = useState<'collect' | 'pay'>(initialDirection);
   const [stakeholderId, setStakeholderId] = useState('');
   const [amount, setAmount] = useState<number | ''>('');
@@ -49,16 +52,23 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
     setStakeholderId('');
     setAmount('');
     setCurrencyCode('');
+    setAccountId('');
     let cancelled = false;
     (async () => {
       try {
-        const [stakeholdersRes, currenciesRes] = await Promise.all([
+        const [stakeholdersRes, currenciesRes, accountsRes] = await Promise.all([
           api.get<Stakeholder[]>('/api/stakeholders'),
           api.get<Currency[]>('/api/currencies'),
+          api.get<CashAccount[]>('/api/cash-accounts').catch(() => [] as CashAccount[]),
         ]);
         if (cancelled) return;
         setStakeholders(stakeholdersRes || []);
         setCurrencies(Array.isArray(currenciesRes) && currenciesRes.length > 0 ? currenciesRes : DEFAULT_CURRENCIES);
+        if (Array.isArray(accountsRes) && accountsRes.length > 0) {
+          setAccounts(accountsRes);
+          const def = accountsRes.find((a) => a.is_default === 1) || accountsRes[0];
+          setAccountId(String(def.id));
+        }
       } catch (err: any) {
         if (!cancelled) toast.error(err.message || String(err));
       }
@@ -132,6 +142,7 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
         currency: currency.code,
         exchange_rate: currency.rate,
         direction,
+        account_id: accountId ? Number(accountId) : undefined,
       });
       toast.success(t('fin_cfr_payment_recorded', 'Payment recorded.'));
       onRecorded?.();
@@ -234,6 +245,16 @@ export function BalancePaymentModal({ open, onClose, initialDirection = 'collect
         >
           <MoneyInput value={amount} onChange={setAmount} currencySymbol={currency.symbol} />
         </Field>
+
+        {accounts.length > 1 && (
+          <Field label={direction === 'pay' ? t('acc_pay_from', 'Pay from account') : t('acc_deposit_to', 'Deposit into account')}>
+            <Select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              options={accounts.map((a) => ({ value: String(a.id), label: a.name }))}
+            />
+          </Field>
+        )}
       </form>
     </Modal>
   );

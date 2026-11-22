@@ -4,7 +4,7 @@ import { Badge, Button, Field, Input, Modal, MoneyInput, Select, Textarea, useTo
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
 import { formatDateTime, formatMoney } from '../../lib/format';
-import { cashFlowErrorMessage, type CashFlowRow } from './common';
+import { cashFlowErrorMessage, type CashAccount, type CashFlowRow } from './common';
 import { useCashFlowCategories } from './useCashFlowCategories';
 
 interface Currency { code: string; symbol: string; rate: number }
@@ -19,9 +19,10 @@ interface EditRecord {
 }
 
 /** Admin edit of a cash-flow row (open or settled) with a mandatory reason, plus its audit history. */
-export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
+export function CashFlowEditModal({ row, currencies, accounts = [], onClose, onSaved }: {
   row: CashFlowRow | null;
   currencies: Currency[];
+  accounts?: CashAccount[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -30,6 +31,7 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
   const cats = useCashFlowCategories();
   const [type, setType] = useState<'in' | 'out'>('in');
   const [category, setCategory] = useState('other');
+  const [accountId, setAccountId] = useState<string>('');
   const [counterparty, setCounterparty] = useState('');
   const [currency, setCurrency] = useState('USD');
   const [rate, setRate] = useState<number | ''>(1);
@@ -44,6 +46,8 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
     if (!row) return;
     setType(row.type);
     setCategory(row.category || 'other');
+    const defAcc = accounts.find((a) => a.is_default === 1);
+    setAccountId(String(row.account_id ?? defAcc?.id ?? ''));
     setCounterparty(row.counterparty || '');
     setCurrency(row.currency || 'USD');
     setRate(row.exchange_rate || 1);
@@ -53,7 +57,7 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
     setError('');
     setHistory([]);
     api.get<EditRecord[]>(`/api/cash-flow/${row.id}/edits`).then((r) => setHistory(Array.isArray(r) ? r : [])).catch(() => {});
-  }, [row]);
+  }, [row, accounts]);
 
   if (!row) return null;
 
@@ -82,6 +86,7 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
         category,
         counterparty,
         reason,
+        account_id: accountId ? Number(accountId) : undefined,
         edit_reason: editReason.trim(),
       });
       toast.success(t('cf_edit_saved', 'Entry updated.'));
@@ -121,16 +126,31 @@ export function CashFlowEditModal({ row, currencies, onClose, onSaved }: {
           </div>
         )}
 
+        {row.transfer_id && (
+          <div role="note" className="flex items-start gap-2 rounded-[var(--radius-input)] border border-border bg-surface-2 px-3 py-2 text-xs text-text-2">
+            <span>{t('acc_edit_transfer_hint', 'This entry is part of an account transfer. Updating the amount, currency, or reason updates both accounts automatically.')}</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label={t('fin_cfr_movement_type', 'Movement Type')}>
-            <Select value={type} onChange={(e) => changeType(e.target.value as 'in' | 'out')} options={[
+            <Select value={type} disabled={!!row.transfer_id} onChange={(e) => changeType(e.target.value as 'in' | 'out')} options={[
               { value: 'in', label: t('fin_cfr_cash_in', 'Cash In') },
               { value: 'out', label: t('fin_cfr_cash_out', 'Cash Out') },
             ]} />
           </Field>
           <Field label={t('cf_category', 'Category')}>
-            <Select value={category} onChange={(e) => setCategory(e.target.value)} options={cats.options(type, { include: row.category || 'other' })} />
+            <Select value={category} disabled={!!row.transfer_id} onChange={(e) => setCategory(e.target.value)} options={cats.options(type, { include: row.category || 'other' })} />
           </Field>
+          {accounts.length > 1 && (
+            <Field label={t('acc_label', 'Account')}>
+              <Select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                options={accounts.map((a) => ({ value: String(a.id), label: a.name }))}
+              />
+            </Field>
+          )}
           <Field label={t('fin_currency', 'Currency')}>
             <Select value={currency} onChange={(e) => changeCurrency(e.target.value)}
               options={(currencies.some((c) => c.code === currency) ? currencies : [...currencies, { code: currency, symbol: currency, rate: Number(rate) || 1 }]).map((c) => ({ value: c.code, label: c.code }))} />
