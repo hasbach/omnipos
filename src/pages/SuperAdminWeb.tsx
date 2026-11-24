@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Globe,
   Monitor,
+  Zap,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
@@ -33,6 +34,8 @@ interface AdminTenant {
   local_license_expiry?: string;
   online_license_type: 'monthly' | 'lifetime';
   online_license_expiry?: string;
+  or_license_type?: 'none' | 'monthly' | 'year' | 'lifetime';
+  or_license_expiry?: string;
   created_at?: string;
 }
 
@@ -49,7 +52,7 @@ export default function SuperAdminWeb() {
     try {
       const { data, error } = await supabase
         .from('tenants')
-        .select('global_id, name, email, local_license_type, local_license_expiry, online_license_type, online_license_expiry, created_at')
+        .select('global_id, name, email, local_license_type, local_license_expiry, online_license_type, online_license_expiry, or_license_type, or_license_expiry, created_at')
         .order('created_at', { ascending: false });
 
       if (!error && data) setTenants(data as AdminTenant[]);
@@ -78,6 +81,8 @@ export default function SuperAdminWeb() {
         p_local_license_expiry: editForm.local_license_expiry || null,
         p_online_license_type: editForm.online_license_type,
         p_online_license_expiry: editForm.online_license_expiry || null,
+        p_or_license_type: editForm.or_license_type || 'none',
+        p_or_license_expiry: editForm.or_license_expiry || null,
       });
 
       if (!error) {
@@ -159,7 +164,7 @@ export default function SuperAdminWeb() {
               )}
             </div>
 
-            <div className="grid md:grid-cols-2 gap-6 mt-6">
+            <div className="grid md:grid-cols-3 gap-6 mt-6">
               {/* Local Software License */}
               <div className="space-y-3 p-4 bg-app-bg/50 rounded-xl border border-app-border">
                 <div className="flex items-center gap-2 text-[10px] font-black uppercase opacity-40">
@@ -243,6 +248,60 @@ export default function SuperAdminWeb() {
                       <CheckCircle2 className="text-green-500" size={18} />
                     ) : (
                       <XCircle className="text-red-500" size={18} />
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* OmniPulse OR Paid Add-On License */}
+              <div className="space-y-3 p-4 bg-app-bg/50 rounded-xl border border-app-border">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase opacity-40">
+                  <Zap size={14} /> {t('sa_or_addon', 'OmniPulse OR (Add-On)')}
+                </div>
+
+                {editingId === tenant.global_id ? (
+                  <div className="space-y-3">
+                    <select
+                      className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"
+                      value={editForm.or_license_type || 'none'}
+                      onChange={e => setEditForm({ ...editForm, or_license_type: e.target.value as any })}
+                    >
+                      <option value="none">{t('sa_none', 'Inactive')}</option>
+                      <option value="monthly">{t('web_monthly', 'Monthly')}</option>
+                      <option value="year">{t('web_yearly', 'Yearly')}</option>
+                      <option value="lifetime">{t('web_lifetime', 'Lifetime')}</option>
+                    </select>
+                    {(editForm.or_license_type === 'monthly' || editForm.or_license_type === 'year') && (
+                      <input
+                        type="date"
+                        className="w-full bg-app-surface border border-app-border rounded-lg p-2 text-xs"
+                        value={editForm.or_license_expiry?.split('T')[0] || ''}
+                        onChange={e => setEditForm({ ...editForm, or_license_expiry: e.target.value })}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <span className="font-black uppercase text-sm">
+                        {!tenant.or_license_type || tenant.or_license_type === 'none'
+                          ? t('sa_none', 'Inactive')
+                          : tenant.or_license_type === 'lifetime'
+                            ? t('web_lifetime', 'Lifetime')
+                            : tenant.or_license_type === 'year'
+                              ? t('web_yearly', 'Yearly')
+                              : t('web_monthly', 'Monthly')}
+                      </span>
+                      {(tenant.or_license_type === 'monthly' || tenant.or_license_type === 'year') && (
+                        <span className="text-[10px] opacity-50">
+                          {t('web_expires', 'Exp: {date}').replace('{date}', tenant.or_license_expiry ? formatDate(tenant.or_license_expiry, lang) : t('web_not_available', 'N/A'))}
+                        </span>
+                      )}
+                    </div>
+                    {tenant.or_license_type && tenant.or_license_type !== 'none' && (tenant.or_license_type === 'lifetime' || (tenant.or_license_expiry && !isExpired(tenant.or_license_expiry))) ? (
+                      <CheckCircle2 className="text-green-500" size={18} />
+                    ) : (
+                      <XCircle className="text-red-500 opacity-50" size={18} />
                     )}
                   </div>
                 )}

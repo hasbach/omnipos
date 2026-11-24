@@ -37,6 +37,7 @@ import UserLogs from './pages/UserLogs';
 import Settings from './pages/Settings';
 import UiKit from './pages/UiKit';
 import ImportWizard from './pages/ImportWizard';
+import OmniPulseOR from './pages/OmniPulseOR';
 import { RequirePermission, DashboardHome, refreshPermissions } from './lib/usePermissions';
 import { pagePermissions } from './lib/permissions';
 
@@ -118,6 +119,7 @@ function DashboardShell({
             <Route path="/products" element={guard('products', <ProductManagement />)} />
             <Route path="/stock" element={guard('stock', <StockManagement />)} />
             <Route path="/purchases" element={guard('purchases', <PurchaseManagement />)} />
+            <Route path="/or" element={guard('or', <OmniPulseOR />)} />
             <Route path="/stakeholders" element={guard('stakeholders', <StakeholderManagement />)} />
             <Route path="/users" element={guard('users', <UserManagement />)} />
             <Route path="/online-orders" element={guard('online-orders', <OnlineOrders />)} />

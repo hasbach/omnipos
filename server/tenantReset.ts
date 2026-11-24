@@ -164,6 +164,11 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
     db.prepare("DELETE FROM stock_adjustments WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stakeholder_balance_log WHERE tenant_id = ?").run(t);
     for (const table of ['order_events', 'order_lines', 'orders']) db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).run(t);
+    for (const table of [
+      'or_owner_draw_items', 'or_owner_draws', 'or_po_commitment_items', 'or_po_commitments',
+      'or_cash_bucket_ledger', 'or_action_queue', 'or_pipeline_runs',
+    ]) db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).run(t);
+    db.prepare("UPDATE or_cash_buckets SET current_balance = 0 WHERE tenant_id = ?").run(t);
     clearSyncCursors(t); // the local rows are gone: pull everything again from scratch
     clearTombstones(t); // the cloud copy was purged too: nothing left to retry or guard against
     // Balances derive from baseline + transactions; with no transactions left, zero both.
@@ -172,17 +177,24 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
 
   if (scopes.includes("stock")) {
     db.prepare("UPDATE products SET stock = 0 WHERE tenant_id = ? AND IFNULL(stock, 0) <> 0").run(t);
+    for (const table of ['or_cycle_count_items', 'or_cycle_count_sessions', 'or_stock_anomalies', 'or_sku_metrics']) {
+      db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).run(t);
+    }
   }
 
   if (scopes.includes("products")) {
     // The tenant's online-store listings point at these products; the store itself is kept (empty).
     db.prepare("DELETE FROM store_listings WHERE tenant_id = ?").run(t);
+    for (const table of ['or_cycle_count_items', 'or_cycle_count_sessions', 'or_stock_anomalies', 'or_sku_metrics']) {
+      db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).run(t);
+    }
     db.prepare("DELETE FROM product_barcodes WHERE product_id IN (SELECT id FROM products WHERE tenant_id = ?)").run(t);
     db.prepare("DELETE FROM product_units WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM products WHERE tenant_id = ?").run(t);
   }
 
   if (scopes.includes("parties")) {
+    db.prepare("DELETE FROM or_supplier_profiles WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM stakeholders WHERE tenant_id = ? AND id IS NOT ?").run(t, walkInId);
   }
 }

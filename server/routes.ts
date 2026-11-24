@@ -33,6 +33,11 @@ import { callRpc } from './cloudCall.js';
 import { loadCompletableOrder, orderEffectiveState, orderSaleExists, orderPricedItems } from './orderSale.js';
 import { applyResult, setupOrderRoutes } from './orders.js';
 import { setupCommerceRoutes } from "./commerce.js";
+import { setupOrRoutes } from "./or/routes.js";
+import { isOrLicenseValid } from "./or/license.js";
+import { recordStockAnomaly } from "./or/cycleCount.js";
+import { runNightlyOrPipeline } from "./or/pipeline.js";
+import { localDateIso } from "./or/coreBridge.js";
 import { normalizeLevel, saleLineUnitPrice, saleLineUnitPriceLbp, lineTotal, computeTotals, uomUnitPrice, uomUnitPriceLbp, type PriceLevel } from "./pricing.js";
 import {
   loadUnitsByProduct, loadUnitsForProduct, loadUnit, normalizeUnitsPayload, assertBarcodesFree, saveProductUnits,
@@ -295,12 +300,12 @@ async function establishLogin(
       .get(cloudTenant.global_id, cloudTenant.email) as any;
     let localId: number;
     if (existing) {
-      db.prepare(`UPDATE tenants SET global_id = ?, name = ?, email = ?, password = ?, local_license_type = ?, local_license_expiry = ?, online_license_type = ?, online_license_expiry = ?, current_version = COALESCE(?, current_version), available_version = COALESCE(?, available_version), scheduled_update_at = ? WHERE id = ?`)
-        .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry, cloudTenant.current_version, cloudTenant.available_version, cloudTenant.scheduled_update_at, existing.id);
+      db.prepare(`UPDATE tenants SET global_id = ?, name = ?, email = ?, password = ?, local_license_type = ?, local_license_expiry = ?, online_license_type = ?, online_license_expiry = ?, or_license_type = COALESCE(?, or_license_type), or_license_expiry = ?, current_version = COALESCE(?, current_version), available_version = COALESCE(?, available_version), scheduled_update_at = ? WHERE id = ?`)
+        .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry, cloudTenant.or_license_type ?? 'none', cloudTenant.or_license_expiry ?? null, cloudTenant.current_version, cloudTenant.available_version, cloudTenant.scheduled_update_at, existing.id);
       localId = existing.id;
     } else {
-      const insert = db.prepare(`INSERT INTO tenants (global_id, name, email, password, local_license_type, local_license_expiry, online_license_type, online_license_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry);
+      const insert = db.prepare(`INSERT INTO tenants (global_id, name, email, password, local_license_type, local_license_expiry, online_license_type, online_license_expiry, or_license_type, or_license_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(cloudTenant.global_id, cloudTenant.name, cloudTenant.email, cloudTenant.password, cloudTenant.local_license_type, cloudTenant.local_license_expiry, cloudTenant.online_license_type, cloudTenant.online_license_expiry, cloudTenant.or_license_type ?? 'none', cloudTenant.or_license_expiry ?? null);
       localId = Number(insert.lastInsertRowid);
     }
 
@@ -366,6 +371,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   setupCashAccountRoutes(app, authenticate, broadcast);
   setupCommerceRoutes(app, authenticate);
   setupOrderRoutes(app, authenticate, broadcast);
+  setupOrRoutes(app, authenticate, broadcast);
   // API Routes
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
@@ -422,6 +428,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         local_license_expiry: tenant.local_license_expiry,
         online_license_type: tenant.online_license_type,
         online_license_expiry: tenant.online_license_expiry,
+        or_license_type: tenant.or_license_type ?? 'none',
+        or_license_expiry: tenant.or_license_expiry ?? null,
+        or_license_valid: isOrLicenseValid(tenant.id),
         current_version: tenant.current_version,
         available_version: tenant.available_version,
         scheduled_update_at: tenant.scheduled_update_at
@@ -565,6 +574,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       local_license_expiry: tenant.local_license_expiry,
       online_license_type: tenant.online_license_type,
       online_license_expiry: tenant.online_license_expiry,
+      or_license_type: tenant.or_license_type ?? 'none',
+      or_license_expiry: tenant.or_license_expiry ?? null,
+      or_license_valid: isOrLicenseValid(tenant.id),
       current_version: tenant.current_version,
       available_version: tenant.available_version,
       scheduled_update_at: tenant.scheduled_update_at
@@ -584,7 +596,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     }
     const { data, error } = await session.client
       .from('tenants')
-      .select('global_id, name, email, local_license_type, local_license_expiry, online_license_type, online_license_expiry, created_at')
+      .select('global_id, name, email, local_license_type, local_license_expiry, online_license_type, online_license_expiry, or_license_type, or_license_expiry, created_at')
       .order('created_at', { ascending: false });
     if (error) {
       return res.status(500).json({ error: error.message });
@@ -628,7 +640,11 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       return res.status(503).json({ error: "Cloud session unavailable. Please log out and log back in." });
     }
     const { id } = req.params; // tenant global_id (UUID)
-    const { local_license_type, local_license_expiry, online_license_type, online_license_expiry } = req.body;
+    const {
+      local_license_type, local_license_expiry,
+      online_license_type, online_license_expiry,
+      or_license_type, or_license_expiry,
+    } = req.body;
 
     const { error } = await session.client.rpc('admin_update_tenant_license', {
       p_tenant_id: id,
@@ -636,6 +652,10 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       p_local_license_expiry: local_license_expiry || null,
       p_online_license_type: online_license_type,
       p_online_license_expiry: online_license_expiry || null,
+      ...(or_license_type !== undefined ? {
+        p_or_license_type: or_license_type || 'none',
+        p_or_license_expiry: or_license_expiry || null,
+      } : {}),
     });
     if (error) {
       return res.status(500).json({ error: error.message });
@@ -643,8 +663,14 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
     // Mirror into the local row too, if this tenant happens to exist locally.
     try {
-      db.prepare(`UPDATE tenants SET local_license_type = ?, local_license_expiry = ?, online_license_type = ?, online_license_expiry = ?, updated_at = CURRENT_TIMESTAMP WHERE global_id = ?`)
-        .run(local_license_type, local_license_expiry || null, online_license_type, online_license_expiry || null, id);
+      db.prepare(`UPDATE tenants SET local_license_type = ?, local_license_expiry = ?, online_license_type = ?, online_license_expiry = ?, or_license_type = COALESCE(?, or_license_type), or_license_expiry = CASE WHEN ? IS NOT NULL THEN ? ELSE or_license_expiry END, updated_at = CURRENT_TIMESTAMP WHERE global_id = ?`)
+        .run(
+          local_license_type, local_license_expiry || null,
+          online_license_type, online_license_expiry || null,
+          or_license_type ?? null,
+          or_license_type ?? null, or_license_expiry || null,
+          id
+        );
     } catch { /* local mirror is best-effort */ }
 
     res.json({ success: true });
@@ -814,6 +840,14 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       );
       broadcast({ type: 'TRANSACTIONS_UPDATED' }, tenantId);
       broadcast({ type: 'CASH_FLOW_UPDATED' }, tenantId);
+      if (isOrLicenseValid(tenantId)) {
+        try {
+          runNightlyOrPipeline(tenantId, localDateIso(), 'eod_settlement', false);
+          broadcast({ type: 'OR_UPDATED' }, tenantId);
+        } catch (orErr) {
+          console.error('[OR] Post-settlement pipeline error:', orErr);
+        }
+      }
 
       if (!cloudPurged) {
         return res.status(207).json({
@@ -1869,6 +1903,12 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         );
         if (item.trackInventory !== 0) {
           updateStock.run(item.pieces, item.productId, tenantId);
+          if (type === 'sale' && isOrLicenseValid(tenantId)) {
+            const pRow = db.prepare("SELECT stock FROM products WHERE id = ? AND tenant_id = ?").get(item.productId, tenantId) as any;
+            if (pRow && Number(pRow.stock) < -1e-9) {
+              recordStockAnomaly(tenantId, item.productId, 'NEGATIVE_STOCK_SALE', resolvedUserId ?? null);
+            }
+          }
         }
       }
 

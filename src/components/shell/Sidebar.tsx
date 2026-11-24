@@ -68,6 +68,10 @@ const NAV_GROUPS: NavGroup[] = [
       { key: 'shell_nav_settlement', icon: CalendarCheck, path: '/dashboard/settlement' },
     ],
   },
+  {
+    key: 'shell_group_or',
+    items: [{ key: 'shell_nav_or', icon: Activity, path: '/dashboard/or' }],
+  },
   { key: 'shell_group_reports', items: [{ key: 'shell_nav_reports', icon: BarChart3, path: '/dashboard/reports' }] },
   {
     key: 'shell_group_admin',

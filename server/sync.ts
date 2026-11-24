@@ -33,6 +33,21 @@ const fkMap: Record<string, Record<string, string>> = {
   order_events: { tenant_id: 'tenants', order_id: 'orders' },
   stores: { tenant_id: 'tenants' },
   store_listings: { tenant_id: 'tenants', store_id: 'stores', product_id: 'products' },
+  // OmniPulse OR (paid add-on module)
+  or_tenant_config: { tenant_id: 'tenants', owner_stakeholder_id: 'stakeholders' },
+  or_draw_policies: { tenant_id: 'tenants' },
+  or_fixed_obligations: { tenant_id: 'tenants' },
+  or_cash_buckets: { tenant_id: 'tenants' },
+  or_cash_bucket_ledger: { tenant_id: 'tenants', bucket_id: 'or_cash_buckets' },
+  or_supplier_profiles: { tenant_id: 'tenants', supplier_id: 'stakeholders' },
+  or_owner_draws: { tenant_id: 'tenants', owner_user_id: 'users', recorded_by_user_id: 'users' },
+  or_owner_draw_items: { tenant_id: 'tenants', owner_draw_id: 'or_owner_draws', product_id: 'products' },
+  or_po_commitments: { tenant_id: 'tenants', supplier_id: 'stakeholders', approved_by_user_id: 'users' },
+  or_po_commitment_items: { tenant_id: 'tenants', po_commitment_id: 'or_po_commitments', product_id: 'products' },
+  or_stock_anomalies: { tenant_id: 'tenants', product_id: 'products', reported_by_user_id: 'users' },
+  or_cycle_count_sessions: { tenant_id: 'tenants', assigned_user_id: 'users' },
+  or_cycle_count_items: { tenant_id: 'tenants', session_id: 'or_cycle_count_sessions', product_id: 'products' },
+  or_action_queue: { tenant_id: 'tenants' },
 };
 
 function getGlobalId(tableName: string, localId: number) {
@@ -264,10 +279,18 @@ export function cleanQuantity(v: any) {
 // The tenants row is authoritative in the cloud (created at registration, license edited by the
 // super-admin) — the desktop only ever PULLS it, never pushes, so it can't stomp a freshly
 // activated license with a stale local copy.
+const OR_SYNC_TABLES = [
+  'or_tenant_config', 'or_draw_policies', 'or_fixed_obligations', 'or_cash_buckets',
+  'or_cash_bucket_ledger', 'or_supplier_profiles', 'or_owner_draws', 'or_owner_draw_items',
+  'or_po_commitments', 'or_po_commitment_items', 'or_stock_anomalies',
+  'or_cycle_count_sessions', 'or_cycle_count_items', 'or_action_queue',
+];
+
 const PUSH_TABLES = [
   'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
+  ...OR_SYNC_TABLES,
 ];
 
 export const ORDER_PULL_TABLES = ['orders', 'order_lines', 'order_events'];
@@ -281,6 +304,7 @@ export const COLD_PULL_TABLES = [
   'tenants', 'currencies', 'settings', 'cash_flow_categories',
   'daily_reports', 'cashier_shifts', 'settlement_corrections',
   'stores', 'store_listings',
+  ...OR_SYNC_TABLES,
 ];
 // Pull order: parents before children (FK translation needs the parent row locally).
 const PULL_TABLES = [
@@ -288,6 +312,7 @@ const PULL_TABLES = [
   'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', ...ORDER_PULL_TABLES, 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
+  ...OR_SYNC_TABLES,
 ];
 
 // Should the active tenant sync at all? Seed/super-admin accounts have no cloud business data.

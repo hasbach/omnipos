@@ -243,6 +243,7 @@ server.on('error', (err: any) => {
 
 import { startSyncEngine } from './server/sync.js';
 import { runRepair179 } from './server/repair179.js';
+import { runOrPipelineCatchup } from './server/or/pipeline.js';
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://localhost:${PORT}`);
@@ -258,4 +259,12 @@ server.listen(PORT, "0.0.0.0", () => {
 
   // Start the background offline-first cloud sync
   startSyncEngine({ onPulled: ({ tenantId, newSubmitted, changed }) => broadcast({ type: 'ORDERS_UPDATED', newSubmitted, changed }, tenantId) });
+
+  // OmniPulse OR: idempotent startup catch-up + hourly check for licensed tenants
+  try {
+    runOrPipelineCatchup('startup');
+  } catch (e) {
+    console.error('[OR] Startup catch-up failed:', e);
+  }
+  setInterval(() => runOrPipelineCatchup('hourly'), 60 * 60 * 1000).unref();
 });

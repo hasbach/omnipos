@@ -27,11 +27,13 @@ export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
   { area: 'pos', keys: ['pos.discount', 'pos.price_override', 'pos.refund', 'pos.open_dashboard'] },
   { area: 'commerce', keys: ['store.view', 'store.manage', 'store.publish'] },
   { area: 'orders', keys: ['orders.view', 'orders.manage'] },
+  { area: 'or', keys: ['or.view', 'or.manage', 'or.owner_draw', 'or.po_lock', 'or.cycle_count'] },
 ];
 
 // Online-store keys (specs/001-commerce-domain-foundation): admin only until granted, so upgrading never
 // widens what an existing role can do.
 const COMMERCE_PERMISSIONS = ['store.view', 'store.manage', 'store.publish'];
+const OR_ADMIN_ONLY = ['or.manage', 'or.owner_draw'];
 
 export const ALL_PERMISSIONS: string[] = PERMISSION_GROUPS.flatMap((g) => g.keys);
 const PERMISSION_SET = new Set(ALL_PERMISSIONS);
@@ -43,23 +45,23 @@ export const ROLES = ['admin', ...EDITABLE_ROLES] as const;
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: [...ALL_PERMISSIONS],
   // Live Monitor is admin + accountant only by default (owner's request).
-  manager: ALL_PERMISSIONS.filter((k) => !['users.manage', 'settings.manage', 'data.reset', 'live_monitor.view', ...COMMERCE_PERMISSIONS].includes(k)),
+  manager: ALL_PERMISSIONS.filter((k) => !['users.manage', 'settings.manage', 'data.reset', 'live_monitor.view', ...COMMERCE_PERMISSIONS, ...OR_ADMIN_ONLY].includes(k)),
   accountant: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'live_monitor.view', 'purchases.view', 'parties.view',
     'cash_flow.view', 'cash_flow.add', 'cash_flow.edit',
     'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct',
-    'reports.view', 'logs.view', 'pos.open_dashboard', 'orders.view',
+    'reports.view', 'logs.view', 'pos.open_dashboard', 'orders.view', 'or.view',
   ],
   staff: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'products.view', 'stock.view', 'parties.view',
-    'pos.discount', 'pos.refund', 'pos.open_dashboard', 'orders.view',
+    'pos.discount', 'pos.refund', 'pos.open_dashboard', 'orders.view', 'or.cycle_count',
   ],
-  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard', 'orders.view'],
+  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard', 'orders.view', 'or.cycle_count'],
 };
 
 // ---- storage -------------------------------------------------------------------------------------
 
-const ROLE_PERMISSIONS_VERSION = 3;
+const ROLE_PERMISSIONS_VERSION = 4;
 
 /**
  * v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
@@ -158,6 +160,25 @@ function isCustomerStandingDiscount(tenantId: number, stakeholderId: unknown, pe
 
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
+  // --- OmniPulse OR (paid add-on module) ---
+  { method: 'GET', pattern: '/api/or/status', need: null },
+  { method: 'GET', pattern: '/api/or/cycle-counts', need: ['or.cycle_count', 'or.view'] },
+  { method: 'GET', pattern: '/api/or/cycle-counts/*', need: ['or.cycle_count', 'or.view'] },
+  { method: 'POST', pattern: '/api/or/cycle-counts/:id/submit', need: ['or.cycle_count', 'or.manage'] },
+  { method: 'POST', pattern: '/api/or/cycle-counts/:id/approve', need: 'or.manage' },
+  { method: 'POST', pattern: '/api/or/cycle-counts/generate', need: ['or.cycle_count', 'or.manage'] },
+  { method: 'POST', pattern: '/api/or/anomalies', need: null }, // POS quick button ("Mark Shelf Empty")
+  { method: 'POST', pattern: '/api/or/owner-draws', need: 'or.owner_draw' },
+  { method: 'GET', pattern: '/api/or/owner-draws', need: ['or.owner_draw', 'or.view'] },
+  { method: 'POST', pattern: '/api/or/po-commitments', need: 'or.po_lock' },
+  { method: 'POST', pattern: '/api/or/po-commitments/*', need: 'or.po_lock' },
+  { method: 'PUT', pattern: '/api/or/po-commitments/*', need: 'or.po_lock' },
+  { method: 'DELETE', pattern: '/api/or/po-commitments/*', need: 'or.po_lock' },
+  { method: 'GET', pattern: '/api/or/*', need: 'or.view' },
+  { method: 'POST', pattern: '/api/or/*', need: 'or.manage' },
+  { method: 'PUT', pattern: '/api/or/*', need: 'or.manage' },
+  { method: 'DELETE', pattern: '/api/or/*', need: 'or.manage' },
+
   { method: 'GET', pattern: '/api/orders', need: 'orders.view' },
   { method: 'GET', pattern: '/api/orders/*', need: 'orders.view' },
   { method: 'POST', pattern: '/api/orders/:id/*', need: 'orders.manage' },

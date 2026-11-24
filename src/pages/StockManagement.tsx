@@ -75,6 +75,8 @@ export default function StockManagement() {
 
   const [adjustTarget, setAdjustTarget] = useState<AdjustStockTarget | null>(null);
   const [movementsTarget, setMovementsTarget] = useState<{ id: number; name: string } | null>(null);
+  const [orLicensed, setOrLicensed] = useState(false);
+  const [flaggingId, setFlaggingId] = useState<number | null>(null);
 
   const fetchAll = useCallback(() => {
     setLoading(true);
@@ -104,6 +106,7 @@ export default function StockManagement() {
   useEffect(() => {
     fetchAll();
     api.get<Currency[]>('/api/currencies').then(setCurrencies).catch(() => {});
+    api.get<{ licensed?: boolean }>('/api/or/status').then((s) => setOrLicensed(!!s?.licensed)).catch(() => {});
 
     const handleSync = (e: any) => {
       if (e.detail?.type === 'PRODUCTS_UPDATED') fetchAll();
@@ -141,6 +144,21 @@ export default function StockManagement() {
   }, [trackedProducts, search, category, status]);
 
   const openAdjust = (p: Product) => setAdjustTarget({ id: p.id, name: p.name, stock: p.stock, unit: p.unit });
+
+  const handleMarkShelfEmpty = useCallback(
+    async (p: Product) => {
+      setFlaggingId(p.id);
+      try {
+        await api.post('/api/or/anomalies', { product_id: p.id, anomaly_type: 'STAFF_SHELF_EMPTY' });
+        toast.success(`Flagged "${p.name}" as shelf empty for morning cycle count.`);
+      } catch (err: any) {
+        toast.error(err.message || 'Failed to flag shelf empty');
+      } finally {
+        setFlaggingId(null);
+      }
+    },
+    [toast],
+  );
   const openMovements = (p: Product) => setMovementsTarget({ id: p.id, name: p.name });
 
   const levelColumns = useMemo<DataTableColumn<Product>[]>(
@@ -200,11 +218,21 @@ export default function StockManagement() {
                 {t('stock_adjust', 'Adjust')}
               </Button>
             )}
+            {orLicensed && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={flaggingId === p.id}
+                onClick={(e) => { e.stopPropagation(); handleMarkShelfEmpty(p); }}
+              >
+                {t('or_mark_shelf_empty', 'Shelf Empty')}
+              </Button>
+            )}
           </div>
         ),
       },
     ],
-    [t, canAdjust],
+    [t, canAdjust, orLicensed, flaggingId, handleMarkShelfEmpty],
   );
 
   const adjustmentColumns = useMemo<DataTableColumn<StockAdjustmentRow>[]>(

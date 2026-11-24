@@ -41,6 +41,8 @@ db.exec(`
     local_license_expiry DATETIME,
     online_license_type TEXT CHECK(online_license_type IN ('monthly', 'lifetime')) DEFAULT 'monthly',
     online_license_expiry DATETIME,
+    or_license_type TEXT CHECK(or_license_type IN ('none', 'monthly', 'year', 'lifetime')) DEFAULT 'none',
+    or_license_expiry DATETIME,
     current_version TEXT DEFAULT '2.5.0',
     available_version TEXT DEFAULT '2.5.0',
     scheduled_update_at DATETIME,
@@ -370,6 +372,14 @@ if (!tenantCols.some((c: any) => c.name === 'local_license_type')) {
     db.exec(`ALTER TABLE tenants ADD COLUMN online_license_expiry DATETIME`);
   } catch (e) {
     console.error("Migration error (tenants license):", e);
+  }
+}
+if (!tenantCols.some((c: any) => c.name === 'or_license_type')) {
+  try {
+    db.exec(`ALTER TABLE tenants ADD COLUMN or_license_type TEXT CHECK(or_license_type IN ('none', 'monthly', 'year', 'lifetime')) DEFAULT 'none'`);
+    db.exec(`ALTER TABLE tenants ADD COLUMN or_license_expiry DATETIME`);
+  } catch (e) {
+    console.error("Migration error (tenants or_license):", e);
   }
 }
 
@@ -728,11 +738,265 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_global_id) WHERE order_global_id IS NOT NULL;
 `);
 
+// OmniPulse OR (Paid Add-On Module): Operations Research tables (Owner Draw, PO Cash-Lock,
+// 5-Minute ABC Cycle Count, Virtual Cash Buckets, Fixed Obligations, Nightly Pipeline).
+// Created before the sync-metadata block below so synced tables receive global_id/updated_at/
+// deleted_at + triggers automatically. All monetary columns are stored in USD base.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS or_tenant_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL UNIQUE,
+    business_type TEXT NOT NULL DEFAULT 'RETAIL' CHECK(business_type IN ('RETAIL', 'RESTAURANT', 'SERVICE', 'HYBRID')),
+    survival_mode TEXT NOT NULL DEFAULT 'RECOVERY' CHECK(survival_mode IN ('CRISIS', 'RECOVERY', 'GROWTH')),
+    enable_owner_draw INTEGER NOT NULL DEFAULT 1,
+    enable_po_cash_lock INTEGER NOT NULL DEFAULT 1,
+    enable_cycle_count INTEGER NOT NULL DEFAULT 1,
+    enable_recipe_deduction INTEGER NOT NULL DEFAULT 0,
+    min_drawer_float REAL NOT NULL DEFAULT 30.0,
+    cycle_count_daily_limit INTEGER NOT NULL DEFAULT 8,
+    variance_alert_pct REAL NOT NULL DEFAULT 5.0,
+    owner_stakeholder_id INTEGER,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS or_draw_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    survival_mode TEXT NOT NULL CHECK(survival_mode IN ('CRISIS', 'RECOVERY', 'GROWTH')),
+    max_daily_cash REAL NOT NULL DEFAULT 0,
+    max_daily_goods_cost REAL NOT NULL DEFAULT 0,
+    max_monthly_total REAL NOT NULL DEFAULT 0,
+    require_override_reason INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(tenant_id, survival_mode),
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS or_fixed_obligations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'opex',
+    amount_usd REAL NOT NULL,
+    frequency TEXT NOT NULL DEFAULT 'monthly' CHECK(frequency IN ('daily', 'weekly', 'monthly', 'yearly')),
+    due_day INTEGER DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_obligations_tenant ON or_fixed_obligations(tenant_id, active);
+
+  CREATE TABLE IF NOT EXISTS or_cash_buckets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    target_amount REAL NOT NULL DEFAULT 0,
+    current_balance REAL NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(tenant_id, code),
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS or_cash_bucket_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    bucket_id INTEGER NOT NULL,
+    tx_type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    reference_type TEXT,
+    reference_id INTEGER,
+    note TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY(bucket_id) REFERENCES or_cash_buckets(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_bucket_ledger_tenant ON or_cash_bucket_ledger(tenant_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS or_supplier_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    lead_time_days INTEGER NOT NULL DEFAULT 2,
+    fill_rate_score REAL NOT NULL DEFAULT 1.0,
+    deliveries_count INTEGER NOT NULL DEFAULT 0,
+    default_payment_plan TEXT NOT NULL DEFAULT 'CASH_ON_DELIVERY' CHECK(default_payment_plan IN ('CASH_ON_DELIVERY', 'CREDIT', 'SPLIT')),
+    min_order_usd REAL NOT NULL DEFAULT 0,
+    delivery_fee_usd REAL NOT NULL DEFAULT 0,
+    delivery_days TEXT,
+    notes TEXT,
+    UNIQUE(tenant_id, supplier_id),
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS or_owner_draws (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    owner_user_id INTEGER,
+    recorded_by_user_id INTEGER,
+    draw_date TEXT NOT NULL,
+    draw_type TEXT NOT NULL CHECK(draw_type IN ('CASH', 'GOODS', 'MEAL_RECIPE', 'MIXED')),
+    cash_amount REAL NOT NULL DEFAULT 0,
+    currency TEXT DEFAULT 'USD',
+    exchange_rate REAL DEFAULT 1,
+    goods_cost_total REAL NOT NULL DEFAULT 0,
+    total_draw_value REAL NOT NULL DEFAULT 0,
+    cash_source TEXT,
+    account_id INTEGER,
+    exceeded_cap INTEGER NOT NULL DEFAULT 0,
+    override_reason TEXT,
+    core_cash_tx_id INTEGER,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_owner_draws_tenant_date ON or_owner_draws(tenant_id, draw_date);
+
+  CREATE TABLE IF NOT EXISTS or_owner_draw_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    owner_draw_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    quantity REAL NOT NULL,
+    unit_cost_snapshot REAL NOT NULL DEFAULT 0,
+    line_cost_total REAL NOT NULL DEFAULT 0,
+    core_stock_tx_id INTEGER,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY(owner_draw_id) REFERENCES or_owner_draws(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_owner_draw_items_draw ON or_owner_draw_items(owner_draw_id);
+
+  CREATE TABLE IF NOT EXISTS or_po_commitments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    po_number TEXT,
+    core_transaction_id INTEGER,
+    supplier_id INTEGER NOT NULL,
+    expected_delivery_date TEXT NOT NULL,
+    payment_plan TEXT NOT NULL DEFAULT 'CASH_ON_DELIVERY' CHECK(payment_plan IN ('CASH_ON_DELIVERY', 'CREDIT', 'SPLIT')),
+    estimated_order_total REAL NOT NULL DEFAULT 0,
+    locked_cash_amount REAL NOT NULL DEFAULT 0,
+    actual_received_total REAL NOT NULL DEFAULT 0,
+    actual_cash_paid REAL NOT NULL DEFAULT 0,
+    actual_credit_added REAL NOT NULL DEFAULT 0,
+    released_cash_amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT', 'APPROVED_LOCKED', 'PARTIALLY_RECEIVED', 'SETTLED', 'CANCELLED')),
+    approved_by_user_id INTEGER,
+    approved_at DATETIME,
+    settled_at DATETIME,
+    notes TEXT,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_po_commit_delivery ON or_po_commitments(tenant_id, expected_delivery_date, status);
+
+  CREATE TABLE IF NOT EXISTS or_po_commitment_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    po_commitment_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    ordered_qty REAL NOT NULL,
+    received_qty REAL NOT NULL DEFAULT 0,
+    unit_cost REAL NOT NULL DEFAULT 0,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY(po_commitment_id) REFERENCES or_po_commitments(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_po_items_commit ON or_po_commitment_items(po_commitment_id);
+
+  CREATE TABLE IF NOT EXISTS or_stock_anomalies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    anomaly_type TEXT NOT NULL CHECK(anomaly_type IN ('NEGATIVE_STOCK_SALE', 'STAFF_SHELF_EMPTY', 'HIGH_VARIANCE', 'EXPIRY_CHECK')),
+    reported_by_user_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN', 'QUEUED', 'RESOLVED')),
+    resolved_at DATETIME,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_anomaly_open ON or_stock_anomalies(tenant_id, status);
+
+  CREATE TABLE IF NOT EXISTS or_cycle_count_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    session_date TEXT NOT NULL,
+    session_type TEXT NOT NULL DEFAULT 'DAILY_ABC' CHECK(session_type IN ('DAILY_ABC', 'PERISHABLE_CHECK', 'ANOMALY_AUDIT', 'SPOT_CHECK')),
+    assigned_user_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL', 'COMPLETED')),
+    total_items_planned INTEGER NOT NULL DEFAULT 0,
+    total_variance_cost REAL NOT NULL DEFAULT 0,
+    started_at DATETIME,
+    completed_at DATETIME,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_cycle_session_date ON or_cycle_count_sessions(tenant_id, session_date);
+
+  CREATE TABLE IF NOT EXISTS or_cycle_count_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    session_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    priority_reason TEXT,
+    system_qty_snapshot REAL NOT NULL DEFAULT 0,
+    counted_qty REAL,
+    variance_qty REAL,
+    unit_cost_snapshot REAL NOT NULL DEFAULT 0,
+    variance_cost REAL,
+    core_adjustment_tx_id INTEGER,
+    counted_at DATETIME,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY(session_id) REFERENCES or_cycle_count_sessions(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_cycle_items_session ON or_cycle_count_items(session_id);
+
+  CREATE TABLE IF NOT EXISTS or_action_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    action_date TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'MEDIUM' CHECK(priority IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW')),
+    category TEXT NOT NULL,
+    title TEXT NOT NULL,
+    details TEXT,
+    reference_type TEXT,
+    reference_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN', 'DISMISSED', 'DONE')),
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_or_action_queue_tenant ON or_action_queue(tenant_id, status, action_date);
+
+  CREATE TABLE IF NOT EXISTS or_sku_metrics (
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    weighted_daily_sales REAL NOT NULL DEFAULT 0,
+    demand_std_30d REAL NOT NULL DEFAULT 0,
+    safety_stock REAL NOT NULL DEFAULT 0,
+    primary_supplier_id INTEGER,
+    revenue_30d REAL NOT NULL DEFAULT 0,
+    gross_margin_30d REAL NOT NULL DEFAULT 0,
+    days_of_supply REAL,
+    abc_class TEXT NOT NULL DEFAULT 'C' CHECK(abc_class IN ('A', 'B', 'C')),
+    cash_velocity_score REAL NOT NULL DEFAULT 0,
+    last_counted_at DATETIME,
+    computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(tenant_id, product_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS or_pipeline_runs (
+    tenant_id INTEGER NOT NULL,
+    run_date TEXT NOT NULL,
+    trigger_source TEXT NOT NULL DEFAULT 'manual',
+    summary_json TEXT,
+    ran_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(tenant_id, run_date)
+  );
+`);
+try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN min_order_usd REAL NOT NULL DEFAULT 0;"); } catch {}
+try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN delivery_fee_usd REAL NOT NULL DEFAULT 0;"); } catch {}
+try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN demand_std_30d REAL NOT NULL DEFAULT 0;"); } catch {}
+try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN safety_stock REAL NOT NULL DEFAULT 0;"); } catch {}
+try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN primary_supplier_id INTEGER;"); } catch {}
+try { db.exec("ALTER TABLE or_tenant_config ADD COLUMN owner_stakeholder_id INTEGER;"); } catch {}
+
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 // Local-only tables are never synced, so they get no sync columns or triggers (adding created_at
 // to them failed with "non-constant default" at every start). sync_tombstones' global_id is the
 // TOMBSTONED row's id, not its own.
-const localOnlyTables = new Set(['sync_tombstones', '_migrations', 'cloud_session', 'sync_cursor']);
+const localOnlyTables = new Set(['sync_tombstones', '_migrations', 'cloud_session', 'sync_cursor', 'or_sku_metrics', 'or_pipeline_runs']);
 const allTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
 for (const table of allTables) {
   if (localOnlyTables.has(table.name)) continue;

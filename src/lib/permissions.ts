@@ -12,10 +12,12 @@ export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
   { area: 'pos', keys: ['pos.discount', 'pos.price_override', 'pos.refund', 'pos.open_dashboard'] },
   { area: 'commerce', keys: ['store.view', 'store.manage', 'store.publish'] },
   { area: 'orders', keys: ['orders.view', 'orders.manage'] },
+  { area: 'or', keys: ['or.view', 'or.manage', 'or.owner_draw', 'or.po_lock', 'or.cycle_count'] },
 ];
 
 // Online-store keys: admin only until granted (mirror of server/permissions.ts).
 const COMMERCE_PERMISSIONS = ['store.view', 'store.manage', 'store.publish'];
+const OR_ADMIN_ONLY = ['or.manage', 'or.owner_draw'];
 
 export const ALL_PERMISSIONS: string[] = PERMISSION_GROUPS.flatMap((g) => g.keys);
 
@@ -27,18 +29,18 @@ export const EDITABLE_ROLES = ROLES.filter((r) => r !== 'admin');
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: [...ALL_PERMISSIONS],
   // Live Monitor is admin + accountant only by default (owner's request).
-  manager: ALL_PERMISSIONS.filter((k) => !['users.manage', 'settings.manage', 'data.reset', 'live_monitor.view', ...COMMERCE_PERMISSIONS].includes(k)),
+  manager: ALL_PERMISSIONS.filter((k) => !['users.manage', 'settings.manage', 'data.reset', 'live_monitor.view', ...COMMERCE_PERMISSIONS, ...OR_ADMIN_ONLY].includes(k)),
   accountant: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'live_monitor.view', 'purchases.view', 'parties.view',
     'cash_flow.view', 'cash_flow.add', 'cash_flow.edit',
     'settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct',
-    'reports.view', 'logs.view', 'pos.open_dashboard', 'orders.view',
+    'reports.view', 'logs.view', 'pos.open_dashboard', 'orders.view', 'or.view',
   ],
   staff: [
     'dashboard.overview', 'invoices.view', 'daily_sales.view', 'products.view', 'stock.view', 'parties.view',
-    'pos.discount', 'pos.refund', 'pos.open_dashboard', 'orders.view',
+    'pos.discount', 'pos.refund', 'pos.open_dashboard', 'orders.view', 'or.cycle_count',
   ],
-  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard', 'orders.view'],
+  cashier: ['daily_sales.view', 'pos.refund', 'pos.open_dashboard', 'orders.view', 'or.cycle_count'],
 };
 
 /** i18n key of a permission's label: 'cash_flow.edit' -> 'perm_cash_flow_edit' (description: `${key}_desc`). */
@@ -63,6 +65,7 @@ export const PAGE_PERMISSIONS: Record<string, string[] | null> = {
   'settlement': ['settlement.cash_out', 'settlement.close', 'settlement.view', 'settlement.correct'],
   'logs': ['logs.view'],
   'online-orders': ['orders.view'],
+  'or': ['or.view', 'or.cycle_count'],
   // Open to everyone: appearance / language are personal; Settings.tsx hides the other sections by permission.
   'settings': null,
   'ui-kit': ['settings.manage'],
