@@ -58,6 +58,7 @@ import {
 } from "./settlement.js";
 import { isValidPaymentMethod, isRealMoney } from "./paymentMethods.js";
 import { setExtraBarcodes } from "./barcodes.js";
+import { loadBundleItemsByBundle, loadBundleItems, normalizeBundlePayload, saveBundleItems, clearBundleItems, isBundleComponent, expandBundleSale, bundleUnitCost } from "./bundles.js";
 
 // The super-admin's app-wide identity string ('hasbach') isn't a valid email, so Supabase Auth
 // can't use it directly — translate it to the real address backing that Auth user (kept in
@@ -146,7 +147,7 @@ function findOriginalSale(tenantId: number, originalTransactionId: number): { tx
   }
   if (!tx) return null;
   const items = db.prepare(
-    `SELECT id, product_id, quantity, unit_price, discount_type, discount_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty FROM ${itemsTable} WHERE transaction_id = ? ORDER BY id`
+    `SELECT id, product_id, quantity, unit_price, discount_type, discount_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, bundle_id, bundle_name, bundle_qty, bundle_line FROM ${itemsTable} WHERE transaction_id = ? ORDER BY id`
   ).all(originalTransactionId) as any[];
   return { tx, items };
 }
@@ -766,8 +767,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
       // Move transaction items
       db.prepare(`
-      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, global_id)
-      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, global_id
+      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id)
+      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id
       FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
@@ -945,10 +946,12 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       if (list) list.push(r.barcode); else extraByProduct.set(r.product_id, [r.barcode]);
     }
     const unitsByProduct = loadUnitsByProduct(tenantId);
+    const bundleItems = loadBundleItemsByBundle(tenantId);
     return products.map(p => ({
       ...p,
       barcodes: [p.barcode, ...(extraByProduct.get(p.id) || [])].filter(Boolean),
       units: unitsByProduct.get(p.id) || [],
+      ...(p.is_bundle ? { bundle_items: bundleItems.get(p.id) || [] } : {}),
     }));
   }
 
@@ -1037,6 +1040,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   // caller's db.transaction so a failure changes nothing.
   function saveProductBarcodesAndUnits(tenantId: number, productId: number, isNew: boolean, barcodes: any, unitsPayload: any) {
     const ownBarcodes: string[] = Array.isArray(barcodes) ? barcodes.map((b: any) => String(b ?? '').trim()).filter(Boolean) : [];
+    // A bundle has no units of measure of its own (its components carry them).
+    const isBundle = !!(db.prepare("SELECT IFNULL(is_bundle, 0) AS b FROM products WHERE id = ? AND tenant_id = ?").get(productId, tenantId) as any)?.b;
+    if (isBundle) unitsPayload = [];
     const units = unitsPayload === undefined || unitsPayload === null ? null : normalizeUnitsPayload(unitsPayload);
     assertBarcodesFree(tenantId, isNew ? null : productId, ownBarcodes, units || []);
 
@@ -1051,9 +1057,33 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     }
   }
 
+  // Bundle flag + component list (POST and PUT, inside the caller's db.transaction). `is_bundle`
+  // absent leaves the product as it is; `bundle_items` absent on an existing bundle keeps its list.
+  // A bundle never tracks stock itself (its components do), and a product that is a component of
+  // another bundle can't become one (no nesting).
+  function saveProductBundle(tenantId: number, productId: number, isNew: boolean, isBundleIn: any, bundleItems: any) {
+    const current = !!(db.prepare("SELECT IFNULL(is_bundle, 0) AS b FROM products WHERE id = ? AND tenant_id = ?").get(productId, tenantId) as any)?.b;
+    const isBundle = isBundleIn === undefined || isBundleIn === null ? current : (isBundleIn === true || isBundleIn === 1 || isBundleIn === '1');
+    if (!isBundle) {
+      if (current) {
+        db.prepare("UPDATE products SET is_bundle = 0 WHERE id = ? AND tenant_id = ?").run(productId, tenantId);
+        clearBundleItems(tenantId, productId);
+      }
+      return;
+    }
+    if (!current && !isNew && isBundleComponent(tenantId, productId)) {
+      throw new ValidationError("This product is part of another bundle, so it can't be a bundle itself.", 400, { code: 'BUNDLE_NESTED', field: 'is_bundle' });
+    }
+    if ((bundleItems !== undefined && bundleItems !== null) || !current) {
+      saveBundleItems(tenantId, productId, normalizeBundlePayload(tenantId, productId, bundleItems));
+    }
+    db.prepare("UPDATE products SET is_bundle = 1, track_inventory = 0, package_price = NULL, package_price_lbp = NULL, units_per_package = 1 WHERE id = ? AND tenant_id = ?").run(productId, tenantId);
+    db.prepare("UPDATE product_units SET deleted_at = CURRENT_TIMESTAMP WHERE product_id = ? AND tenant_id = ? AND deleted_at IS NULL").run(productId, tenantId);
+  }
+
   app.post("/api/products", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active } = req.body;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active, is_bundle, bundle_items } = req.body;
 
     try {
       const productId = db.transaction(() => {
@@ -1061,6 +1091,10 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           .run(tenantId, null, name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, stock, reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null);
         const newId = Number(result.lastInsertRowid);
         if (active !== undefined && active !== null) db.prepare("UPDATE products SET active = ? WHERE id = ? AND tenant_id = ?").run(active === 0 || active === false || active === '0' ? 0 : 1, newId, tenantId);
+        if (is_bundle) {
+          saveProductBundle(tenantId, newId, true, is_bundle, bundle_items);
+          db.prepare("UPDATE products SET stock = 0 WHERE id = ? AND tenant_id = ?").run(newId, tenantId);
+        }
         saveProductBarcodesAndUnits(tenantId, newId, true, barcodes, units);
         return newId;
       })();
@@ -1077,7 +1111,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   app.put("/api/products/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { id } = req.params;
-    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active } = req.body;
+    const { name, price, price_lbp, package_price, package_price_lbp, cost, cost_lbp, units_per_package, stock, reorder_point, track_inventory, category, currency, unit, barcodes, units, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, min_price, active, is_bundle, bundle_items } = req.body;
 
     try {
       db.transaction(() => {
@@ -1089,6 +1123,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           .run(name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, (stock === undefined || stock === null || stock === '') ? null : Number(stock), reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null, id, tenantId);
         // Same tolerance as before for an unknown id (a no-op update), but never touch barcodes/units
         // of a product that isn't this tenant's.
+        if (info.changes > 0) saveProductBundle(tenantId, Number(id), false, is_bundle, bundle_items);
         if (info.changes > 0) saveProductBarcodesAndUnits(tenantId, Number(id), false, barcodes, units);
         // `active` is optional: absent leaves the product's enabled/disabled state unchanged.
         if (info.changes > 0 && active !== undefined && active !== null) {
@@ -1224,6 +1259,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         barcodes: [product.barcode, ...extraBarcodes].filter(Boolean),
         units: loadUnitsForProduct(tenantId, product.id),
         matched_uom_id: matchedUomId,
+        ...(product.is_bundle ? { bundle_items: loadBundleItems(tenantId, product.id) } : {}),
       });
     }
     else res.status(404).json({ error: "Product not found" });
@@ -1594,6 +1630,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         if (!(Number.isFinite(item.quantity) && item.quantity > 0)) {
           return res.status(400).json({ error: `Invalid purchase quantity for product ${item.id}.`, field: `items.${idx}.quantity` });
         }
+        if ((db.prepare("SELECT IFNULL(is_bundle, 0) AS b FROM products WHERE id = ? AND tenant_id = ?").get(item.id, tenantId) as any)?.b) {
+          return res.status(400).json({ error: "A bundle can't be purchased - purchase its products instead.", code: 'BUNDLE_NOT_PURCHASABLE', field: `items.${idx}.id` });
+        }
       }
     }
 
@@ -1662,7 +1701,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       const getProduct = (id: number) => {
         if (!(id in productCache)) {
           productCache[id] = db.prepare(
-            "SELECT price, price_lbp, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, package_price, package_price_lbp, units_per_package, track_inventory, cost, min_price, stock, active FROM products WHERE id = ? AND tenant_id = ?"
+            "SELECT name, price, price_lbp, price_wholesale, price_wholesale_lbp, price_super_wholesale, price_super_wholesale_lbp, package_price, package_price_lbp, units_per_package, track_inventory, cost, min_price, stock, active, IFNULL(is_bundle, 0) AS is_bundle FROM products WHERE id = ? AND tenant_id = ?"
           ).get(id, tenantId) as any;
         }
         return productCache[id];
@@ -1678,6 +1717,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       const lbpRate = globalLocal?.rate || 1;
 
       let calculatedTotal = 0;
+      let bundleLineNo = 0;
       const processedItems = items.flatMap((item: any, idx: number) => {
         const product = getProduct(item.id);
 
@@ -1686,7 +1726,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         // from the client. A refund takes its unit from the original line instead (below).
         let uom: any = null;
         if (type !== 'refund' && item.uom_id !== undefined && item.uom_id !== null) {
-          uom = product ? loadUnit(tenantId, item.id, item.uom_id) : null;
+          uom = product && !product.is_bundle ? loadUnit(tenantId, item.id, item.uom_id) : null;
           if (!uom) {
             throw new ValidationError(`Unit ${item.uom_id} is not valid for product ${item.id}.`, 400, { code: 'UOM_INVALID', field: `items.${idx}.uom_id` });
           }
@@ -1759,6 +1799,32 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           } else {
             itemTotal = lineTotal(perUnit, item.quantity, { type: discountType as any, value: discountValue });
           }
+          // A bundle: expand it into its component rows (stock, cost and reports follow the components).
+          // Same guards as a product, on the bundle as a whole: min_price above, below-cost here
+          // against the summed component costs.
+          if (product.is_bundle) {
+            const rows = expandBundleSale(tenantId, {
+              bundleId: item.id, bundleName: product.name, bundleQty: item.quantity, perBundle: perUnit,
+              discountType, discountValue, line: ++bundleLineNo, idx,
+            });
+            const perBundleCost = bundleUnitCost(rows);
+            if (settings.allow_below_cost === '0' && perBundleCost > 0 && item.quantity > 0 && itemTotal / item.quantity < perBundleCost - 1e-9) {
+              throw new ValidationError(
+                `Price for product ${item.id} is below its cost of ${perBundleCost}.`,
+                400,
+                { code: 'BELOW_COST', field: `items.${idx}.unit_price`, cost: perBundleCost }
+              );
+            }
+            calculatedTotal += itemTotal;
+            return rows.map((r) => ({
+              productId: r.productId, pieces: r.pieces, tax: item.tax, unitPrice: r.unitPrice,
+              discountType: r.discountType, discountValue: r.discountValue, unitCost: r.unitCost,
+              trackInventory: r.trackInventory, uomId: null, uomName: null, uomFactor: null, uomQty: null,
+              originalItemId: null as number | null,
+              bundleId: r.bundleId as number | null, bundleName: r.bundleName as string | null,
+              bundleQty: r.bundleQty as number | null, bundleLine: r.bundleLine as number | null,
+            }));
+          }
           // Optional guard: no sale line below cost (after the line's own discount; the invoice-level
           // discount is deliberately not considered).
           if (settings.allow_below_cost === '0' && product.cost > 0 && pieces > 0 && itemTotal / pieces < product.cost - 1e-9) {
@@ -1799,6 +1865,11 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
               uomFactor: line.uom_id ? lineFactor : null,
               uomQty: line.uom_id ? slicePieces / lineFactor : null,
               originalItemId: line.id as number,
+              // A refunded bundle component keeps its bundle snapshot (bundles = pieces / pieces per bundle).
+              bundleId: (line.bundle_id ?? null) as number | null,
+              bundleName: (line.bundle_name ?? null) as string | null,
+              bundleQty: line.bundle_line != null && line.bundle_qty && line.quantity ? slicePieces * line.bundle_qty / line.quantity : null,
+              bundleLine: (line.bundle_line ?? null) as number | null,
             };
           });
           return rows;
@@ -1825,7 +1896,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
         return [{
           productId: item.id, pieces, tax: item.tax, unitPrice, discountType, discountValue, unitCost,
-          trackInventory: product ? product.track_inventory : 1, ...uomFields, originalItemId: null as number | null,
+          trackInventory: product ? (product.is_bundle ? 0 : product.track_inventory) : 1, ...uomFields, originalItemId: null as number | null,
+          bundleId: null as number | null, bundleName: null as string | null, bundleQty: null as number | null, bundleLine: null as number | null,
         }];
       });
 
@@ -1901,8 +1973,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       const transactionId = info.lastInsertRowid;
 
       const insertItem = db.prepare(`
-      INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
       let stockChange = '-';
@@ -1928,7 +2000,11 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           item.uomName,
           item.uomFactor,
           item.uomQty,
-          item.originalItemId
+          item.originalItemId,
+          item.bundleId ?? null,
+          item.bundleName ?? null,
+          item.bundleQty ?? null,
+          item.bundleLine ?? null
         );
         if (item.trackInventory !== 0) {
           updateStock.run(item.pieces, item.productId, tenantId);
@@ -2380,6 +2456,13 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         discount_type: oi.discount_type,
         discount_value: oi.discount_value,
         unit_refund: Math.round(perPieceLine * factor * uomFactor * 1e6) / 1e6,
+        // Bundle snapshot: the refund dialogs group these lines and offer "refund N bundles", which
+        // fills each component with bundle_comp_qty x N (in the line's unit).
+        bundle_id: oi.bundle_id ?? null,
+        bundle_name: oi.bundle_name ?? null,
+        bundle_qty: oi.bundle_qty ?? null,
+        bundle_line: oi.bundle_line ?? null,
+        bundle_comp_qty: oi.bundle_line != null && oi.bundle_qty ? oi.quantity / oi.bundle_qty / uomFactor : null,
       };
     });
     const paid = db.prepare(`SELECT IFNULL(SUM(amount / exchange_rate), 0) as p FROM ${archived ? 'archived_payments' : 'payments'} WHERE transaction_id = ? AND method != 'credit'`).get(id) as any;
@@ -2913,8 +2996,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     const tenantId = req.session.tenantId;
     const { product_id, new_qty, delta, reason } = req.body;
 
-    const product = db.prepare("SELECT id, stock, cost, track_inventory FROM products WHERE id = ? AND tenant_id = ?").get(product_id, tenantId) as any;
+    const product = db.prepare("SELECT id, stock, cost, track_inventory, IFNULL(is_bundle, 0) AS is_bundle FROM products WHERE id = ? AND tenant_id = ?").get(product_id, tenantId) as any;
     if (!product) return res.status(404).json({ error: "Product not found." });
+    if (product.is_bundle) return res.status(400).json({ error: "A bundle has no stock of its own - adjust its products instead.", code: 'BUNDLE_NO_STOCK' });
 
     const qtyBefore = product.stock || 0;
     let qtyAfter: number;

@@ -27,7 +27,7 @@ export interface PipelineSummary {
 function computeSkuMetrics(tenantId: number): number {
   const products = db
     .prepare(
-      "SELECT id, stock, cost, price, reorder_point, track_inventory FROM products WHERE tenant_id = ? AND deleted_at IS NULL AND IFNULL(active, 1) = 1"
+      "SELECT id, stock, cost, price, reorder_point, track_inventory FROM products WHERE tenant_id = ? AND deleted_at IS NULL AND IFNULL(active, 1) = 1 AND IFNULL(is_bundle, 0) = 0" // a bundle has no stock or sales of its own: its components carry both
     )
     .all(tenantId) as any[];
   if (products.length === 0) return 0;

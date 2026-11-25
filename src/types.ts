@@ -61,6 +61,26 @@ export interface Product {
   active?: number; // 1 = active (default), 0 = disabled (can't be sold, hidden from the POS)
   /** Local URL of the product's photo (first online-store listing photo), when it has one. */
   image_url?: string;
+  /** 1 = a bundle: sells as the products in bundle_items (its own stock never moves). */
+  is_bundle?: number;
+  bundle_items?: BundleItem[];
+}
+
+/** One product inside a bundle, with the component's current name/price/stock (GET /api/products). */
+export interface BundleItem {
+  id?: number;
+  component_id: number;
+  /** Base pieces of the component in ONE bundle. */
+  quantity: number;
+  name?: string | null;
+  barcode?: string | null;
+  price?: number | null;
+  price_lbp?: number | null;
+  cost?: number | null;
+  stock?: number | null;
+  track_inventory?: number | null;
+  active?: number | null;
+  unit?: string | null;
 }
 
 export interface Stakeholder {
@@ -161,6 +181,11 @@ export interface TransactionItem {
   display_unit_price?: number;
   unit_cost?: number; // USD cost snapshot at time of the line (COGS)
   discount?: Discount;
+  /** Bundle snapshot: the component rows of one sold bundle share bundle_line. */
+  bundle_id?: number | null;
+  bundle_name?: string | null;
+  bundle_qty?: number | null;
+  bundle_line?: number | null;
 }
 
 export interface Tenant {

@@ -1,6 +1,7 @@
 import { db } from './db.js';
 import { isRealMoney } from './paymentMethods.js';
 import { transactionBalanceEffect } from './balance.js';
+import { groupBundleLines } from './pricing.js';
 
 // Customer / supplier statement. Every row carries an `effect` (its change to the party's balance, in the
 // APP's sign convention: negative = they owe us / we owe the supplier). A reconciling "opening" row makes
@@ -66,9 +67,10 @@ export function buildStatement(tenantId: number, stakeholderId: number | string)
     const itemsTable = t.archived ? 'archived_transaction_items' : 'transaction_items';
     const paymentsTable = t.archived ? 'archived_payments' : 'payments';
     const items = db.prepare(`
-      SELECT ti.quantity, p.name FROM ${itemsTable} ti JOIN products p ON ti.product_id = p.id WHERE ti.transaction_id = ?
+      SELECT ti.quantity, ti.unit_price, ti.bundle_id, ti.bundle_name, ti.bundle_qty, ti.bundle_line, p.name FROM ${itemsTable} ti JOIN products p ON ti.product_id = p.id WHERE ti.transaction_id = ?
     `).all(t.id) as any[];
-    const itemsList = items.map((i) => `${i.quantity}x ${i.name}`).join(', ');
+    // A sold bundle reads as one entry ("2x Breakfast deal"), not as its component rows.
+    const itemsList = groupBundleLines(items).map((e) => (e.kind === 'bundle' ? `${e.bundle_qty}x ${e.bundle_name}` : `${e.row.quantity}x ${e.row.name}`)).join(', ');
     const sign = t.type === 'refund' ? 1 : -1; // refund raises the balance; sale/purchase lowers it
     const label = t.type === 'refund' ? 'Refund' : t.type === 'purchase' ? 'Purchase' : 'Invoice';
     // A 0-total item-less "sale" is the system ticket created by /api/stakeholders/settle-balance.
@@ -260,6 +262,8 @@ export interface StatementItem {
   unit_price: number;      // per unit (per piece without a unit)
   line_total: number;      // before line discount, same as the sale receipt
   discount: { type: string; value: number } | null;
+  /** A sold bundle: its products per bundle ("2 Coffee + 1 Croissant" is also folded into `name`). */
+  components?: Array<{ name: string; qty: number }> | null;
 }
 
 /** Product lines of one transaction (live or archived), shaped for printing. */
@@ -269,7 +273,28 @@ export function loadStatementItems(txId: number, archived: boolean): StatementIt
     SELECT ti.*, COALESCE(p.name, 'Item') AS name FROM ${table} ti LEFT JOIN products p ON ti.product_id = p.id
     WHERE ti.transaction_id = ? ORDER BY ti.id ASC
   `).all(txId) as any[];
-  return rows.map((r) => {
+  // The component rows of one sold bundle print as ONE line: the bundle, its quantity and price.
+  return groupBundleLines(rows).map((entry): StatementItem => {
+    if (entry.kind === 'bundle') {
+      const per = entry.bundle_qty || 1;
+      const components = entry.components.map((c) => ({ name: c.row.name, qty: Math.round((c.row.quantity / per) * 1000) / 1000 }));
+      const gross = entry.unit_price * entry.bundle_qty;
+      const first = entry.components[0]?.row;
+      const discount = first?.discount_type && first.discount_value > 0
+        ? (first.discount_type === 'percentage' ? { type: 'percentage', value: first.discount_value } : { type: 'fixed', value: round2(gross - entry.line_total) })
+        : null;
+      return {
+        name: `${entry.bundle_name} (${components.map((c) => `${c.qty} ${c.name}`).join(' + ')})`,
+        unit: null,
+        factor: null,
+        qty: Math.round(entry.bundle_qty * 1000) / 1000,
+        unit_price: round2(entry.unit_price),
+        line_total: round2(gross),
+        discount,
+        components,
+      };
+    }
+    const r = entry.row;
     const factor = r.uom_id && r.uom_name ? Number(r.uom_factor) || 1 : null;
     const qty = factor ? (r.uom_qty ?? r.quantity / factor) : r.quantity;
     return {

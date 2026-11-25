@@ -13,12 +13,13 @@ const fkMap: Record<string, Record<string, string>> = {
   products: { tenant_id: 'tenants' },
   product_barcodes: { product_id: 'products' },
   product_units: { tenant_id: 'tenants', product_id: 'products' },
+  product_bundle_items: { tenant_id: 'tenants', bundle_id: 'products', component_id: 'products' },
   stakeholders: { tenant_id: 'tenants' },
   users: { tenant_id: 'tenants' },
   transactions: { tenant_id: 'tenants', stakeholder_id: 'stakeholders', user_id: 'users' },
   // uom_id / original_item_id are local ids too: they travel as global UUIDs so another register
   // resolves them to ITS rows (an unresolvable original line falls back to per-product allocation).
-  transaction_items: { transaction_id: 'transactions', product_id: 'products', uom_id: 'product_units', original_item_id: 'transaction_items' },
+  transaction_items: { transaction_id: 'transactions', product_id: 'products', uom_id: 'product_units', original_item_id: 'transaction_items', bundle_id: 'products' },
   payments: { transaction_id: 'transactions' },
   currencies: { tenant_id: 'tenants' },
   settings: { tenant_id: 'tenants' },
@@ -223,6 +224,8 @@ async function retireCloudBarcodeDuplicates(client: SupabaseClient, rows: any[])
 // stores clean values. Only these columns: money columns keep full precision (LBP conversions).
 const QUANTITY_COLUMNS: Record<string, string[]> = {
   products: ['stock', 'reorder_point', 'units_per_package'],
+  product_bundle_items: ['quantity'],
+  transaction_items: ['bundle_qty'],
 };
 // Columns that exist only in the local database and must never be pushed.
 //  - stakeholders.balance_baseline (see server/balance.ts)
@@ -317,7 +320,7 @@ const OR_SYNC_TABLES = [
 ];
 
 const PUSH_TABLES = [
-  'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'product_bundle_items', 'stores', 'store_listings', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
   ...OR_SYNC_TABLES,
@@ -327,7 +330,7 @@ export const ORDER_PULL_TABLES = ['orders', 'order_lines', 'order_events'];
 const CLOUD_AUTHORITATIVE = new Set(['tenants', 'orders', 'order_lines', 'order_events']);
 export const HOT_PULL_TABLES = [
   ...ORDER_PULL_TABLES,
-  'products', 'product_barcodes', 'product_units', 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'product_bundle_items', 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments', 'cash_flow',
 ];
 export const COLD_PULL_TABLES = [
@@ -339,7 +342,7 @@ export const COLD_PULL_TABLES = [
 // Pull order: parents before children (FK translation needs the parent row locally).
 const PULL_TABLES = [
   'tenants',
-  'products', 'product_barcodes', 'product_units', 'stores', 'store_listings', ...ORDER_PULL_TABLES, 'stakeholders', 'users',
+  'products', 'product_barcodes', 'product_units', 'product_bundle_items', 'stores', 'store_listings', ...ORDER_PULL_TABLES, 'stakeholders', 'users',
   'transactions', 'transaction_items', 'payments',
   'currencies', 'settings', 'cash_flow_categories', 'cash_flow', 'daily_reports', 'cashier_shifts', 'settlement_corrections',
   ...OR_SYNC_TABLES,
@@ -542,6 +545,9 @@ export function deleteProductLocally(tenantId: number, productId: number) {
     const product = db.prepare('SELECT global_id FROM products WHERE id = ? AND tenant_id = ?').get(productId, tenantId) as any;
     if (!product) return;
     db.prepare('UPDATE product_units SET deleted_at = CURRENT_TIMESTAMP WHERE product_id = ? AND tenant_id = ? AND deleted_at IS NULL').run(productId, tenantId);
+    // A deleted bundle loses its component list. (A deleted COMPONENT leaves its bundles unsellable
+    // with BUNDLE_COMPONENT_MISSING rather than silently changing what the bundle contains.)
+    db.prepare('UPDATE product_bundle_items SET deleted_at = CURRENT_TIMESTAMP WHERE bundle_id = ? AND tenant_id = ? AND deleted_at IS NULL').run(productId, tenantId);
     db.prepare('DELETE FROM product_barcodes WHERE product_id = ?').run(productId);
     db.prepare('DELETE FROM products WHERE id = ? AND tenant_id = ?').run(productId, tenantId);
     addTombstones(tenantId, [{ table: 'products', globalId: product.global_id }]);

@@ -12,6 +12,7 @@ import { translateServerError } from '../../lib/serverErrors';
 import { useSettings } from '../../lib/useSettings';
 import { normalizeLevel, saleLineUnitPrice, tierUnitPrice, uomUnitPrice, type PriceLevel } from '../../lib/pricing';
 import { getTerminalId } from '../../lib/terminal';
+import { collapseBundleRows, bundleContentsLabel } from '../../lib/bundles';
 import type { Product, ProductUnit, Stakeholder } from '../../types';
 import {
   computeInvoiceTotals, lineDraftTotal, nextKey, paidFromPayments, realMoneyFromPayments,
@@ -104,6 +105,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const { priceLevelsEnabled } = useSettings();
 
   const isPurchase = txType === 'purchase';
+  const productsById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const parties = useMemo(() => stakeholders.filter((s) => (isPurchase ? s.type === 'supplier' : s.type === 'customer')), [stakeholders, isPurchase]);
 
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -247,7 +249,9 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
         setSavedRate(known && tx.currency !== 'USD' && Number(tx.exchange_rate) > 0 ? Number(tx.exchange_rate) : null);
         setGlobalDiscount({ type: tx.discount?.type === 'fixed' ? 'fixed' : 'percentage', value: Number(tx.discount?.value) || 0 });
         setGlobalTax({ type: (tx.tax_type as any) || 'percentage', value: tx.tax_value || 0 });
-        setLines((tx.items || []).map((it: any) => ({
+        // A sold bundle is stored as one row per product: edit it as ONE bundle line (product =
+        // the bundle, quantity in bundles, price per bundle); the server re-expands it on save.
+        setLines(collapseBundleRows(tx.items || []).map((it: any) => ({
           _key: nextKey('l'),
           product_id: it.product_id,
           name: it.product_name,
@@ -360,6 +364,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     const out: Array<{ p: Product; unit: ProductUnit | null }> = [];
     for (const p of products) {
       if (!isPurchase && p.active === 0) continue; // disabled products can't be sold (purchases still allow them)
+      if (isPurchase && p.is_bundle) continue; // a bundle is never purchased (its products are)
       const unitHit = (p.units || []).find((u) => (u.barcode || '').toLowerCase().includes(q));
       const baseHit = p.name.toLowerCase().includes(q)
         || (p.barcode || '').toLowerCase().includes(q)
@@ -772,6 +777,15 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                                   ]}
                                 />
                               );
+                            })()}
+                            {(() => {
+                              const product = products.find((p) => p.id === l.product_id);
+                              return product?.is_bundle ? (
+                                <p className="text-xs text-text-3">
+                                  <span className="me-1 font-semibold text-primary">{t('bundle_badge', 'Bundle')}</span>
+                                  {bundleContentsLabel(product, productsById)}
+                                </p>
+                              ) : null;
                             })()}
                             {l.uom_id != null && l.uom_factor ? (
                               <p className="text-xs text-text-3 num">= {l.quantity * l.uom_factor} {products.find((p) => p.id === l.product_id)?.unit || t('uom_piece_short', 'pcs')}</p>

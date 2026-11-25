@@ -1,6 +1,7 @@
 import React from 'react';
 import { Badge } from './ui';
 import { computeTotals } from '../lib/pricing';
+import { collapseBundleRows } from '../lib/bundles';
 import {
   formatMoney, formatNumber, formatDateTime, paymentMethodLabel, partyDisplayName,
 } from '../lib/format';
@@ -98,7 +99,8 @@ export default function OrderHistoryPreview({ tx, refreshKey, currencies, t, lan
       </div>
     );
   } else {
-    const items: any[] = detail.items || [];
+    // One row per sold bundle (its component rows collapsed), like the receipt.
+    const items: any[] = collapseBundleRows(detail.items || []);
     const totals = computeTotals({
       lines: items.map(it => ({ unitPrice: it.unit_price ?? it.price ?? 0, qty: it.quantity ?? 0, discount: it.discount || null })),
       discount: detail.discount || null,
@@ -151,6 +153,7 @@ export default function OrderHistoryPreview({ tx, refreshKey, currencies, t, lan
                       )}
                     </div>
                     {it.barcode && <div className="text-[10px] font-mono text-text-3">{it.barcode}</div>}
+                    {it.is_bundle_group && <div className="text-[10px] text-text-3">{it.bundle_contents.join(' + ')}</div>}
                   </div>
                   <div className="text-end shrink-0">
                     <div className="font-mono font-bold num text-sm text-text">{formatMoney(lineNet, USD)}</div>

@@ -8,6 +8,7 @@ import { usePermissions } from '../../lib/usePermissions';
 import { formatMoney, formatDateTime, formatBalance, paymentMethodLabel, partyDisplayName } from '../../lib/format';
 import RefundModal, { type RefundableResponse } from './RefundModal';
 import type { CurrencyRow, TxType } from './types';
+import { collapseBundleRows } from '../../lib/bundles';
 
 export interface InvoiceDetailDrawerProps {
   open: boolean;
@@ -101,7 +102,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
     if (!invoice) return;
     const win = window.open('', '_blank', 'width=420,height=700');
     if (!win) return;
-    const rows = (invoice.items || [])
+    const rows = collapseBundleRows(invoice.items || [])
       .map((it: any) => {
         const total = Number(it.price) * it.quantity - (it.discount?.value
           ? it.discount.type === 'percentage'
@@ -113,7 +114,8 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
         const uom = it.uom_name ? ` - ${it.uom_name} x${it.uom_factor}` : '';
         const qtyShown = it.display_qty ?? it.quantity;
         const priceShown = it.display_unit_price ?? Number(it.price);
-        return `<tr><td>${it.product_name}${uom}</td><td style="text-align:center">${qtyShown}</td><td style="text-align:end">${Number(priceShown).toFixed(2)}</td><td style="text-align:end">${total.toFixed(2)}</td></tr>`;
+        const contents = it.is_bundle_group ? `<div style="font-size:10px;color:#64748B">${it.bundle_contents.join(' + ')}</div>` : '';
+        return `<tr><td>${it.product_name}${uom}${contents}</td><td style="text-align:center">${qtyShown}</td><td style="text-align:end">${Number(priceShown).toFixed(2)}</td><td style="text-align:end">${total.toFixed(2)}</td></tr>`;
       })
       .join('');
     win.document.write(`
@@ -248,7 +250,7 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
                     </tr>
                   </thead>
                   <tbody>
-                    {(invoice.items || []).map((item: any) => {
+                    {collapseBundleRows(invoice.items || []).map((item: any) => {
                       const lineBase = Number(item.price) * item.quantity;
                       const discAmt = item.discount?.value
                         ? item.discount.type === 'percentage'
@@ -263,6 +265,12 @@ export function InvoiceDetailDrawer({ open, onClose, invoiceId, currencies, isAd
                           <td className="px-3 py-2 font-medium text-text">
                             {item.product_name}
                             {item.uom_name && <span className="ms-2 text-xs font-semibold text-primary">{item.uom_name} ×{item.uom_factor}</span>}
+                            {item.is_bundle_group && (
+                              <>
+                                <span className="ms-2 text-xs font-semibold text-primary">{t('bundle_badge', 'Bundle')}</span>
+                                <span className="block text-[11px] font-normal text-text-3">{item.bundle_contents.join(' + ')}</span>
+                              </>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-end num">
                             {item.display_qty ?? item.quantity}

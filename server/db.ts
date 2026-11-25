@@ -467,6 +467,32 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_product_units_tenant_product ON product_units(tenant_id, product_id);
   CREATE INDEX IF NOT EXISTS idx_product_units_tenant_barcode ON product_units(tenant_id, barcode);
 `);
+// Product bundles (docs/superpowers/specs/2026-11-26-product-bundles-design.md): a product flagged
+// is_bundle sells as a set of existing products. Its rows here (soft-deleted, synced like
+// product_units) list the components and how many base pieces of each one bundle holds. A bundle
+// never moves stock itself: a sale expands it into one transaction_items row per component.
+try { db.exec("ALTER TABLE products ADD COLUMN is_bundle INTEGER DEFAULT 0;"); } catch {}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_bundle_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    bundle_id INTEGER NOT NULL,
+    component_id INTEGER NOT NULL,
+    quantity REAL NOT NULL,
+    sort_order INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_product_bundle_items_bundle ON product_bundle_items(tenant_id, bundle_id);
+  CREATE INDEX IF NOT EXISTS idx_product_bundle_items_component ON product_bundle_items(tenant_id, component_id);
+`);
+// Line-level bundle snapshot on the component rows of a bundle sale: which bundle, its name, how
+// many bundles that group sold, and the group key (the bundle's 1-based position in the sale).
+for (const t of ['transaction_items', 'archived_transaction_items']) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN bundle_id INTEGER;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN bundle_name TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN bundle_qty REAL;`); } catch {}
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN bundle_line INTEGER;`); } catch {}
+}
+
 // Same rule as unit_cost above: live column => archived twin => copied by settlement.
 for (const t of ['transaction_items', 'archived_transaction_items']) {
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN uom_id INTEGER;`); } catch {}

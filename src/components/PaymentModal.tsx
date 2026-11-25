@@ -1,5 +1,6 @@
 import React from 'react';
 import { clampMoneyInput } from '../lib/money';
+import { refundBundleGroup, refundBundleQuantities } from '../lib/bundles';
 import { searchProducts, MAX_SUGGESTIONS } from '../lib/productSearch';
 import {
   Search, User, CreditCard, Banknote, Package, Plus, Minus, Trash2, ArrowRight,
@@ -403,8 +404,36 @@ export default function PaymentModal() {
               {(selectedHistoryTransaction.refund_lines || []).map((line: any) => {
                 const qty = refundQuantities[line.item_id] || 0;
                 const unitLabel = line.uom_name ? `${line.uom_name}${line.uom_factor > 1 ? ` ×${line.uom_factor}` : ''}` : '';
+                // A sold bundle: one header refunds whole bundles (fills each of its products); the
+                // products below stay individually adjustable.
+                const allLines = selectedHistoryTransaction.refund_lines || [];
+                const group = line.bundle_line != null ? refundBundleGroup(allLines, line, refundQuantities) : null;
+                const setBundles = (n: number) => group && setRefundQuantities((prev: any) => ({
+                  ...prev, ...refundBundleQuantities(group.members, Math.max(0, Math.min(group.maxBundles, n))),
+                }));
                 return (
-                <div key={line.item_id} className="flex items-center justify-between p-3 bg-surface-2 rounded-xl border border-border">
+                <React.Fragment key={line.item_id}>
+                {group?.isFirst && (
+                  <div className="flex items-center justify-between p-3 rounded-xl border border-primary/40 bg-surface">
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-text truncate">
+                        {line.bundle_name}
+                        <span className="ms-2 text-xs font-bold text-primary">{t('bundle_badge', 'Bundle')}</span>
+                      </h4>
+                      <p className="text-xs text-text-3">{t('bundle_refund_whole', 'Refund whole bundles')}</p>
+                    </div>
+                    <div className="flex items-center border border-border rounded-xl overflow-hidden bg-surface">
+                      <button disabled={group.selected <= 0} onClick={() => setBundles(group.selected - 1)} className="h-9 w-9 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text disabled:opacity-30" aria-label="-">
+                        <Minus size={14} />
+                      </button>
+                      <span className="w-10 text-center font-mono font-bold num text-text">{group.selected}</span>
+                      <button disabled={group.selected >= group.maxBundles} onClick={() => setBundles(group.selected + 1)} className="h-9 w-9 flex items-center justify-center hover:bg-primary hover:text-on-primary transition-colors cursor-pointer text-text disabled:opacity-30" aria-label="+">
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className={`flex items-center justify-between p-3 bg-surface-2 rounded-xl border border-border ${group ? 'ms-6' : ''}`}>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-semibold text-text truncate">
                       {line.product_name || 'Product'}
@@ -430,6 +459,7 @@ export default function PaymentModal() {
                     </div>
                   </div>
                 </div>
+                </React.Fragment>
                 );
               })}
             </div>

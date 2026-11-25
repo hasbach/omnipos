@@ -7,6 +7,7 @@ import { api } from '../../lib/api';
 import { formatMoney, formatDateTime, formatBalance, partyDisplayName } from '../../lib/format';
 import { translateServerError } from '../../lib/serverErrors';
 import { postJson, ApiFieldError, type CurrencyRow } from './types';
+import { refundBundleGroup, refundBundleQuantities } from '../../lib/bundles';
 
 export interface RefundableLine {
   /** The ORIGINAL sale line (transaction_items.id) - refunds are tracked per line, not per product. */
@@ -24,6 +25,13 @@ export interface RefundableLine {
   discount_type: string | null;
   discount_value: number | null;
   unit_refund: number;
+  /** Bundle snapshot: lines of one sold bundle share bundle_line; bundle_comp_qty = this line's
+   *  quantity (in its unit) per bundle. */
+  bundle_id?: number | null;
+  bundle_name?: string | null;
+  bundle_qty?: number | null;
+  bundle_line?: number | null;
+  bundle_comp_qty?: number | null;
 }
 
 export interface RefundablePreviousRefund {
@@ -254,9 +262,35 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
                   {data.lines.map((l) => {
                     const fractional = !Number.isInteger(l.sold_qty);
                     const q = qty[l.item_id] || 0;
+                    // A sold bundle: a header row refunds whole bundles (fills each of its products);
+                    // its products stay individually adjustable below it.
+                    const group = l.bundle_line != null ? refundBundleGroup(data.lines, l, qty) : null;
                     return (
-                      <tr key={l.item_id} className="border-t border-border">
-                        <td className="px-2 py-2 font-medium text-text">
+                      <React.Fragment key={l.item_id}>
+                      {group?.isFirst && (
+                        <tr className="border-t border-border bg-surface-2">
+                          <td className="px-2 py-2 font-semibold text-text" colSpan={4}>
+                            {l.bundle_name}
+                            <Badge variant="primary" className="ms-2">{t('bundle_badge', 'Bundle')}</Badge>
+                            <span className="ms-2 text-xs font-normal text-text-3">{t('bundle_refund_whole', 'Refund whole bundles')}</span>
+                          </td>
+                          <td className="px-2 py-2">
+                            <NumberInput
+                              value={group.selected}
+                              min={0}
+                              max={group.maxBundles}
+                              step={1}
+                              disabled={group.maxBundles <= 0}
+                              onChange={(v) => setQty((prev) => ({ ...prev, ...refundBundleQuantities(group.members, Math.max(0, Math.min(group.maxBundles, Math.floor(v || 0)))) }))}
+                              className="w-24"
+                              aria-label={t('bundle_refund_whole', 'Refund whole bundles')}
+                            />
+                          </td>
+                          <td colSpan={2} />
+                        </tr>
+                      )}
+                      <tr className="border-t border-border">
+                        <td className={`px-2 py-2 font-medium text-text ${group ? 'ps-6' : ''}`}>
                           {l.product_name}
                           {l.uom_name && <span className="ms-2 text-xs font-semibold text-primary">{l.uom_name}{(l.uom_factor || 1) > 1 ? ` ×${l.uom_factor}` : ''}</span>}
                         </td>
@@ -277,6 +311,7 @@ export function RefundModal({ open, onClose, invoiceId, currencies, onDone }: Re
                         <td className="px-2 py-2 text-end num text-text-3">{formatMoney(l.unit_refund, USD)}</td>
                         <td className="px-2 py-2 text-end num font-semibold text-text">{formatMoney(q * l.unit_refund, USD)}</td>
                       </tr>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>

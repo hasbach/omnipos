@@ -22,6 +22,7 @@ import { UnitsOfMeasureCard, unitToDraft, draftToPayload, validateUnits, type Un
 import { marginPct, markupPct, priceFromMarkup } from '../../lib/pricing';
 import { AdjustStockModal, AdjustStockTarget } from '../stock/AdjustStockModal';
 import { OnlineStoreCard } from './OnlineStoreCard';
+import { BundleCard, validateBundle, type BundleDraftItem } from './BundleCard';
 import { usePermissions } from '../../lib/usePermissions';
 
 export interface ProductEditorDrawerProps {
@@ -31,6 +32,8 @@ export interface ProductEditorDrawerProps {
   localCurrency: { code: string; symbol: string; rate: number } | null;
   /** When false (Settings → Sales & Pricing → enable_price_levels off), hide the wholesale / super-wholesale tier cards. */
   priceLevelsEnabled?: boolean;
+  /** Every product of the tenant: the bundle card picks its components from these. */
+  products?: Product[];
   onClose: () => void;
   onSaved: () => void;
 }
@@ -57,6 +60,8 @@ interface FormState {
   stock: number;
   initialStock: number;
   currency: string;
+  is_bundle: 0 | 1;
+  bundle_items: BundleDraftItem[];
 }
 
 function blankForm(): FormState {
@@ -81,6 +86,8 @@ function blankForm(): FormState {
     stock: 0,
     initialStock: 0,
     currency: 'USD',
+    is_bundle: 0,
+    bundle_items: [],
   };
 }
 
@@ -107,6 +114,8 @@ function fromProduct(p: Product): FormState {
     stock: p.stock || 0,
     initialStock: p.stock || 0,
     currency: p.currency || 'USD',
+    is_bundle: p.is_bundle ? 1 : 0,
+    bundle_items: (p.bundle_items || []).map((b) => ({ component_id: b.component_id, quantity: b.quantity })),
   };
 }
 
@@ -118,13 +127,13 @@ const TIER_FIELD: Record<TierKey, { usd: keyof FormState; lbp: keyof FormState }
   super_wholesale: { usd: 'price_super_wholesale', lbp: 'price_super_wholesale_lbp' },
 };
 
-export function ProductEditorDrawer({ open, product, categories, localCurrency, priceLevelsEnabled = true, onClose, onSaved }: ProductEditorDrawerProps) {
+export function ProductEditorDrawer({ open, product, categories, localCurrency, priceLevelsEnabled = true, products = [], onClose, onSaved }: ProductEditorDrawerProps) {
   const { t } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
   const rate = localCurrency?.rate || 89500;
 
-  const [tab, setTab] = useState<'general' | 'pricing' | 'inventory' | 'online'>('general');
+  const [tab, setTab] = useState<'general' | 'bundle' | 'pricing' | 'inventory' | 'online'>('general');
   const { can } = usePermissions();
   const canViewStore = can('store.view');
   const [form, setForm] = useState<FormState>(blankForm());
@@ -193,6 +202,15 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
       return false;
     }
     setNameError(null);
+    if (form.is_bundle) {
+      const bundleErrors = validateBundle(form.bundle_items, t);
+      setFieldErrors(bundleErrors);
+      if (Object.keys(bundleErrors).length > 0) {
+        setTab('bundle');
+        return false;
+      }
+      return true;
+    }
     const unitErrors = validateUnits(form.units, t);
     setFieldErrors(unitErrors);
     if (Object.keys(unitErrors).length > 0) {
@@ -212,9 +230,10 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
         barcodes,
         category: form.category || 'General',
         unit: form.unit || 'pcs',
-        track_inventory: form.track_inventory,
+        // A bundle never tracks stock itself (its products do); the server enforces the same.
+        track_inventory: form.is_bundle ? 0 : form.track_inventory,
         active: form.active,
-        reorder_point: form.track_inventory === 0 ? 0 : form.reorder_point,
+        reorder_point: form.track_inventory === 0 || form.is_bundle ? 0 : form.reorder_point,
         cost: form.cost,
         cost_lbp: form.cost_lbp,
         price: form.price,
@@ -223,9 +242,11 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
         price_wholesale_lbp: form.price_wholesale_lbp || null,
         price_super_wholesale: form.price_super_wholesale || null,
         price_super_wholesale_lbp: form.price_super_wholesale_lbp || null,
-        units: form.units.map(draftToPayload),
+        units: form.is_bundle ? [] : form.units.map(draftToPayload),
         min_price: form.min_price || null,
         currency: form.currency || 'USD',
+        is_bundle: form.is_bundle,
+        ...(form.is_bundle ? { bundle_items: form.bundle_items } : {}),
       };
 
       if (form.id) {
@@ -233,7 +254,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
         // stock changes go exclusively through the audited /api/stock/adjust endpoint.
         await putJson(`/api/products/${form.id}`, payload);
       } else {
-        payload.stock = form.track_inventory === 0 ? 0 : form.initialStock || 0;
+        payload.stock = form.track_inventory === 0 || form.is_bundle ? 0 : form.initialStock || 0;
         await postJson('/api/products', payload);
       }
 
@@ -246,7 +267,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
       if (err instanceof ApiFieldError && err.field) {
         // Show the message next to the offending input (barcodes live on General, units on Pricing).
         setFieldErrors((prev) => ({ ...prev, [err.field as string]: translated }));
-        setTab(err.field.startsWith('units.') ? 'pricing' : err.field === 'barcodes' ? 'general' : tab);
+        setTab(err.field.startsWith('units.') ? 'pricing' : err.field.startsWith('bundle_items') ? 'bundle' : err.field === 'barcodes' || err.field === 'is_bundle' ? 'general' : tab);
       }
     } finally {
       setSaving(false);
@@ -288,6 +309,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
             onChange={(v) => setTab(v as any)}
             items={[
               { value: 'general', label: t('prod_tab_general', 'General') },
+              ...(form.is_bundle ? [{ value: 'bundle', label: t('bundle_tab', 'Bundle') }] : []),
               { value: 'pricing', label: t('prod_tab_pricing', 'Pricing') },
               { value: 'inventory', label: t('prod_tab_inventory', 'Inventory') },
               // Online store: only for saved products (a listing references the product row).
@@ -360,19 +382,49 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
               </div>
 
               <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 px-4 py-3">
+                <div className="pe-4">
+                  <p className="text-sm font-medium text-text">{t('bundle_toggle', 'This product is a bundle')}</p>
+                  <p className="text-xs text-text-3">{t('bundle_toggle_helper', 'Sell several products together at one price. Stock is taken from the products inside.')}</p>
+                </div>
+                <Switch
+                  checked={form.is_bundle === 1}
+                  onChange={(checked) => {
+                    update({ is_bundle: checked ? 1 : 0 });
+                    clearFieldError('is_bundle');
+                    if (checked) setTab('bundle');
+                  }}
+                />
+              </div>
+              {fieldErrors.is_bundle && <p className="text-xs text-danger">{fieldErrors.is_bundle}</p>}
+
+              {!form.is_bundle && (
+              <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-border bg-surface-2 px-4 py-3">
                 <div>
                   <p className="text-sm font-medium text-text">{t('prod_track_inventory', 'Track inventory')}</p>
                   <p className="text-xs text-text-3">{t('prod_track_inventory_helper')}</p>
                 </div>
                 <Switch checked={form.track_inventory === 1} onChange={(checked) => update({ track_inventory: checked ? 1 : 0 })} />
               </div>
+              )}
 
-              {form.track_inventory === 1 && (
+              {form.track_inventory === 1 && !form.is_bundle && (
                 <Field label={t('prod_reorder_point', 'Reorder point')}>
                   <NumberInput value={form.reorder_point} onChange={(v) => update({ reorder_point: v })} min={0} />
                 </Field>
               )}
             </div>
+          )}
+
+          {tab === 'bundle' && form.is_bundle === 1 && (
+            <BundleCard
+              productId={form.id}
+              items={form.bundle_items}
+              onChange={(bundle_items) => update({ bundle_items })}
+              products={products}
+              bundlePrice={form.price}
+              errors={fieldErrors}
+              onClearError={clearFieldError}
+            />
           )}
 
           {tab === 'pricing' && (
@@ -465,7 +517,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 );
               })}
 
-              <UnitsOfMeasureCard
+              {!form.is_bundle && <UnitsOfMeasureCard
                 units={form.units}
                 onChange={(units) => update({ units })}
                 baseUnit={form.unit}
@@ -474,7 +526,7 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
                 priceLevelsEnabled={priceLevelsEnabled}
                 errors={fieldErrors}
                 onClearError={clearFieldError}
-              />
+              />}
 
               <Field label={t('prod_min_price', 'Minimum price (USD)')} helper={t('prod_min_price_helper')}>
                 <MoneyInput currencySymbol="$" value={form.min_price} onChange={(v) => update({ min_price: v })} />
@@ -488,7 +540,9 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
 
           {tab === 'inventory' && (
             <div className="space-y-4">
-              {form.track_inventory === 0 ? (
+              {form.is_bundle ? (
+                <p className="text-sm text-text-3">{t('bundle_inventory_helper', 'A bundle has no stock of its own. Selling it takes stock from the products inside.')}</p>
+              ) : form.track_inventory === 0 ? (
                 <p className="text-sm text-text-3">{t('prod_track_inventory_helper')}</p>
               ) : form.id ? (
                 <>

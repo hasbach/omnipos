@@ -241,3 +241,132 @@ export function computeTotals(lineTotals: number[], discount?: LineAdjustment | 
   // sub-cent balance still owed against an exact payment.
   return Math.max(0, Math.round(finalTotal * 1e6) / 1e6);
 }
+
+// ---- Bundles: BYTE-IDENTICAL in server/pricing.ts and src/lib/pricing.ts ------------------------
+// (tests/product-bundles.test.ts compares the text between these markers). A bundle sale is stored
+// as one transaction_items row per component; these helpers split the bundle price over the
+// components and group the rows back into one display line.
+// BEGIN BUNDLE MATH
+
+export interface BundleComponentPrice {
+  /** The component's retail list price for ONE base piece. */
+  listPrice: number;
+  /** Base pieces of the component in ONE bundle. */
+  quantity: number;
+}
+
+/**
+ * Share of the bundle price each component carries, in proportion to its list value
+ * (list price x quantity). When every list price is 0 the split is by quantity instead.
+ * The shares sum to exactly 1 (the last component takes the rounding remainder).
+ */
+export function bundleShares(components: BundleComponentPrice[]): number[] {
+  if (!components.length) return [];
+  const num = (n: any) => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0);
+  let weights = components.map((c) => num(c.listPrice) * num(c.quantity));
+  let total = weights.reduce((s, w) => s + w, 0);
+  if (total <= 0) {
+    weights = components.map((c) => num(c.quantity));
+    total = weights.reduce((s, w) => s + w, 0);
+  }
+  if (total <= 0) {
+    weights = components.map(() => 1);
+    total = components.length;
+  }
+  const shares = weights.map((w) => w / total);
+  const head = shares.slice(0, -1).reduce((s, x) => s + x, 0);
+  shares[shares.length - 1] = 1 - head;
+  return shares;
+}
+
+/** Splits `amount` by the shares above; the parts sum back to `amount` exactly. */
+export function allocateBundleAmount(amount: number, components: BundleComponentPrice[]): number[] {
+  const shares = bundleShares(components);
+  const parts = shares.map((s) => amount * s);
+  if (parts.length) {
+    const head = parts.slice(0, -1).reduce((s, x) => s + x, 0);
+    parts[parts.length - 1] = amount - head;
+  }
+  return parts;
+}
+
+/** Sum of the components' list prices for one bundle, and what the customer saves vs. the bundle price. */
+export function bundleSaving(bundlePrice: number, components: BundleComponentPrice[]): { listTotal: number; saving: number } {
+  const listTotal = components.reduce((s, c) => s + (Number(c.listPrice) || 0) * (Number(c.quantity) || 0), 0);
+  return { listTotal, saving: listTotal - (Number(bundlePrice) || 0) };
+}
+
+export interface BundleLineRow {
+  quantity: number;
+  unit_price: number;
+  discount_type?: string | null;
+  discount_value?: number | null;
+  bundle_id?: number | null;
+  bundle_name?: string | null;
+  bundle_qty?: number | null;
+  bundle_line?: number | null;
+}
+
+export type BundleDisplayLine<T extends BundleLineRow> =
+  | { kind: 'item'; row: T; line_total: number }
+  | {
+      kind: 'bundle';
+      bundle_id: number | null;
+      bundle_name: string;
+      bundle_qty: number;
+      bundle_line: number;
+      /** Bundle line total after the components' own line discounts. */
+      line_total: number;
+      /** Price of ONE bundle before the line discount. */
+      unit_price: number;
+      components: Array<{ row: T; line_total: number }>;
+    };
+
+function bundleRowTotal(r: BundleLineRow): number {
+  let total = (Number(r.unit_price) || 0) * (Number(r.quantity) || 0);
+  const v = Number(r.discount_value) || 0;
+  if (v) total = r.discount_type === 'percentage' ? total * (1 - v / 100) : Math.max(0, total - v);
+  return total;
+}
+
+/**
+ * Collapses the component rows of each sold bundle (same bundle_line) into one display line, in
+ * the position of its first row. Rows without bundle_line stay ordinary items.
+ */
+export function groupBundleLines<T extends BundleLineRow>(rows: T[]): Array<BundleDisplayLine<T>> {
+  const out: Array<BundleDisplayLine<T>> = [];
+  const groups = new Map<string, Extract<BundleDisplayLine<T>, { kind: 'bundle' }>>();
+  for (const row of rows || []) {
+    const lineTotal = bundleRowTotal(row);
+    if (row.bundle_line == null) {
+      out.push({ kind: 'item', row, line_total: lineTotal });
+      continue;
+    }
+    const key = `${row.bundle_line}:${row.bundle_id ?? ''}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        kind: 'bundle',
+        bundle_id: row.bundle_id ?? null,
+        bundle_name: row.bundle_name || '',
+        bundle_qty: 0,
+        bundle_line: Number(row.bundle_line),
+        line_total: 0,
+        unit_price: 0,
+        components: [],
+      };
+      groups.set(key, g);
+      out.push(g);
+    }
+    g.components.push({ row, line_total: lineTotal });
+    g.line_total += lineTotal;
+    g.bundle_qty = Math.max(g.bundle_qty, Number(row.bundle_qty) || 0);
+  }
+  for (const g of groups.values()) {
+    const gross = g.components.reduce((s, c) => s + (Number(c.row.unit_price) || 0) * (Number(c.row.quantity) || 0), 0);
+    g.line_total = Math.round(g.line_total * 1e6) / 1e6;
+    g.unit_price = g.bundle_qty > 0 ? Math.round((gross / g.bundle_qty) * 1e6) / 1e6 : 0;
+  }
+  return out;
+}
+// END BUNDLE MATH
