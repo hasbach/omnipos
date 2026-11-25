@@ -6,6 +6,7 @@ import { Badge } from './ui';
 import { formatMoney } from '../lib/format';
 import { usePosLayout } from '../hooks/usePosLayout';
 import { useSettings } from '../lib/useSettings';
+import { bundleAvailability, bundleContentsLabel } from '../lib/bundles';
 
 const TILE = {
   sm: { min: 112, h: 'min-h-[68px]', pad: 'p-2', name: 'text-xs', price: 'text-xs', img: 'h-16' },
@@ -98,7 +99,15 @@ export default function ProductGrid() {
     el.scrollBy({ left: sign * Math.max(120, el.clientWidth * 0.7), behavior: 'smooth' });
   };
 
+  // A bundle has no stock of its own: how many bundles its products' stock covers.
+  const bundleLeft = (p: any) => (p.is_bundle ? bundleAvailability(p) : Infinity);
   const stockBadge = (p: any) => {
+    if (p.is_bundle) {
+      const n = bundleLeft(p);
+      if (!Number.isFinite(n)) return <Badge variant="primary">{t('bundle_badge', 'Bundle')}</Badge>;
+      if (n <= 0) return <Badge variant="danger">{t('pos_out_of_stock', 'Out of Stock')}</Badge>;
+      return <Badge variant="primary">{t('bundle_badge', 'Bundle')} · {n}</Badge>;
+    }
     if (p.track_inventory === 0) return null;
     const stock = p.stock ?? 0;
     const reorder = p.reorder_point ?? 0;
@@ -219,7 +228,8 @@ export default function ProductGrid() {
           <button
             key={p.id}
             onClick={() => addToCart(p)}
-            disabled={p.track_inventory !== 0 && (p.stock ?? 0) <= 0}
+            disabled={p.is_bundle ? bundleLeft(p) <= 0 : p.track_inventory !== 0 && (p.stock ?? 0) <= 0}
+            title={p.is_bundle ? bundleContentsLabel(p) : undefined}
             style={{ '--cat': categoryColor(p.category) } as React.CSSProperties}
             className={`${tile.pad} ${tile.h} bg-surface border border-border border-s-4 border-s-[var(--cat)] rounded-[var(--radius-card)] text-start hover:border-primary hover:border-s-[var(--cat)] hover:shadow-[var(--shadow-card)] transition-all active:scale-[0.98] group flex flex-col justify-between gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
           >

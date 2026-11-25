@@ -201,6 +201,22 @@ export function translateServerError(err: unknown, t: Translate): string {
       return t('cf_err_cat_not_found', 'This category no longer exists.');
     case 'INVALID_RATE':
       return t('err_invalid_rate', 'The exchange rate must be a number greater than zero.');
+    case 'BUNDLE_EMPTY':
+      return t('err_bundle_empty', 'A bundle needs at least one product.');
+    case 'BUNDLE_QTY_INVALID':
+      return t('err_bundle_qty_invalid', 'Enter a quantity greater than 0.');
+    case 'BUNDLE_DUPLICATE_COMPONENT':
+      return t('err_bundle_duplicate', 'This product is already in the bundle.');
+    case 'BUNDLE_SELF':
+      return t('err_bundle_self', "A bundle can't contain itself.");
+    case 'BUNDLE_NESTED':
+      return t('err_bundle_nested', "A bundle can't contain another bundle, and a product inside a bundle can't become one.");
+    case 'BUNDLE_COMPONENT_MISSING':
+      return t('err_bundle_component_missing', 'A product of this bundle no longer exists. Edit the bundle.');
+    case 'BUNDLE_NOT_PURCHASABLE':
+      return t('err_bundle_not_purchasable', "A bundle can't be purchased. Purchase its products instead.");
+    case 'BUNDLE_NO_STOCK':
+      return t('err_bundle_no_stock', 'A bundle has no stock of its own. Adjust its products instead.');
     case 'UOM_INVALID':
       return t('err_uom_invalid', 'This unit is no longer available for the product. Reload and try again.');
   }

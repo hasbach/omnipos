@@ -9,6 +9,7 @@ import { CURRENCIES } from '../hooks/usePos';
 import { Badge } from './ui';
 import { formatMoney, formatBalance, formatNumber, discountLabel } from '../lib/format';
 import { uomUnitPrice } from '../lib/pricing';
+import { bundleContentsLabel } from '../lib/bundles';
 import { usePermissions } from '../lib/usePermissions';
 import { usePosLayout } from '../hooks/usePosLayout';
 import PosLayoutMenu from './PosLayoutMenu';
@@ -287,7 +288,13 @@ export default function CartPanel() {
                         {tierLabel && item.unit_price == null && (
                           <Badge variant="info">{tierLabel}</Badge>
                         )}
+                        {item.is_bundle ? <Badge variant="primary">{t('bundle_badge', 'Bundle')}</Badge> : null}
                       </div>
+                      {item.is_bundle && Array.isArray(item.bundle_items) && item.bundle_items.length > 0 ? (
+                        <p className="text-[11px] leading-4 text-text-3 truncate" title={bundleContentsLabel(item)}>
+                          {item.bundle_items.map((b: any) => `${formatNumber(b.quantity * item.quantity, { decimals: 0 })} ${b.name ?? ''}`.trim()).join(' + ')}
+                        </p>
+                      ) : null}
                       {!unit ? (
                         <p className="text-[11px] leading-4 text-text-3 font-mono truncate">
                           {item.barcode} • {formatMoney(unitPrice, { code: 'USD', symbol: '$' })}/{t('uom_unit_short', 'unit')}

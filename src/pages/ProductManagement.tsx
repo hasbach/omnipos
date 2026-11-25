@@ -32,6 +32,7 @@ import { ProductEditorDrawer } from './products/ProductEditorDrawer';
 import { BulkPriceModal } from './products/BulkPriceModal';
 import { commerceApi, type CommerceStatus } from '../lib/commerceApi';
 import { translateServerError } from '../lib/serverErrors';
+import { bundleAvailability, bundleContentsLabel } from '../lib/bundles';
 
 type StockFilter = 'all' | 'low' | 'out' | 'service';
 type StatusFilter = 'all' | 'active' | 'disabled';
@@ -99,6 +100,7 @@ export default function ProductManagement() {
 
   const categories = useMemo(() => Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort(), [products]);
 
+  const productsById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return products.filter((p) => {
@@ -252,6 +254,10 @@ export default function ProductManagement() {
         <div className={`min-w-0 ${p.active === 0 ? 'opacity-60' : ''}`}>
           <span className={`font-medium ${p.active === 0 ? 'text-text-3' : 'text-text'}`}>{p.name}</span>
           {p.active === 0 && <Badge variant="neutral" className="ms-2">{t('prod_disabled_badge', 'Disabled')}</Badge>}
+          {p.is_bundle ? <Badge variant="primary" className="ms-2">{t('bundle_badge', 'Bundle')}</Badge> : null}
+          {p.is_bundle && p.bundle_items && p.bundle_items.length > 0 ? (
+            <div className="mt-0.5 text-[11px] text-text-3">{bundleContentsLabel(p, productsById)}</div>
+          ) : null}
           {p.units && p.units.length > 0 && (
             <div className="mt-0.5 flex flex-wrap gap-1">
               {p.units.map((u) => (
@@ -270,6 +276,13 @@ export default function ProductManagement() {
         align: 'end',
         sortable: true,
         render: (p) => {
+          if (p.is_bundle) {
+            // A bundle has no stock of its own: show how many its products' stock covers.
+            const n = bundleAvailability(p, productsById);
+            return Number.isFinite(n)
+              ? <span className={`num text-xs ${n <= 0 ? 'text-danger' : 'text-text-3'}`}>{t('bundle_available_n', '{n} available').replace('{n}', String(n))}</span>
+              : <Badge variant="info">{t('bundle_badge', 'Bundle')}</Badge>;
+          }
           if (p.track_inventory === 0) return <Badge variant="info">{t('prod_service_badge', 'Service')}</Badge>;
           const out = p.stock <= 0;
           const low = !out && p.stock <= (p.reorder_point || 0) && (p.reorder_point || 0) > 0;
@@ -290,7 +303,10 @@ export default function ProductManagement() {
         header: t('prod_col_cost', 'Cost'),
         align: 'end',
         sortable: true,
-        render: (p) => <span className="num text-text-3">{formatMoney(p.cost || 0, usdCurrency)}</span>,
+        // A bundle's cost is what its products cost (it has no cost of its own).
+        render: (p) => <span className="num text-text-3">{formatMoney(p.is_bundle
+          ? (p.bundle_items || []).reduce((s, b) => s + (Number(productsById.get(b.component_id)?.cost ?? b.cost) || 0) * b.quantity, 0)
+          : p.cost || 0, usdCurrency)}</span>,
       },
       {
         key: 'price',
@@ -399,7 +415,7 @@ export default function ProductManagement() {
     );
 
     return cols;
-  }, [t, tiersVisible, usdCurrency, localCurrency, canEdit]);
+  }, [t, tiersVisible, usdCurrency, localCurrency, canEdit, productsById]);
 
   return (
     <div className="flex h-full flex-col">
@@ -520,6 +536,7 @@ export default function ProductManagement() {
         categories={categories}
         localCurrency={localCurrency ? { code: localCurrency.code, symbol: localCurrency.symbol, rate: localCurrency.rate } : null}
         priceLevelsEnabled={priceLevelsEnabled}
+        products={products}
         onClose={() => setEditorOpen(false)}
         onSaved={fetchProducts}
       />

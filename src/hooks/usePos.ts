@@ -15,7 +15,9 @@ import {
   saleLineUnitPriceLbp,
   uomUnitPrice,
   uomUnitPriceLbp,
+  groupBundleLines,
 } from '../lib/pricing';
+import { bundleAvailability } from '../lib/bundles';
 import { useSettings } from '../lib/useSettings';
 import { translateServerError } from '../lib/serverErrors';
 import { formatDateTime, partyDisplayName, discountLabel } from '../lib/format';
@@ -884,21 +886,34 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
   }, [selectedStakeholder, stakeholders.length]);
 
   // --- Stock guard (allow_negative_stock off) ------------------------------------------------
-  // Stock is in base pieces; a cart line consumes quantity x (uom_factor || 1) of its product.
-  const stockLimited = (p: any) => !allowNegativeStock && p.track_inventory !== 0;
-  const liveStock = (p: any) => Math.max(0, Number(products.find(x => x.id === p.id)?.stock ?? p.stock ?? 0));
+  // Stock is in base pieces; a cart line consumes quantity x (uom_factor || 1) of its product, and a
+  // bundle line consumes quantity x (pieces per bundle) of each of its products.
+  const productsById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
+  const bundleTracksStock = (p: any) => Number.isFinite(bundleAvailability(p, productsById));
+  const stockLimited = (p: any) => !allowNegativeStock && (p.is_bundle ? bundleTracksStock(p) : p.track_inventory !== 0);
+  const liveStock = (p: any) => Math.max(0, Number(productsById.get(p.id)?.stock ?? p.stock ?? 0));
   const formatQty = (n: number) => String(Math.floor(n * 1000) / 1000);
   const piecesInCart = (productId: number, excludeKey?: string) =>
-    cart.reduce((sum, i: any) => (i.id === productId && i.line_key !== excludeKey ? sum + i.quantity * (i.uom_factor || 1) : sum), 0);
+    cart.reduce((sum, i: any) => {
+      if (i.line_key === excludeKey) return sum;
+      if (i.is_bundle) return sum + i.quantity * ((i.bundle_items || []).find((b: any) => b.component_id === productId)?.quantity || 0);
+      return i.id === productId ? sum + i.quantity * (i.uom_factor || 1) : sum;
+    }, 0);
+  /** Bundles this line may hold given everything else in the cart. */
+  const bundlesLeft = (line: any, excludeKey?: string) =>
+    bundleAvailability(line, productsById, (cid) => piecesInCart(cid, excludeKey));
   /** Max quantity (in the line's unit) this line may hold given the other lines of the same product. */
   const maxLineQty = (line: any, factor = line.uom_factor || 1) =>
-    Math.max(0, Math.floor(((liveStock(line) - piecesInCart(line.id, line.line_key)) / factor) * 1000) / 1000);
+    line.is_bundle
+      ? bundlesLeft(line, line.line_key)
+      : Math.max(0, Math.floor(((liveStock(line) - piecesInCart(line.id, line.line_key)) / factor) * 1000) / 1000);
   /** Clamp a requested quantity for a line; toasts when it had to be reduced. */
   const clampLineQty = (line: any, desired: number): number => {
     if (!stockLimited(line) || desired <= line.quantity) return desired;
     const max = maxLineQty(line);
     if (desired <= max + 1e-9) return desired;
-    toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(liveStock(line)) }));
+    if (line.is_bundle) toast.error(t('bundle_only_n_available', 'Only {n} of this bundle available', { n: String(max) }));
+    else toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(liveStock(line)) }));
     beep('error');
     return Math.max(line.quantity, max);
   };
@@ -919,8 +934,14 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
     }
     const unit = findUnit(product, uomId);
     const key = cartLineKey(product.id, unit ? unit.id : null);
-    // allow_negative_stock off: the product's total pieces in the cart may not exceed its stock.
-    if (stockLimited(product)) {
+    // allow_negative_stock off: a bundle needs one more bundle's worth of each tracked product.
+    if (product.is_bundle && stockLimited(product)) {
+      if (bundlesLeft(product) < 1) {
+        toast.error(t('bundle_only_n_available', 'Only {n} of this bundle available', { n: String(bundlesLeft(product, cartLineKey(product.id, null))) }));
+        beep('error');
+        return;
+      }
+    } else if (stockLimited(product)) {
       const stock = liveStock(product);
       if (piecesInCart(product.id) + (unit ? unit.factor : 1) > stock + 1e-9) {
         toast.error(t('pos_only_n_in_stock', 'Only {n} pcs in stock', { n: formatQty(stock) }));
@@ -1570,7 +1591,24 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       "Item            Qty     Price   ",
     ];
 
-    transaction.items.forEach((item: any) => {
+    // A reprint (GET /api/transactions/:id) has one row per bundle component: print each sold bundle
+    // as one line with its products under it. A fresh checkout passes the cart, where a bundle is
+    // already one line (its products listed from bundle_items).
+    const fmtQty = (n: number) => String(Math.round(n * 1000) / 1000);
+    const receiptRows: any[] = [];
+    for (const entry of groupBundleLines(transaction.items as any[])) {
+      if (entry.kind === 'item') { receiptRows.push(entry.row); continue; }
+      const first: any = entry.components[0]?.row;
+      receiptRows.push({
+        name: entry.bundle_name, quantity: entry.bundle_qty, unit_price: entry.unit_price,
+        line_total: entry.unit_price * entry.bundle_qty,
+        discount: first?.discount_value ? (first.discount_type === 'percentage'
+          ? { type: 'percentage', value: first.discount_value }
+          : { type: 'fixed', value: entry.unit_price * entry.bundle_qty - entry.line_total }) : undefined,
+        bundle_contents: entry.components.map((c: any) => `${fmtQty(c.row.quantity)} x ${c.row.name || c.row.product_name || ''}`),
+      });
+    }
+    receiptRows.forEach((item: any) => {
       const qtyN = item.display_qty ?? item.quantity;
       const unitN = item.display_unit_price ?? item.unit_price ?? item.price ?? 0;
       const uomLabel = item.uom_name ? ` - ${item.uom_name}${item.uom_factor > 1 ? ` x${item.uom_factor}` : ''}` : '';
@@ -1579,6 +1617,9 @@ export function usePos(tenant: any, setTenant: any, currentUser: any, setCurrent
       const price = `$${(item.line_total ?? unitN * qtyN).toFixed(2)}`.padStart(8);
       lines.push(`${name} ${qty} ${price}`);
       if (item.uom_name && (item.name + uomLabel).length > 15) lines.push(`  ${uomLabel.replace(/^ - /, '')}`);
+      const contents: string[] = item.bundle_contents
+        || (item.is_bundle ? (item.bundle_items || []).map((b: any) => `${fmtQty(b.quantity * qtyN)} x ${b.name || ''}`) : []);
+      for (const c of contents) lines.push(`  ${c}`.slice(0, width));
       if (item.discount?.value > 0) {
         lines.push(`  (Discount: -${discountLabel(item.discount, discountLocal)})`);
       }

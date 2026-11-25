@@ -11,6 +11,8 @@ import { createTestApp, seedTenant } from "./helpers/testApp.js";
 import { buildReceiptBuffer } from "../server/printing/receipt.js";
 import * as server from "../server/pricing.js";
 import * as client from "../src/lib/pricing.js";
+import { bundleAvailability, collapseBundleRows, refundBundleGroup, refundBundleQuantities } from "../src/lib/bundles.js";
+import bundleLocale from "../src/intl/locales/bundles.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let app: Awaited<ReturnType<typeof createTestApp>>;
@@ -393,4 +395,67 @@ test("receipt (ESC/POS) prints one bundle line with its components; statement gr
   assert.equal(items[0].qty, 1);
   near(items[0].line_total, 13);
   assert.deepEqual(items[0].components, [{ name: "Tea", qty: 2 }, { name: "Mug", qty: 1 }]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Client helpers + translations
+// ---------------------------------------------------------------------------------------------
+
+test("client: bundle availability, collapsed invoice rows, whole-bundle refund quantities", () => {
+  const bundle: any = { bundle_items: [
+    { component_id: 1, quantity: 2, stock: 9, track_inventory: 1 },
+    { component_id: 2, quantity: 1, stock: 3, track_inventory: 1 },
+    { component_id: 3, quantity: 1, stock: 0, track_inventory: 0 },
+  ] };
+  assert.equal(bundleAvailability(bundle), 3, "min(9/2, 3/1); untracked ignored");
+  assert.equal(bundleAvailability(bundle, undefined, (id) => (id === 1 ? 4 : 0)), 2, "cart use subtracted");
+  const live = new Map<number, any>([[2, { id: 2, stock: 10, track_inventory: 1 }]]);
+  assert.equal(bundleAvailability(bundle, live), 4, "live stock wins over the snapshot");
+  assert.equal(bundleAvailability({ bundle_items: [{ component_id: 3, quantity: 1, track_inventory: 0 }] } as any), Infinity);
+
+  const rows = collapseBundleRows([
+    { id: 10, product_name: "A", quantity: 2, unit_price: 13 * 2 / 3, unit_cost: 6, discount_type: "fixed", discount_value: 2, bundle_id: 9, bundle_name: "Deal", bundle_qty: 2, bundle_line: 1 },
+    { id: 11, product_name: "B", quantity: 2, unit_price: 13 / 3, unit_cost: 2, discount_type: "fixed", discount_value: 1, bundle_id: 9, bundle_name: "Deal", bundle_qty: 2, bundle_line: 1 },
+    { id: 12, product_name: "Gum", quantity: 1, unit_price: 1 },
+  ]);
+  assert.equal(rows.length, 2);
+  const b: any = rows[0];
+  assert.equal(b.is_bundle_group, true);
+  assert.equal(b.product_id, 9);
+  assert.equal(b.quantity, 2);
+  near(b.unit_price, 13);
+  near(b.discount.value, 3, "fixed discounts of the components add up");
+  near(b.unit_cost, 8, "cost of one bundle");
+  assert.deepEqual(b.bundle_contents, ["2 x A", "2 x B"]);
+
+  const lines = [
+    { item_id: 1, remaining_qty: 4, bundle_line: 1, bundle_comp_qty: 2 },
+    { item_id: 2, remaining_qty: 1, bundle_line: 1, bundle_comp_qty: 1 },
+    { item_id: 3, remaining_qty: 5 },
+  ];
+  const g = refundBundleGroup(lines, lines[0], { 1: 2, 2: 1 });
+  assert.equal(g.isFirst, true);
+  assert.equal(g.maxBundles, 1, "only one B left");
+  assert.equal(g.selected, 1);
+  assert.deepEqual(refundBundleQuantities(g.members, 1), { 1: 2, 2: 1 });
+});
+
+test("every bundle string is translated in English, Arabic and French", () => {
+  const used = new Set<string>();
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(tsx?|jsx?)$/.test(e.name)) {
+        for (const m of fs.readFileSync(p, "utf8").matchAll(/t\('((?:err_)?bundle_[a-z_]+)'/g)) used.add(m[1]);
+      }
+    }
+  };
+  walk(path.join(here, "..", "src"));
+  assert.ok(used.size > 20, `found ${used.size} keys`);
+  const locale = bundleLocale as unknown as Record<string, Record<string, string>>;
+  for (const lang of ["en", "ar", "fr"]) {
+    for (const key of used) assert.ok(locale[lang][key], `${lang} is missing ${key}`);
+    assert.deepEqual(Object.keys(locale[lang]).sort(), Object.keys(locale.en).sort(), `${lang} has the same keys as en`);
+  }
 });
