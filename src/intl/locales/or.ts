@@ -53,6 +53,10 @@ export default {
     or_cash_collision_hint: 'You can still lock it; the shortfall is shown in the Morning Briefing.',
     or_cash_collision_confirm: 'Lock anyway',
     or_cancel: 'Cancel',
+    or_bills_per_day: 'Bills',
+    or_draws_per_day: 'Owner draws',
+    or_profit_per_day: 'Gross profit',
+    or_runway_covered: 'profit covers bills',
   },
   ar: {
     shell_group_or: 'بحوث العمليات',
@@ -108,6 +112,10 @@ export default {
     or_cash_collision_hint: 'يمكنك الحجز رغم ذلك؛ يظهر العجز في الملخص الصباحي.',
     or_cash_collision_confirm: 'احجز رغم ذلك',
     or_cancel: 'إلغاء',
+    or_bills_per_day: 'الفواتير الثابتة',
+    or_draws_per_day: 'سحوبات المالك',
+    or_profit_per_day: 'الربح الإجمالي',
+    or_runway_covered: 'الربح يغطي الفواتير',
   },
   fr: {
     shell_group_or: 'Recherche Opérationnelle',
@@ -152,5 +160,9 @@ export default {
     or_cash_collision_hint: 'Vous pouvez quand même bloquer ; le manque apparaît dans le briefing du matin.',
     or_cash_collision_confirm: 'Bloquer quand même',
     or_cancel: 'Annuler',
+    or_bills_per_day: 'Charges fixes',
+    or_draws_per_day: 'Retraits du propriétaire',
+    or_profit_per_day: 'Marge brute',
+    or_runway_covered: 'la marge couvre les charges',
   },
 };

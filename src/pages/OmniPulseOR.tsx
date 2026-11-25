@@ -523,8 +523,13 @@ export default function OmniPulseOR() {
             <span>Drawer: <strong>{formatMoney(sp.drawer_balance_usd, USD)}</strong></span>
             <span>Safe/Bank: <strong>{formatMoney(sp.savings_balance_usd + sp.bank_balance_usd, USD)}</strong></span>
             <span>Min Float: <strong>{formatMoney(sp.min_drawer_float_usd, USD)}</strong></span>
-            <span>Daily OpEx Burn: <strong>{formatMoney(sp.daily_opex_burn_usd, USD)}/day</strong></span>
-            {sp.runway_days != null && <span>{t('or_runway_days', 'Runway')}: <strong>{sp.runway_days}d</strong></span>}
+            <span>{t('or_bills_per_day', 'Bills')}: <strong>{formatMoney(sp.daily_opex_burn_usd, USD)}/day</strong></span>
+            <span>{t('or_draws_per_day', 'Owner draws')}: <strong>{formatMoney(sp.avg_daily_owner_draws_usd || 0, USD)}/day</strong></span>
+            <span>{t('or_profit_per_day', 'Gross profit')}: <strong>{formatMoney(sp.avg_daily_gross_profit_usd || 0, USD)}/day</strong></span>
+            <span>
+              {t('or_runway_days', 'Runway')}:{' '}
+              <strong>{sp.runway_days != null ? `${sp.runway_days}d` : t('or_runway_covered', 'profit covers bills')}</strong>
+            </span>
           </div>
 
           <Card className="p-5 space-y-4">

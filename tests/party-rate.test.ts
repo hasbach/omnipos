@@ -321,7 +321,7 @@ test("sync: Postgres 42703 is parsed as a missing column", () => {
   assert.equal(sync.parseMissingColumn({ code: "42703", message: 'column "local_rate" of relation "stakeholders" does not exist' }), "local_rate");
   assert.equal(sync.parseMissingColumn({ code: "PGRST204", message: "Could not find the 'local_currency' column of 'transactions' in the schema cache" }), "local_currency");
   assert.equal(sync.parseMissingColumn({ code: "23503", message: "fk" }), undefined);
-  assert.deepEqual(sync.OPTIONAL_CLOUD_COLUMNS, { or_owner_draws: ["core_cash_global_id"], stakeholders: ["local_rate", "discount_percent"], transactions: ["local_rate", "local_currency", "order_global_id"] });
+  assert.deepEqual(sync.OPTIONAL_CLOUD_COLUMNS, { or_owner_draws: ["core_cash_global_id"], or_tenant_config: ["owner_stakeholder_id"], stakeholders: ["local_rate", "discount_percent"], transactions: ["local_rate", "local_currency", "order_global_id"] });
 });
 
 test("sync: pulling a stakeholder from a cloud WITHOUT local_rate never nulls the local value", async () => {

@@ -188,12 +188,15 @@ export function runNightlyOrPipeline(
     // Step 3: Survival Mode Evaluation (14-day Cash Runway vs OpEx + PO locks + overdue supplier debt)
     const spendable = computeSpendableCash(tenantId);
     runwayDays = spendable.runway_days;
-    if (spendable.daily_opex_burn_usd > 0) {
-      if ((runwayDays ?? 0) < 7 || spendable.free_spendable_cash_usd < 0) nextMode = "CRISIS";
-      else if ((runwayDays ?? 0) < 14) nextMode = "RECOVERY";
+    // Profit covers bills + owner draws: GROWTH, or RECOVERY while the money for upcoming bills isn't set aside yet.
+    // Otherwise the runway at the net burn decides: < 7 days CRISIS, < 14 days RECOVERY, else GROWTH.
+    if (spendable.net_daily_burn_usd <= 0.01) {
+      nextMode = spendable.free_spendable_cash_usd < 0 ? "RECOVERY" : "GROWTH";
+    } else {
+      const days = runwayDays ?? 0;
+      if (days < 7) nextMode = "CRISIS";
+      else if (days < 14 || spendable.free_spendable_cash_usd < 0) nextMode = "RECOVERY";
       else nextMode = "GROWTH";
-    } else if (spendable.free_spendable_cash_usd < 0) {
-      nextMode = "CRISIS";
     }
     if (nextMode !== config.survival_mode) {
       db.prepare("UPDATE or_tenant_config SET survival_mode = ? WHERE tenant_id = ?").run(nextMode, tenantId);
@@ -231,7 +234,7 @@ export function runNightlyOrPipeline(
         "CRITICAL",
         "CASH_RUNWAY",
         `Negative Free Spendable Cash ($${spendable.free_spendable_cash_usd.toFixed(2)})`,
-        `Survival mode is ${nextMode}. Defer non-essential POs and enforce daily owner draw caps.`,
+        `Not enough cash is set aside for upcoming bills ($${spendable.locked_opex_reserve_usd.toFixed(2)} accrued). Average gross profit $${spendable.avg_daily_gross_profit_usd.toFixed(2)}/day vs bills + owner draws $${(spendable.daily_opex_burn_usd + spendable.avg_daily_owner_draws_usd).toFixed(2)}/day. Survival mode: ${nextMode}.`,
         "SPENDABLE_CASH",
         null
       );

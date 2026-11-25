@@ -16,6 +16,13 @@ export interface SpendableCashSnapshot {
   active_po_locks_usd: number;
   free_spendable_cash_usd: number;
   daily_opex_burn_usd: number;
+  /** Average daily gross profit from sales (last 30 days with sales; line price - line cost). */
+  avg_daily_gross_profit_usd: number;
+  /** Average daily owner cash withdrawals (last 30 days). */
+  avg_daily_owner_draws_usd: number;
+  /** Bills + owner draws - gross profit, per day. <= 0 means the shop's profit covers its bills. */
+  net_daily_burn_usd: number;
+  /** Days the cash on hand lasts at the NET burn; null when profit covers the burn. */
   runway_days: number | null;
   survival_mode: string;
   accounts: Array<{ id: number; name: string; kind: string; balance_usd: number }>;
@@ -122,6 +129,55 @@ export function computeOpexReserve(tenantId: number, today = localDateIso()): nu
   return round2(obligations.reduce((sum, o) => sum + accruedObligationReserve(o.amount_usd, o.frequency, o.due_day, today), 0));
 }
 
+const PROFIT_WINDOW_DAYS = 30;
+
+/**
+ * Average daily gross profit over the last 30 days: sum(qty x (unit_price - unit_cost)) of live + archived sales,
+ * minus refunds, divided by the days in the window that the shop has been trading (first sale in the window up to
+ * today, at least 7). Lines without a cost (e.g. service items such as bread bought daily as an expense) count their
+ * full price as profit; their cost is then expected to be a fixed obligation.
+ */
+export function averageDailyGrossProfit(tenantId: number): number {
+  const row = db
+    .prepare(
+      `SELECT IFNULL(SUM(CASE WHEN type = 'refund' THEN -1 ELSE 1 END * qty * (price - cost)), 0) AS profit,
+              MIN(created_at) AS first_at
+         FROM (
+           SELECT t.type, t.created_at, ti.quantity AS qty, ti.unit_price AS price, IFNULL(ti.unit_cost, 0) AS cost
+             FROM transaction_items ti JOIN transactions t ON t.id = ti.transaction_id
+            WHERE t.tenant_id = ? AND t.type IN ('sale', 'refund') AND t.deleted_at IS NULL
+              AND datetime(t.created_at) >= datetime('now', '-${PROFIT_WINDOW_DAYS} days')
+           UNION ALL
+           SELECT t.type, t.created_at, ti.quantity, ti.unit_price, IFNULL(ti.unit_cost, 0)
+             FROM archived_transaction_items ti JOIN archived_transactions t ON t.id = ti.transaction_id
+            WHERE t.tenant_id = ? AND t.type IN ('sale', 'refund')
+              AND datetime(t.created_at) >= datetime('now', '-${PROFIT_WINDOW_DAYS} days')
+         )`
+    )
+    .get(tenantId, tenantId) as any;
+  if (!row?.first_at) return 0;
+  const firstMs = Date.parse(String(row.first_at).replace(" ", "T") + (/(Z|[+-]\d{2}:?\d{2})$/.test(String(row.first_at)) ? "" : "Z"));
+  const days = Math.min(PROFIT_WINDOW_DAYS, Math.max(7, Math.ceil((Date.now() - firstMs) / 86400000)));
+  return round2(Math.max(0, Number(row.profit) || 0) / days);
+}
+
+/** Average daily owner cash withdrawals (cash_flow owner_withdrawal, live + archived) over the last 30 days. */
+export function averageDailyOwnerDraws(tenantId: number): number {
+  const row = db
+    .prepare(
+      `SELECT IFNULL(SUM(amount / IFNULL(NULLIF(exchange_rate, 0), 1)), 0) AS total FROM (
+         SELECT amount, exchange_rate FROM cash_flow
+          WHERE tenant_id = ? AND type = 'out' AND category = 'owner_withdrawal' AND deleted_at IS NULL
+            AND datetime(created_at) >= datetime('now', '-${PROFIT_WINDOW_DAYS} days')
+         UNION ALL
+         SELECT amount, exchange_rate FROM archived_cash_flow
+          WHERE tenant_id = ? AND type = 'out' AND category = 'owner_withdrawal'
+            AND datetime(created_at) >= datetime('now', '-${PROFIT_WINDOW_DAYS} days'))`
+    )
+    .get(tenantId, tenantId) as any;
+  return round2((Number(row?.total) || 0) / PROFIT_WINDOW_DAYS);
+}
+
 /** Computes Real Spendable Cash directly from OmniPOS Core `cash_accounts` + OR locks/reserves. */
 export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
   const config = ensureOrInitialized(tenantId);
@@ -158,9 +214,14 @@ export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
     .all(tenantId) as any[];
   const dailyOpexBurn = round2(obligations.reduce((sum, o) => sum + dailyObligationRate(o.amount_usd, o.frequency), 0));
 
-  // Runway in days: liquid cash (minus float and active PO locks) divided by daily fixed obligation burn
+  // Runway: cash on hand (minus float and active PO locks) divided by the NET daily burn - bills plus owner draws
+  // minus the gross profit the shop actually earns each day. A shop whose profit covers its bills has no runway
+  // limit (null), however little cash sits in the drawer tonight.
+  const grossProfit = averageDailyGrossProfit(tenantId);
+  const ownerDraws = averageDailyOwnerDraws(tenantId);
+  const netBurn = round2(dailyOpexBurn + ownerDraws - grossProfit);
   const runwayCash = Math.max(0, totalLiquid - minFloat - activePoLocks);
-  const runwayDays = dailyOpexBurn > 0.01 ? round2(runwayCash / dailyOpexBurn) : null;
+  const runwayDays = netBurn > 0.01 ? round2(runwayCash / netBurn) : null;
 
   return {
     drawer_balance_usd: round2(drawer),
@@ -172,6 +233,9 @@ export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
     active_po_locks_usd: activePoLocks,
     free_spendable_cash_usd: freeSpendable,
     daily_opex_burn_usd: dailyOpexBurn,
+    avg_daily_gross_profit_usd: grossProfit,
+    avg_daily_owner_draws_usd: ownerDraws,
+    net_daily_burn_usd: netBurn,
     runway_days: runwayDays,
     survival_mode: config.survival_mode,
     accounts: accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, balance_usd: a.balance_usd })),

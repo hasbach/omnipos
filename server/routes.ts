@@ -33,6 +33,7 @@ import { callRpc } from './cloudCall.js';
 import { loadCompletableOrder, orderEffectiveState, orderSaleExists, orderPricedItems } from './orderSale.js';
 import { applyResult, setupOrderRoutes } from './orders.js';
 import { setupCommerceRoutes } from "./commerce.js";
+import { applyLaterPayments, filterBySettlement } from "./invoiceSettlement.js";
 import { setupOrRoutes } from "./or/routes.js";
 import { isOrLicenseValid } from "./or/license.js";
 import { recordStockAnomaly } from "./or/cycleCount.js";
@@ -2236,8 +2237,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     ORDER BY t.created_at DESC LIMIT ${limit}`;
     const params = [tenantId, ...filterParams, tenantId, ...filterParams];
 
-    const transactions = db.prepare(query).all(...params);
-    res.json(transactions);
+    const transactions = db.prepare(query).all(...params) as any[];
+    // Payments made later through Balance Payment settle the party's oldest invoices first.
+    res.json(applyLaterPayments(tenantId, transactions));
   });
 
   // Shared by GET /api/transactions/:id and PUT /api/transactions/:id (which re-renders the same
@@ -2566,6 +2568,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         t.created_at as date,
         t.type,
         s.name as stakeholder,
+        t.stakeholder_id,
         t.total_amount,
         t.currency,
         (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit') as paid_amount,
@@ -2575,11 +2578,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       LEFT JOIN stakeholders s ON t.stakeholder_id = s.id
       LEFT JOIN users u ON t.user_id = u.id
       WHERE t.tenant_id = ?${filter.sql}`;
-      if (status === 'paid') {
-        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit')) <= 0.01`;
-      } else if (status === 'unpaid') {
-        sql += ` AND (t.total_amount - (SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit')) > 0.01`;
-      }
+      // paid / unpaid is filtered after applyLaterPayments (balance payments made later count too).
       return { sql, params: [tenantId, ...filter.params] };
     };
 
@@ -2589,8 +2588,10 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     const params = [...live.params, ...archived.params];
 
     try {
-      const results = db.prepare(query).all(...params);
-      res.json(results);
+      const results = (db.prepare(query).all(...params) as any[]).map((r) => ({ ...r, id: r.invoice_no }));
+      applyLaterPayments(tenantId, results);
+      for (const r of results) { r.balance = (Number(r.total_amount) || 0) - (Number(r.paid_amount) || 0); delete r.id; }
+      res.json(filterBySettlement(results, status));
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -2802,17 +2803,16 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       if (from) { sql += " AND date(t.created_at, 'localtime') >= date(?)"; params.push(from); }
       if (to) { sql += " AND date(t.created_at, 'localtime') <= date(?)"; params.push(to); }
       if (search) { sql += " AND (s.name LIKE ? OR t.reference LIKE ? OR CAST(t.id AS TEXT) = ?)"; params.push(`%${search}%`, `%${search}%`, String(search)); }
-      const paid = `(SELECT IFNULL(SUM(amount / exchange_rate), 0) FROM ${paymentsTable} WHERE transaction_id = t.id AND method != 'credit')`;
-      if (status === 'paid') sql += ` AND (t.total_amount - ${paid}) <= 0.01`;
-      else if (status === 'unpaid') sql += ` AND (t.total_amount - ${paid}) > 0.01`;
+      // paid / unpaid is filtered after applyLaterPayments (supplier payments made later count too).
       return { sql, params };
     };
     const live = branch("transactions", "transaction_items", "payments", 0);
     const arch = branch("archived_transactions", "archived_transaction_items", "archived_payments", 1);
 
     try {
-      const purchases = db.prepare(`SELECT * FROM (${live.sql} UNION ALL ${arch.sql}) ORDER BY created_at DESC`).all(...live.params, ...arch.params);
-      res.json(purchases);
+      const purchases = db.prepare(`SELECT * FROM (${live.sql} UNION ALL ${arch.sql}) ORDER BY created_at DESC`).all(...live.params, ...arch.params) as any[];
+      for (const p of purchases) p.stakeholder_id = p.supplier_id;
+      res.json(filterBySettlement(applyLaterPayments(tenantId, purchases), status));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -2854,13 +2854,16 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   `).all(id);
 
     // Credit ("on account") payments are not money paid — same rule as balances and GET /api/transactions/:id.
-    const paidAmount = (payments as any[]).reduce((sum: number, p: any) => p.method === 'credit' ? sum : sum + (p.amount / (p.exchange_rate || 1)), 0);
+    const ownPaid = (payments as any[]).reduce((sum: number, p: any) => p.method === 'credit' ? sum : sum + (p.amount / (p.exchange_rate || 1)), 0);
+    const [settled] = applyLaterPayments(tenantId, [{ id: purchase.id, type: 'purchase', stakeholder_id: purchase.stakeholder_id, total_amount: purchase.total_amount, paid_amount: ownPaid }]) as any[];
+    const paidAmount = settled.paid_amount;
 
     res.json({
       ...purchase,
       items,
       payments,
       paid_amount: paidAmount,
+      paid_later: settled.paid_later,
       balance: purchase.total_amount - paidAmount
     });
   });

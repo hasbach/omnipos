@@ -58,6 +58,50 @@ function weightsForTenant(businessType: BusinessType, survivalMode: SurvivalMode
   };
 }
 
+/**
+ * Typical purchase pack per product from the last 180 days of purchase lines: the unit factor used on the most
+ * recent line bought in a unit bigger than one piece, else the most frequent purchased quantity (>= 2; ties go to
+ * the smaller one). Products only ever bought one piece at a time get no entry.
+ */
+export function purchaseHistoryPackSizes(tenantId: number): Map<number, number> {
+  const rows = db
+    .prepare(
+      `SELECT product_id, quantity, uom_factor, created_at FROM (
+         SELECT ti.product_id, ti.quantity, ti.uom_factor, t.created_at
+           FROM transaction_items ti JOIN transactions t ON t.id = ti.transaction_id
+          WHERE t.tenant_id = ? AND t.type = 'purchase' AND t.deleted_at IS NULL
+            AND datetime(t.created_at) >= datetime('now', '-180 days')
+         UNION ALL
+         SELECT ti.product_id, ti.quantity, ti.uom_factor, t.created_at
+           FROM archived_transaction_items ti JOIN archived_transactions t ON t.id = ti.transaction_id
+          WHERE t.tenant_id = ? AND t.type = 'purchase'
+            AND datetime(t.created_at) >= datetime('now', '-180 days')
+       ) ORDER BY created_at DESC`
+    )
+    .all(tenantId, tenantId) as any[];
+  const unitFactor = new Map<number, number>();
+  const counts = new Map<number, Map<number, number>>();
+  for (const r of rows) {
+    const pid = Number(r.product_id);
+    const factor = Number(r.uom_factor) || 0;
+    if (factor > 1 && !unitFactor.has(pid)) unitFactor.set(pid, factor);
+    const q = Math.round(Number(r.quantity) || 0);
+    if (q < 2 || Math.abs((Number(r.quantity) || 0) - q) > 1e-6) continue;
+    let m = counts.get(pid);
+    if (!m) counts.set(pid, (m = new Map()));
+    m.set(q, (m.get(q) || 0) + 1);
+  }
+  const out = new Map<number, number>(unitFactor);
+  for (const [pid, m] of counts) {
+    if (out.has(pid)) continue;
+    let best = 0;
+    let bestN = 0;
+    for (const [q, n] of m) if (n > bestN || (n === bestN && q < best)) { best = q; bestN = n; }
+    if (best >= 2) out.set(pid, best);
+  }
+  return out;
+}
+
 /** Builds `OrOptimizationProblem` from live OmniPOS products, suppliers, pack units, metrics, and Free Spendable Cash. */
 export function buildOptimizationProblem(
   tenantId: number,
@@ -119,12 +163,18 @@ export function buildOptimizationProblem(
     if (!lastPurchaseSupplier.has(r.product_id)) lastPurchaseSupplier.set(r.product_id, r.stakeholder_id);
   }
 
-  // Load pack factors (smallest orderable pack factor >= 1 from product_units, else 1)
+  // Order multiple per product (suppliers sell boxes, not single pieces), first match wins:
+  //  1. the smallest unit of measure bigger than one piece (product_units, e.g. "Box" = 65)
+  //  2. how this shop actually buys it: the unit used on recent purchase lines, else the most common
+  //     purchased quantity (ties -> the smaller), over the last 180 days
+  //  3. products.units_per_package, else 1
   const packFactorMap = new Map<number, number>();
   const unitRows = db
-    .prepare("SELECT product_id, MIN(factor) AS min_factor FROM product_units WHERE tenant_id = ? AND deleted_at IS NULL AND factor >= 1 GROUP BY product_id")
+    .prepare("SELECT product_id, MIN(factor) AS min_factor FROM product_units WHERE tenant_id = ? AND deleted_at IS NULL AND factor > 1 GROUP BY product_id")
     .all(tenantId) as any[];
   for (const u of unitRows) packFactorMap.set(u.product_id, Number(u.min_factor) || 1);
+  const historyPack = purchaseHistoryPackSizes(tenantId);
+  for (const [pid, pack] of historyPack) if (!packFactorMap.has(pid)) packFactorMap.set(pid, pack);
 
   const skuRows = db
     .prepare(

@@ -674,3 +674,73 @@ test("sync: pulling a cloud OR config row adopts the local twin instead of faili
     assert.equal(stableGlobalId(s.tenantId, "x"), stableGlobalId(s.tenantId, "x"));
   }
 });
+
+test("runway counts the gross profit the shop earns: profit covering bills is not a crisis", async () => {
+  const s = setupTenant(true);
+  await app.api("PUT", "/api/or/config", { ...s.as, body: { min_drawer_float: 0 } });
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "in", amount: 50, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Cash" } });
+  // Bills: $20/day
+  await app.api("POST", "/api/or/obligations", { ...s.as, body: { name: "Bread", amount_usd: 20, frequency: "daily" } });
+  const p = Number(app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'RW-1', 'Item', 10, 6, 1000, 1)").run(s.tenantId).lastInsertRowid);
+  // 10 days ago .. today: 10 units/day at $4 margin = $40/day gross profit
+  for (let d = 0; d < 10; d++) {
+    const tx = Number(app.db.prepare(`INSERT INTO transactions (tenant_id, user_id, type, total_amount, currency, exchange_rate, status, created_at) VALUES (?, ?, 'sale', 100, 'USD', 1, 'completed', datetime('now', '-${d} days'))`).run(s.tenantId, s.admin).lastInsertRowid);
+    app.db.prepare("INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, unit_cost) VALUES (?, ?, 10, 10, 6)").run(tx, p);
+  }
+  const sp = await app.api("GET", "/api/or/spendable-cash", s.as);
+  assert.equal(sp.body.avg_daily_gross_profit_usd, 40);
+  assert.equal(sp.body.daily_opex_burn_usd, 20);
+  assert.equal(sp.body.net_daily_burn_usd, -20);
+  assert.equal(sp.body.runway_days, null, "profit covers the bills: no runway limit");
+  const run = await app.api("POST", "/api/or/pipeline/run", s.as);
+  assert.equal(run.body.survival_mode, "GROWTH", "profitable and today's bills are covered ($50 cash - $20 reserve)");
+
+  // Owner draws bigger than the margin bring the runway back
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "out", amount: 900, currency: "USD", exchange_rate: 1, category: "owner_withdrawal", reason: "Owner" } });
+  const sp2 = await app.api("GET", "/api/or/spendable-cash", s.as);
+  assert.equal(sp2.body.avg_daily_owner_draws_usd, 30);
+  assert.equal(sp2.body.net_daily_burn_usd, 10);
+});
+
+test("an invoice paid later through a Balance Payment shows as paid (oldest invoices first)", async () => {
+  const s = setupTenant(true);
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "in", amount: 500, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Cash" } });
+  const sup = Number(app.db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, 'Later Sup', 'supplier')").run(s.tenantId).lastInsertRowid);
+  const p = Number(app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'LP-1', 'Thing', 3, 2, 0, 1)").run(s.tenantId).lastInsertRowid);
+  const buy = async (qty: number) => (await app.api("POST", "/api/transactions", {
+    ...s.as,
+    body: { type: "purchase", stakeholder_id: sup, user_id: s.admin, currency: "USD", exchange_rate: 1, items: [{ id: p, quantity: qty, price: 2, unit_price: 2 }], payments: [] },
+  })).body.id as number;
+  const older = await buy(50); // $100 on account
+  const newer = await buy(30); // $60 on account
+  const pay = await app.api("POST", "/api/balance-payment", { ...s.as, body: { stakeholder_id: sup, amount: 120, currency: "USD", exchange_rate: 1, direction: "pay" } });
+  assert.equal(pay.status, 200, JSON.stringify(pay.body));
+
+  const list = await app.api("GET", `/api/purchases?supplier_id=${sup}`, s.as);
+  const byId = new Map(list.body.map((r: any) => [r.id, r]));
+  assert.equal((byId.get(older) as any).paid_amount, 100, "older invoice fully covered");
+  assert.equal((byId.get(older) as any).paid_later, 100);
+  assert.equal((byId.get(newer) as any).paid_amount, 20, "the rest goes to the newer one");
+  const unpaid = await app.api("GET", `/api/purchases?supplier_id=${sup}&status=unpaid`, s.as);
+  assert.deepEqual(unpaid.body.map((r: any) => r.id), [newer]);
+  const paid = await app.api("GET", `/api/purchases?supplier_id=${sup}&status=paid`, s.as);
+  assert.deepEqual(paid.body.map((r: any) => r.id), [older]);
+  const detail = await app.api("GET", `/api/purchases/${newer}`, s.as);
+  assert.equal(detail.body.balance, 40);
+});
+
+test("the optimizer orders in the shop's usual purchase pack when no box unit is defined", async () => {
+  const { purchaseHistoryPackSizes } = await import("../server/or/optimizer.js");
+  const s = setupTenant(true);
+  const sup = Number(app.db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, 'Gum Co', 'supplier')").run(s.tenantId).lastInsertRowid);
+  const gum = Number(app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'GUM', 'Gum', 0.1, 0.05, 0, 1)").run(s.tenantId).lastInsertRowid);
+  const single = Number(app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'ONE', 'Single', 5, 3, 0, 1)").run(s.tenantId).lastInsertRowid);
+  const buy = (pid: number, qty: number) => {
+    const tx = Number(app.db.prepare("INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, status) VALUES (?, ?, ?, 'purchase', 1, 'USD', 1, 'completed')").run(s.tenantId, sup, s.admin).lastInsertRowid);
+    app.db.prepare("INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, unit_cost) VALUES (?, ?, ?, 0.05, 0.05)").run(tx, pid, qty);
+  };
+  buy(gum, 65); buy(gum, 130); buy(gum, 65); buy(single, 1); buy(single, 1);
+  const packs = purchaseHistoryPackSizes(s.tenantId);
+  assert.equal(packs.get(gum), 65);
+  assert.equal(packs.has(single), false);
+});
