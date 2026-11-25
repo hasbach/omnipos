@@ -3,6 +3,7 @@ import { db, logAction } from "../db.js";
 import { ValidationError } from "../errors.js";
 import { ensureOrInitialized } from "./config.js";
 import { adjustProductStockCore, localDateIso, resolveTenantUserId, round2 } from "./coreBridge.js";
+import { rowGlobalId, stableGlobalId } from "./stableId.js";
 
 export type AnomalyType = "NEGATIVE_STOCK_SALE" | "STAFF_SHELF_EMPTY" | "HIGH_VARIANCE" | "EXPIRY_CHECK";
 
@@ -160,20 +161,24 @@ export function generateCycleCountSession(
 
   const sessionType = config.business_type === "RESTAURANT" ? "PERISHABLE_CHECK" : "DAILY_ABC";
   const sessionId = db.transaction(() => {
+    // The automatic daily session gets the same id on every register (a manual "force" one is unique).
+    let sessionGid = opts.force ? null : stableGlobalId(tenantId, "or_cycle_count_sessions", sessionDate);
+    if (sessionGid && db.prepare("SELECT 1 FROM or_cycle_count_sessions WHERE global_id = ?").get(sessionGid)) sessionGid = null;
     const info = db
       .prepare(
-        `INSERT INTO or_cycle_count_sessions (tenant_id, session_date, session_type, assigned_user_id, status, total_items_planned)
-         VALUES (?, ?, ?, ?, 'OPEN', ?)`
+        `INSERT INTO or_cycle_count_sessions (global_id, tenant_id, session_date, session_type, assigned_user_id, status, total_items_planned)
+         VALUES (?, ?, ?, ?, ?, 'OPEN', ?)`
       )
-      .run(tenantId, sessionDate, sessionType, opts.assignedUserId ?? null, selected.length);
+      .run(sessionGid, tenantId, sessionDate, sessionType, opts.assignedUserId ?? null, selected.length);
     const sid = Number(info.lastInsertRowid);
 
     const insItem = db.prepare(
-      `INSERT INTO or_cycle_count_items (tenant_id, session_id, product_id, priority_reason, system_qty_snapshot, unit_cost_snapshot)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO or_cycle_count_items (global_id, tenant_id, session_id, product_id, priority_reason, system_qty_snapshot, unit_cost_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     );
     for (const item of selected) {
-      insItem.run(tenantId, sid, item.product_id, item.priority_reason, item.stock, item.cost);
+      const itemGid = sessionGid ? stableGlobalId(tenantId, "or_cycle_count_items", sessionGid, rowGlobalId("products", item.product_id) || item.product_id) : null;
+      insItem.run(itemGid, tenantId, sid, item.product_id, item.priority_reason, item.stock, item.cost);
     }
 
     if (queuedAnomalyIds.length > 0) {
@@ -267,11 +272,14 @@ export function submitCycleCount(
   const alertPct = Number(config.variance_alert_pct) || 5;
 
   db.transaction(() => {
+    // The variance is measured against the system stock AT COUNT TIME (not when the session was
+    // generated): sales/purchases between generation and counting are already on the shelf count.
     const updItem = db.prepare(
       `UPDATE or_cycle_count_items
-          SET counted_qty = ?, variance_qty = ?, variance_cost = ?, counted_at = CURRENT_TIMESTAMP
+          SET counted_qty = ?, system_qty_snapshot = ?, variance_qty = ?, variance_cost = ?, counted_at = CURRENT_TIMESTAMP
         WHERE id = ? AND tenant_id = ?`
     );
+    const stockNow = db.prepare("SELECT stock FROM products WHERE id = ? AND tenant_id = ?");
 
     for (const c of counts) {
       const target = items.find((i) => (c.item_id ? i.id === c.item_id : i.product_id === c.product_id));
@@ -280,7 +288,8 @@ export function submitCycleCount(
       if (!Number.isFinite(counted) || counted < 0) {
         throw new ValidationError("Counted quantity must be a non-negative number.", 400, { code: "OR_CYCLE_QTY_INVALID" });
       }
-      const sysQty = Number(target.system_qty_snapshot) || 0;
+      const live = stockNow.get(target.product_id, tenantId) as any;
+      const sysQty = live ? Number(live.stock) || 0 : Number(target.system_qty_snapshot) || 0;
       const varQty = round2(counted - sysQty);
       const varCost = round2(varQty * (Number(target.unit_cost_snapshot) || 0));
       totalVarianceCost = round2(totalVarianceCost + varCost);
@@ -290,7 +299,7 @@ export function submitCycleCount(
       if (Math.abs(varQty) > 0.0001 && varPct > alertPct) {
         needsApproval = true;
       }
-      updItem.run(counted, varQty, varCost, target.id, tenantId);
+      updItem.run(counted, sysQty, varQty, varCost, target.id, tenantId);
     }
 
     db.prepare(
@@ -340,7 +349,9 @@ export function approveAndCompleteCycleCount(tenantId: number, sessionId: number
           tenantId,
           productId: it.product_id,
           userId: actorId,
-          newQty: Number(it.counted_qty),
+          // Apply the counted DIFFERENCE, never the absolute count: sales made between the count and
+          // this approval must stay deducted.
+          delta: varQty,
           reason: `OR Cycle Count #${sessionId}`,
           unitCostOverride: Number(it.unit_cost_snapshot) || 0,
         });

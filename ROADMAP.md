@@ -87,6 +87,9 @@ Other items: _(add fixes and ideas here)_
 - [x] Cloud migration (OmniPulse OR) `supabase/migrations/2026-11-24_omnipulse_or.sql` applied 2026-11-25 (14 synced
       `or_*` tables with RLS + `or_license_type`/`or_license_expiry` on `tenants` + updated `admin_update_tenant_license`
       RPC); Web Monitor / Super Admin deployed to Vercel (`omnipos-monitor.vercel.app`).
+- [x] Cloud migration `supabase/migrations/2026-11-25_omnipulse_or_fixes.sql` applied 2026-11-25 (set_synced_at triggers +
+      indexes on the 14 `or_*` tables, `or_owner_draws.core_cash_global_id`, old 5-arg `admin_update_tenant_license`
+      dropped, `trg_tenants_guard_protected` blocks tenants from editing their own email/license columns).
 - [ ] OmniPulse OR future: Restaurant recipe/BOM deduction (`enable_recipe_deduction`) once a Recipes module exists, and
       optional Python Google OR-Tools cloud microservice (`OR_SOLVER_URL`) for VRP/shift scheduling via
       `server/or/solver/orToolsCloudAdapter.ts`.
@@ -98,6 +101,25 @@ Other items: _(add fixes and ideas here)_
 ---
 
 ## Shipped
+
+### 1.13.2 — OmniPulse OR review fixes (2026-11-25)
+Review of 1.13.0/1.13.1 by Claude + Codex; every must-fix item and improvement addressed.
+- **Stock & cash correctness:** cycle-count approval applies the counted *difference* measured at count time (sales after
+  the count are kept); PO receiving requires item lines (amount-only POs go through Purchases with the PO linked), derives
+  every total from the delivered lines, validates products/costs/overpayment, uses Core weighted-average cost and
+  `track_inventory`, and supports explicit partial deliveries; the OpEx reserve is derived from each obligation's due
+  date instead of accumulating forever; SKU revenue no longer divides USD prices by the LBP rate; owner cash draws are
+  counted once from `cash_flow` and linked by global id.
+- **Purchase invoice ↔ PO link** is opt-in (default "None") with a "last delivery" choice; PARTIALLY_RECEIVED POs can be
+  linked; received quantities are tracked on itemized POs.
+- **Permissions:** the v4 role-map migration no longer re-grants `orders.*` removed by owners; OR defaults are granted
+  once. Blind cycle counts are enforced server-side (`or.manage` only sees system quantities).
+- **Sync & multi-register:** deterministic global ids for per-tenant OR rows, the daily cycle count and briefing items;
+  pull adopts a local twin by natural key; device-local Core ids (`core_*_tx_id`, `account_id`) are no longer synced;
+  briefing items are updated in place / soft-deleted; tenant reset purges OR rows in the cloud too.
+- **Optimizer:** HiGHS runs in a worker thread with an 8 s time limit (one solve at a time); "Apply" uses the reviewed
+  `plan_id` once, atomically; products with no known supplier are no longer assigned to an arbitrary one.
+- **Cloud security:** tenants can no longer change their own email or license columns (is_super_admin trusted the email).
 
 ### 1.13.1 — Purchase Invoice ↔ Locked PO link & negative-stock briefing alerts (2026-11-25)
 - **Purchase Invoice ↔ PO Cash-Lock link:** `InvoiceEditor` (`Purchases → New Purchase`) detects open `APPROVED_LOCKED`

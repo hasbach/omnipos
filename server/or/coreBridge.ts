@@ -4,6 +4,8 @@ import { db } from "../db.js";
 import { ValidationError } from "../errors.js";
 import { resolveAccountId } from "../cashAccounts.js";
 import { recomputeStakeholderBalance } from "../balance.js";
+import { applyPurchaseCost } from "../costing.js";
+import { updatePurchaseProductCost } from "../purchaseCost.js";
 
 export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -115,7 +117,9 @@ export function recordOwnerDrawCashCore(params: {
 
 /**
  * Converts a received PO commitment into a real OmniPOS Core purchase transaction (`transactions` + `transaction_items` + `payments`),
- * increments `products.stock`, updates weighted product cost if missing, and recomputes supplier balance via `server/balance.ts`.
+ * with the same product rules as `POST /api/transactions`: products must belong to the tenant and be live, stock moves only for
+ * tracked products, and the product cost is the weighted average (`applyPurchaseCost`), never just the latest price.
+ * The unpaid part stays on the supplier balance (total - cash paid), recomputed via `server/balance.ts`.
  */
 export function createPurchaseFromPoCore(params: {
   tenantId: number;
@@ -132,31 +136,61 @@ export function createPurchaseFromPoCore(params: {
   if (validItems.length === 0) {
     throw new ValidationError("At least one received item with quantity > 0 is required.", 400, { code: "PO_RECEIVE_EMPTY" });
   }
+  const getProduct = db.prepare("SELECT id, stock, cost, track_inventory FROM products WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL");
+  const products = new Map<number, any>();
+  for (const it of validItems) {
+    const qty = Number(it.quantity);
+    const cost = Number(it.unit_cost);
+    if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost < 0) {
+      throw new ValidationError("Each received line needs a positive quantity and a non-negative unit cost.", 400, { code: "PO_RECEIVE_LINE_INVALID" });
+    }
+    if (!products.has(it.product_id)) {
+      const prod = getProduct.get(it.product_id, tenantId) as any;
+      if (!prod) {
+        throw new ValidationError(`Product #${it.product_id} not found.`, 404, { code: "PRODUCT_NOT_FOUND", field: "items" });
+      }
+      products.set(it.product_id, { ...prod });
+    }
+  }
+
   const totalUsd = round2(validItems.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unit_cost), 0));
   const paidUsd = round2(Math.max(0, Number(cashPaidUsd) || 0));
+  if (paidUsd > totalUsd + 0.005) {
+    throw new ValidationError(`Cash paid ($${paidUsd.toFixed(2)}) is more than the delivery total ($${totalUsd.toFixed(2)}).`, 400, {
+      code: "PO_RECEIVE_OVERPAID",
+      field: "actual_cash_paid",
+    });
+  }
   const creditAddedUsd = round2(Math.max(0, totalUsd - paidUsd));
 
+  const seq = db
+    .prepare("SELECT IFNULL(MAX(terminal_sequence), 0) + 1 AS next_seq FROM transactions WHERE terminal_id = 'MAIN' AND tenant_id = ?")
+    .get(tenantId) as any;
   const txInfo = db
     .prepare(
-      `INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, status, reference, notes)
-       VALUES (?, ?, ?, 'purchase', ?, 'USD', 1, 'received', ?, ?)`
+      `INSERT INTO transactions (tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, status, reference, notes, terminal_id, terminal_sequence)
+       VALUES (?, ?, ?, 'purchase', ?, 'USD', 1, 'completed', ?, ?, 'MAIN', ?)`
     )
-    .run(tenantId, supplierId, userId, totalUsd, poNumber || null, notes || "Received via OmniPulse OR PO Cash-Lock");
+    .run(tenantId, supplierId, userId, totalUsd, poNumber || null, notes || "Received via OmniPulse OR PO Cash-Lock", seq.next_seq);
   const txId = Number(txInfo.lastInsertRowid);
 
   const insertItem = db.prepare(
     `INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, unit_cost)
      VALUES (?, ?, ?, ?, ?)`
   );
-  const updateStock = db.prepare(
-    `UPDATE products SET stock = IFNULL(stock, 0) + ?, cost = CASE WHEN ? > 0 THEN ? ELSE cost END WHERE id = ? AND tenant_id = ?`
-  );
+  const updateStock = db.prepare("UPDATE products SET stock = IFNULL(stock, 0) + ? WHERE id = ? AND tenant_id = ?");
 
   for (const it of validItems) {
     const qty = Number(it.quantity);
     const cost = Number(it.unit_cost) || 0;
+    const prod = products.get(it.product_id);
     insertItem.run(txId, it.product_id, qty, cost, cost);
-    updateStock.run(qty, cost, cost, it.product_id, tenantId);
+    // Weighted-average cost, blended line by line exactly like a Core purchase.
+    const newCost = applyPurchaseCost(Number(prod.stock) || 0, prod.cost, qty, cost);
+    prod.cost = newCost;
+    prod.stock = (Number(prod.stock) || 0) + qty;
+    updatePurchaseProductCost(tenantId, it.product_id, newCost);
+    if (prod.track_inventory !== 0) updateStock.run(qty, it.product_id, tenantId);
   }
 
   if (paidUsd > 0) {
@@ -165,12 +199,6 @@ export function createPurchaseFromPoCore(params: {
       `INSERT INTO payments (transaction_id, amount, method, currency, exchange_rate, account_id)
        VALUES (?, ?, 'cash', 'USD', 1, ?)`
     ).run(txId, paidUsd, accountId);
-  }
-  if (creditAddedUsd > 0.005) {
-    db.prepare(
-      `INSERT INTO payments (transaction_id, amount, method, currency, exchange_rate)
-       VALUES (?, ?, 'credit', 'USD', 1)`
-    ).run(txId, creditAddedUsd);
   }
 
   recomputeStakeholderBalance(supplierId, tenantId, {

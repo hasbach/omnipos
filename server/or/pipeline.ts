@@ -5,11 +5,12 @@
 // 4. Generate morning 5-minute Cycle Count queue
 // 5. Draft PO suggestions & populate Morning Briefing `or_action_queue`
 import { db } from "../db.js";
-import { dailyObligationRate, ensureOrInitialized, type SurvivalMode } from "./config.js";
+import { ensureOrInitialized, type SurvivalMode } from "./config.js";
 import { localDateIso, round2 } from "./coreBridge.js";
-import { computeSpendableCash, recordBucketLedger } from "./spendableCash.js";
+import { computeOpexReserve, computeSpendableCash } from "./spendableCash.js";
 import { generateCycleCountSession, recordStockAnomaly } from "./cycleCount.js";
 import { isOrLicenseValid } from "./license.js";
+import { rowGlobalId, stableGlobalId } from "./stableId.js";
 
 export interface PipelineSummary {
   run_date: string;
@@ -31,7 +32,8 @@ function computeSkuMetrics(tenantId: number): number {
     .all(tenantId) as any[];
   if (products.length === 0) return 0;
 
-  // Pull daily sales buckets over the last 30 days across BOTH live `transactions` and `archived_transactions`
+  // Pull daily sales buckets over the last 30 days across BOTH live `transactions` and `archived_transactions`.
+  // Line prices are stored in USD per base piece for every sale (also LBP-priced ones), so no rate division.
   const dailyRows = db
     .prepare(
       `SELECT product_id,
@@ -44,8 +46,8 @@ function computeSkuMetrics(tenantId: number): number {
            SELECT ti.product_id,
                   date(t.created_at, 'localtime') AS sale_day,
                   ti.quantity AS qty,
-                  (ti.quantity * ti.unit_price) / IFNULL(NULLIF(t.exchange_rate, 0), 1) AS rev_usd,
-                  (ti.quantity * (ti.unit_price / IFNULL(NULLIF(t.exchange_rate, 0), 1) - IFNULL(ti.unit_cost, 0))) AS margin_usd
+                  (ti.quantity * ti.unit_price) AS rev_usd,
+                  (ti.quantity * (ti.unit_price - IFNULL(ti.unit_cost, 0))) AS margin_usd
              FROM transaction_items ti
              JOIN transactions t ON t.id = ti.transaction_id
             WHERE t.tenant_id = ? AND t.type = 'sale' AND t.deleted_at IS NULL
@@ -54,8 +56,8 @@ function computeSkuMetrics(tenantId: number): number {
            SELECT ati.product_id,
                   date(at.created_at, 'localtime') AS sale_day,
                   ati.quantity AS qty,
-                  (ati.quantity * ati.unit_price) / IFNULL(NULLIF(at.exchange_rate, 0), 1) AS rev_usd,
-                  (ati.quantity * (ati.unit_price / IFNULL(NULLIF(at.exchange_rate, 0), 1) - IFNULL(ati.unit_cost, 0))) AS margin_usd
+                  (ati.quantity * ati.unit_price) AS rev_usd,
+                  (ati.quantity * (ati.unit_price - IFNULL(ati.unit_cost, 0))) AS margin_usd
              FROM archived_transaction_items ati
              JOIN archived_transactions at ON at.id = ati.transaction_id
             WHERE at.tenant_id = ? AND at.type = 'sale'
@@ -179,32 +181,9 @@ export function runNightlyOrPipeline(
       skusClassified = computeSkuMetrics(tenantId);
     }
 
-    // Step 2: Daily OpEx Accrual (only once per run_date — never double-accrue on forced re-run)
-    const alreadyAccrued = db
-      .prepare(
-        `SELECT 1 FROM or_cash_bucket_ledger
-          WHERE tenant_id = ? AND tx_type = 'OPEX_ACCRUAL' AND reference_type = 'PIPELINE_DAY'
-            AND note LIKE ? AND deleted_at IS NULL LIMIT 1`
-      )
-      .get(tenantId, `%${runDate}%`);
-
-    const obligations = db
-      .prepare("SELECT amount_usd, frequency FROM or_fixed_obligations WHERE tenant_id = ? AND active = 1 AND deleted_at IS NULL")
-      .all(tenantId) as any[];
-    const dailyOpex = round2(obligations.reduce((s, o) => s + dailyObligationRate(o.amount_usd, o.frequency), 0));
-
-    if (!alreadyAccrued && dailyOpex > 0) {
-      recordBucketLedger({
-        tenantId,
-        bucketCode: "OPEX_RESERVE",
-        txType: "OPEX_ACCRUAL",
-        amount: dailyOpex,
-        bucketDelta: dailyOpex,
-        referenceType: "PIPELINE_DAY",
-        note: `Daily OpEx accrual for ${runDate}`,
-      });
-      opexAccrued = dailyOpex;
-    }
+    // Step 2: OpEx reserve is DERIVED from the obligations' due dates (see computeOpexReserve) — nothing is
+    // accumulated, so re-runs, several registers and paid bills can never inflate it.
+    opexAccrued = computeOpexReserve(tenantId, runDate);
 
     // Step 3: Survival Mode Evaluation (14-day Cash Runway vs OpEx + PO locks + overdue supplier debt)
     const spendable = computeSpendableCash(tenantId);
@@ -220,12 +199,30 @@ export function runNightlyOrPipeline(
       db.prepare("UPDATE or_tenant_config SET survival_mode = ? WHERE tenant_id = ?").run(nextMode, tenantId);
     }
 
-    // Step 5 (Action Queue): Refresh today's Morning Briefing open items
-    db.prepare("DELETE FROM or_action_queue WHERE tenant_id = ? AND action_date = ? AND status = 'OPEN'").run(tenantId, runDate);
-    const insAction = db.prepare(
-      `INSERT INTO or_action_queue (tenant_id, action_date, priority, category, title, details, reference_type, reference_id, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')`
+    // Step 5 (Action Queue): Refresh today's Morning Briefing open items. Each item has a stable global id
+    // (tenant + day + category + referenced row), so a re-run updates it in place and every register writes
+    // the same row; items that no longer apply are SOFT-deleted so the deletion syncs too.
+    const keptGids: string[] = [];
+    const findAction = db.prepare("SELECT id FROM or_action_queue WHERE global_id = ?");
+    const updAction = db.prepare(
+      `UPDATE or_action_queue SET priority = ?, category = ?, title = ?, details = ?, reference_type = ?, reference_id = ?, deleted_at = NULL
+        WHERE id = ?`
     );
+    const newAction = db.prepare(
+      `INSERT INTO or_action_queue (global_id, tenant_id, action_date, priority, category, title, details, reference_type, reference_id, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')`
+    );
+    const refTable: Record<string, string> = { PO_COMMITMENT: "or_po_commitments", PRODUCT: "products" };
+    const insAction = {
+      run(_t: number, date: string, priority: string, category: string, title: string, details: string, refType: string | null, refId: number | null) {
+        const refKey = refType && refId ? rowGlobalId(refTable[refType] || "", refId) || String(refId) : "-";
+        const gid = stableGlobalId(tenantId, "or_action_queue", date, category, refType || "-", refKey);
+        const existing = gid ? (findAction.get(gid) as any) : null;
+        if (existing) updAction.run(priority, category, title, details, refType, refId, existing.id);
+        else newAction.run(gid, tenantId, date, priority, category, title, details, refType, refId);
+        if (gid) keptGids.push(gid);
+      },
+    };
 
     if (spendable.free_spendable_cash_usd < 0) {
       insAction.run(
@@ -304,6 +301,14 @@ export function runNightlyOrPipeline(
       }
       actionsCreated++;
     }
+
+    // Retire today's open items that this run no longer produced.
+    const stale = db
+      .prepare("SELECT id, global_id FROM or_action_queue WHERE tenant_id = ? AND action_date = ? AND status = 'OPEN' AND deleted_at IS NULL")
+      .all(tenantId, runDate) as any[];
+    const keep = new Set(keptGids);
+    const retire = db.prepare("UPDATE or_action_queue SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?");
+    for (const row of stale) if (!keep.has(row.global_id)) retire.run(row.id);
   })();
 
   // Step 4: Generate today's 5-minute Cycle Count session

@@ -57,6 +57,13 @@ function previewCounts(tenantId: number) {
   };
 }
 
+// OmniPulse OR tables cleared with each scope (children before parents — the cloud has FKs between them).
+const OR_TRANSACTION_TABLES = [
+  'or_owner_draw_items', 'or_owner_draws', 'or_po_commitment_items', 'or_po_commitments',
+  'or_cash_bucket_ledger', 'or_action_queue',
+];
+const OR_STOCK_TABLES = ['or_cycle_count_items', 'or_cycle_count_sessions', 'or_stock_anomalies'];
+
 // Does this tenant have rows in the selected scopes that already reached the cloud? Those must be
 // removed from the cloud too, or the next pull would put them straight back.
 function hasSyncedData(tenantId: number, scopes: ResetScope[]): boolean {
@@ -70,6 +77,10 @@ function hasSyncedData(tenantId: number, scopes: ResetScope[]): boolean {
     add("SELECT 1 FROM cashier_shifts WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
     add("SELECT 1 FROM payments WHERE last_synced_at IS NOT NULL AND transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)", tenantId);
     add("SELECT 1 FROM transaction_items WHERE last_synced_at IS NOT NULL AND transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)", tenantId);
+    for (const t of OR_TRANSACTION_TABLES) add(`SELECT 1 FROM ${t} WHERE tenant_id = ? AND last_synced_at IS NOT NULL`, tenantId);
+  }
+  if (scopes.includes("stock") || scopes.includes("products")) {
+    for (const t of OR_STOCK_TABLES) add(`SELECT 1 FROM ${t} WHERE tenant_id = ? AND last_synced_at IS NOT NULL`, tenantId);
   }
   if (scopes.includes("products")) {
     add("SELECT 1 FROM products WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
@@ -79,6 +90,7 @@ function hasSyncedData(tenantId: number, scopes: ResetScope[]): boolean {
   }
   if (scopes.includes("parties")) {
     add("SELECT 1 FROM stakeholders WHERE tenant_id = ? AND id IS NOT ? AND last_synced_at IS NOT NULL", tenantId, walkIn);
+    add("SELECT 1 FROM or_supplier_profiles WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
   }
   return checks.some((c) => !!db.prepare(c.sql + " LIMIT 1").get(...c.params));
 }
@@ -107,6 +119,21 @@ async function purgeCloudScopes(
   const client = session.client;
   const tg = session.globalId;
   const isMissingTable = (e: any) => e && (e.code === "PGRST205" || e.code === "42P01" || e.status === 404 || e.statusCode === 404);
+
+  // OmniPulse OR rows reference products / parties in the cloud, so they go before those.
+  const purgeOr = async (tables: string[]) => {
+    for (const table of tables) {
+      const { error } = await client.from(table).delete().eq("tenant_id", tg);
+      if (error && !isMissingTable(error)) throw error;
+    }
+  };
+  if (scopes.includes("transactions")) await purgeOr(OR_TRANSACTION_TABLES);
+  if (scopes.includes("stock") || scopes.includes("products")) await purgeOr(OR_STOCK_TABLES);
+  if (scopes.includes("parties")) {
+    await purgeOr(['or_supplier_profiles']);
+    const { error } = await client.from("or_tenant_config").update({ owner_stakeholder_id: null }).eq("tenant_id", tg);
+    if (error && !isMissingTable(error)) throw error;
+  }
 
   if (scopes.includes("transactions")) {
     // payments, items, transactions, cash_flow, cashier_shifts (same routine End-of-Day uses)
@@ -195,6 +222,7 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
 
   if (scopes.includes("parties")) {
     db.prepare("DELETE FROM or_supplier_profiles WHERE tenant_id = ?").run(t);
+    db.prepare("UPDATE or_tenant_config SET owner_stakeholder_id = NULL WHERE tenant_id = ? AND owner_stakeholder_id IS NOT NULL").run(t);
     db.prepare("DELETE FROM stakeholders WHERE tenant_id = ? AND id IS NOT ?").run(t, walkInId);
   }
 }

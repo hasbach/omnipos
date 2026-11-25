@@ -3,7 +3,8 @@
 import { db } from "../db.js";
 import { listCashAccounts } from "../cashAccounts.js";
 import { dailyObligationRate, ensureOrInitialized } from "./config.js";
-import { round2 } from "./coreBridge.js";
+import { localDateIso, round2 } from "./coreBridge.js";
+import { stableGlobalId } from "./stableId.js";
 
 export interface SpendableCashSnapshot {
   drawer_balance_usd: number;
@@ -27,8 +28,8 @@ export function getBucketByCode(tenantId: number, code: string): { id: number; c
     .get(tenantId, code) as any;
   if (row) return row;
   const info = db
-    .prepare("INSERT INTO or_cash_buckets (tenant_id, code, name, target_amount, current_balance, priority) VALUES (?, ?, ?, 0, 0, 5)")
-    .run(tenantId, code, code);
+    .prepare("INSERT INTO or_cash_buckets (global_id, tenant_id, code, name, target_amount, current_balance, priority) VALUES (?, ?, ?, ?, 0, 0, 5)")
+    .run(stableGlobalId(tenantId, "or_cash_buckets", code), tenantId, code, code);
   return { id: Number(info.lastInsertRowid), code, name: code, current_balance: 0 };
 }
 
@@ -72,6 +73,55 @@ export function recordBucketLedger(params: {
   return Number(info.lastInsertRowid);
 }
 
+const DAY_MS = 86400000;
+const utcDay = (y: number, m: number, d: number) => Date.UTC(y, m, Math.min(d, new Date(Date.UTC(y, m + 1, 0)).getUTCDate()));
+
+/**
+ * How much of one obligation has accrued since its last due date, for `today` (YYYY-MM-DD, local business day).
+ * The reserve grows a little each day and falls back to ~0 on the due date, when the bill is actually paid out of
+ * the real cash accounts — so it can never pile up forever.
+ *   daily   -> one day's amount
+ *   weekly  -> due_day = ISO weekday (1 = Monday ... 7 = Sunday)
+ *   monthly -> due_day = day of month (clamped to the month's length)
+ *   yearly  -> due_day = day of January (clamped)
+ */
+export function accruedObligationReserve(amountUsd: number, frequency: string, dueDay: number | null | undefined, today: string): number {
+  const amt = Math.max(0, Number(amountUsd) || 0);
+  if (amt <= 0) return 0;
+  if (frequency === "daily") return round2(amt);
+  const [y, m, d] = today.split("-").map(Number);
+  const now = Date.UTC(y, m - 1, d);
+  let last: number;
+  let next: number;
+  if (frequency === "weekly") {
+    const want = Math.min(7, Math.max(1, Number(dueDay) || 1)) % 7; // JS getUTCDay: 0 = Sunday
+    const back = (new Date(now).getUTCDay() - want + 7) % 7;
+    last = now - back * DAY_MS;
+    next = last + 7 * DAY_MS;
+  } else if (frequency === "yearly") {
+    const dd = Math.max(1, Number(dueDay) || 1);
+    const thisYear = utcDay(y, 0, dd);
+    last = now >= thisYear ? thisYear : utcDay(y - 1, 0, dd);
+    next = now >= thisYear ? utcDay(y + 1, 0, dd) : thisYear;
+  } else {
+    const dd = Math.max(1, Number(dueDay) || 1);
+    const thisMonth = utcDay(y, m - 1, dd);
+    last = now >= thisMonth ? thisMonth : utcDay(y, m - 2, dd);
+    next = now >= thisMonth ? utcDay(y, m, dd) : thisMonth;
+  }
+  const period = Math.max(1, (next - last) / DAY_MS);
+  const elapsed = Math.max(0, (now - last) / DAY_MS);
+  return round2((amt * elapsed) / period);
+}
+
+/** Sum of the accrued reserve of every active fixed obligation for the given business day. */
+export function computeOpexReserve(tenantId: number, today = localDateIso()): number {
+  const obligations = db
+    .prepare("SELECT amount_usd, frequency, due_day FROM or_fixed_obligations WHERE tenant_id = ? AND active = 1 AND deleted_at IS NULL")
+    .all(tenantId) as any[];
+  return round2(obligations.reduce((sum, o) => sum + accruedObligationReserve(o.amount_usd, o.frequency, o.due_day, today), 0));
+}
+
 /** Computes Real Spendable Cash directly from OmniPOS Core `cash_accounts` + OR locks/reserves. */
 export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
   const config = ensureOrInitialized(tenantId);
@@ -88,10 +138,8 @@ export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
   }
   const totalLiquid = round2(drawer + savings + bank);
 
-  const opexRow = db
-    .prepare("SELECT IFNULL(current_balance, 0) AS bal FROM or_cash_buckets WHERE tenant_id = ? AND code = 'OPEX_RESERVE' AND deleted_at IS NULL")
-    .get(tenantId) as any;
-  const lockedOpex = round2(Math.max(0, Number(opexRow?.bal) || 0));
+  // Derived every time (never accumulated): what each fixed obligation has built up since its last due date.
+  const lockedOpex = computeOpexReserve(tenantId);
 
   const poLockRow = db
     .prepare(

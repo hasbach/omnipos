@@ -32,7 +32,7 @@ process.chdir(root);
 // ---- seed ----------------------------------------------------------------------------------
 const tenantId = Number(db.prepare("INSERT INTO tenants (name, email, password) VALUES (?, ?, ?)")
   .run("Beirut Wholesale Market", "preview@omnipos.test", bcrypt.hashSync(Math.random().toString(36), 4)).lastInsertRowid);
-db.prepare("UPDATE tenants SET local_license_type = 'lifetime', online_license_type = 'lifetime', local_license_expiry = '2099-12-31', online_license_expiry = '2099-12-31' WHERE id = ?").run(tenantId);
+db.prepare("UPDATE tenants SET local_license_type = 'lifetime', online_license_type = 'lifetime', local_license_expiry = '2099-12-31', online_license_expiry = '2099-12-31', or_license_type = 'lifetime' WHERE id = ?").run(tenantId);
 db.prepare("INSERT INTO users (tenant_id, name, role, pin) VALUES (?, 'Admin', 'admin', '0000')").run(tenantId);
 db.prepare("INSERT INTO users (tenant_id, name, role, pin) VALUES (?, 'Rami', 'staff', '1111')").run(tenantId);
 db.prepare("INSERT INTO users (tenant_id, name, role, pin) VALUES (?, 'Lina', 'cashier', '2222')").run(tenantId);

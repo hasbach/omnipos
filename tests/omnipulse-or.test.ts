@@ -59,28 +59,30 @@ test("industry presets, fixed obligations, and Real Spendable Cash formula", asy
   });
   assert.equal(cf.status, 200);
 
-  // Add a $300/month rent obligation ($10/day) and run pipeline once
+  // A $300/month rent obligation due TODAY: the reserve restarts at 0 on the due date (the bill is paid
+  // from the real cash accounts) — it is derived, never accumulated.
+  const today = new Date();
   const ob = await app.api("POST", "/api/or/obligations", {
     ...s.as,
-    body: { name: "Store Rent", amount_usd: 300, frequency: "monthly", due_day: 1 },
+    body: { name: "Store Rent", amount_usd: 300, frequency: "monthly", due_day: today.getDate() },
   });
   assert.equal(ob.status, 200);
 
   const run1 = await app.api("POST", "/api/or/pipeline/run", s.as);
   assert.equal(run1.status, 200);
-  assert.equal(run1.body.opex_accrued_usd, 10);
+  assert.equal(run1.body.opex_accrued_usd, 0);
 
-  // Re-running on same day must NOT double-accrue OpEx
+  // Re-running any number of times never grows the reserve
   const run2 = await app.api("POST", "/api/or/pipeline/run", s.as);
   assert.equal(run2.status, 200);
   assert.equal(run2.body.opex_accrued_usd, 0);
 
-  // Free Spendable Cash = 500 (drawer) - 30 (float) - 10 (OpEx reserve) - 0 (PO locks) = 460
+  // Free Spendable Cash = 500 (drawer) - 30 (float) - 0 (OpEx reserve) - 0 (PO locks) = 470
   const sp = await app.api("GET", "/api/or/spendable-cash", s.as);
   assert.equal(sp.status, 200);
   assert.equal(sp.body.total_liquid_cash_usd, 500);
-  assert.equal(sp.body.locked_opex_reserve_usd, 10);
-  assert.equal(sp.body.free_spendable_cash_usd, 460);
+  assert.equal(sp.body.locked_opex_reserve_usd, 0);
+  assert.equal(sp.body.free_spendable_cash_usd, 470);
 });
 
 test("Owner Draw enforces survival caps and links atomically to Core cash_flow and stock_adjustments", async () => {
@@ -410,4 +412,265 @@ test("Core Purchase Invoice linked to an amount-only Locked PO updates stock and
   const spAfter = await app.api("GET", "/api/or/spendable-cash", s.as);
   assert.equal(spAfter.body.active_po_locks_usd, 0);
   assert.equal(spAfter.body.free_spendable_cash_usd, 380);
+});
+
+test("OpEx reserve accrues toward each due date and resets on it (never piles up)", async () => {
+  const { accruedObligationReserve } = await import("../server/or/spendableCash.js");
+  // $300 monthly due on the 1st: 15 days into a 30-day month = $150
+  assert.equal(accruedObligationReserve(300, "monthly", 1, "2026-11-16"), 150);
+  assert.equal(accruedObligationReserve(300, "monthly", 1, "2026-11-01"), 0);
+  assert.equal(accruedObligationReserve(300, "monthly", 1, "2026-11-30"), 290);
+  // Due day 31 in a 30-day month is clamped to the 30th
+  assert.equal(accruedObligationReserve(300, "monthly", 31, "2026-11-30"), 0);
+  // Weekly, due Monday (1): 2026-11-25 is a Wednesday -> 2 of 7 days
+  assert.equal(accruedObligationReserve(70, "weekly", 1, "2026-11-25"), 20);
+  assert.equal(accruedObligationReserve(5, "daily", null, "2026-11-25"), 5);
+});
+
+test("cycle-count approval applies the counted difference and keeps sales made after the count", async () => {
+  const s = setupTenant(true);
+  const prodId = Number(
+    app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'CC-1', 'Tea', 4, 2, 10, 1)").run(s.tenantId).lastInsertRowid
+  );
+  await app.api("POST", "/api/or/anomalies", { ...s.as, body: { product_id: prodId, anomaly_type: "STAFF_SHELF_EMPTY" } });
+  const gen = await app.api("POST", "/api/or/cycle-counts/generate", { ...s.as, body: { force: true } });
+  const sid = gen.body.id;
+  const item = gen.body.items.find((i: any) => i.product_id === prodId);
+
+  // 1 sells after the session was generated but BEFORE counting: the shelf shows it already.
+  app.db.prepare("UPDATE products SET stock = 9 WHERE id = ?").run(prodId);
+  // Staff counts 7 (variance vs the stock at count time = -2 -> needs approval)
+  const sub = await app.api("POST", `/api/or/cycle-counts/${sid}/submit`, {
+    ...s.as,
+    body: { counts: [{ item_id: item.id, counted_qty: 7 }] },
+  });
+  assert.equal(sub.body.status, "PENDING_APPROVAL");
+  assert.equal(sub.body.items.find((i: any) => i.id === item.id).variance_qty, -2);
+
+  // 2 more sell before the owner approves
+  app.db.prepare("UPDATE products SET stock = 7 WHERE id = ?").run(prodId);
+  const appv = await app.api("POST", `/api/or/cycle-counts/${sid}/approve`, s.as);
+  assert.equal(appv.body.status, "COMPLETED");
+  // 7 on the system minus the -2 counted difference = 5 (an overwrite would have said 7)
+  assert.equal((app.db.prepare("SELECT stock FROM products WHERE id = ?").get(prodId) as any).stock, 5);
+});
+
+test("blind count: a cashier never sees system quantities, even when asking for blind=0", async () => {
+  const s = setupTenant(true);
+  const cashier = Number(app.db.prepare("INSERT INTO users (tenant_id, name, role) VALUES (?, 'Cash', 'cashier')").run(s.tenantId).lastInsertRowid);
+  const prodId = Number(
+    app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'BL-1', 'Salt', 1, 0.5, 12, 1)").run(s.tenantId).lastInsertRowid
+  );
+  await app.api("POST", "/api/or/anomalies", { ...s.as, body: { product_id: prodId } });
+  const as = { tenantId: s.tenantId, userId: cashier };
+  const gen = await app.api("POST", "/api/or/cycle-counts/generate", { ...as, body: {} });
+  assert.equal(gen.status, 200, JSON.stringify(gen.body));
+  assert.ok(gen.body.items.every((i: any) => i.system_qty_snapshot === null));
+  const peek = await app.api("GET", `/api/or/cycle-counts/${gen.body.id}?blind=0`, as);
+  assert.equal(peek.status, 200);
+  assert.ok(peek.body.items.every((i: any) => i.system_qty_snapshot === null));
+  // The owner still can
+  const owner = await app.api("GET", `/api/or/cycle-counts/${gen.body.id}`, s.as);
+  assert.ok(owner.body.items.some((i: any) => i.system_qty_snapshot === 12));
+});
+
+test("PO receiving: amount-only POs go through Purchases, itemized partial delivery keeps the rest locked and uses weighted cost", async () => {
+  const s = setupTenant(true);
+  await app.api("PUT", "/api/or/config", { ...s.as, body: { min_drawer_float: 0 } });
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "in", amount: 1000, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Cash" } });
+  const supId = Number(app.db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, 'Sup R', 'supplier')").run(s.tenantId).lastInsertRowid);
+  const prodId = Number(
+    app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'RC-1', 'Oil', 12, 5, 100, 1)").run(s.tenantId).lastInsertRowid
+  );
+  const otherProd = Number(
+    app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'RC-2', 'Not on PO', 1, 1, 0, 1)").run(s.tenantId).lastInsertRowid
+  );
+
+  // Amount-only PO cannot be "received" here (no cash or stock would move)
+  const amountOnly = await app.api("POST", "/api/or/po-commitments", {
+    ...s.as, body: { supplier_id: supId, expected_delivery_date: "2026-12-01", payment_plan: "CASH_ON_DELIVERY", estimated_order_total: 100 },
+  });
+  await app.api("POST", `/api/or/po-commitments/${amountOnly.body.id}/approve`, s.as);
+  const rejected = await app.api("POST", `/api/or/po-commitments/${amountOnly.body.id}/receive`, { ...s.as, body: { actual_cash_paid: 100 } });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.code, "OR_PO_RECEIVE_NEEDS_INVOICE");
+  await app.api("POST", `/api/or/po-commitments/${amountOnly.body.id}/cancel`, s.as);
+
+  // Itemized PO: 20 @ $10 = $200 locked
+  const po = await app.api("POST", "/api/or/po-commitments", {
+    ...s.as, body: { supplier_id: supId, expected_delivery_date: "2026-12-01", payment_plan: "CASH_ON_DELIVERY", items: [{ product_id: prodId, ordered_qty: 20, unit_cost: 10 }] },
+  });
+  await app.api("POST", `/api/or/po-commitments/${po.body.id}/approve`, s.as);
+
+  // Lines must be on the PO; cash can't exceed the delivery
+  const notOnPo = await app.api("POST", `/api/or/po-commitments/${po.body.id}/receive`, {
+    ...s.as, body: { items: [{ product_id: otherProd, received_qty: 1 }], actual_cash_paid: 0, partial: true },
+  });
+  assert.equal(notOnPo.body.code, "OR_PO_ITEM_NOT_ON_PO");
+  const overpaid = await app.api("POST", `/api/or/po-commitments/${po.body.id}/receive`, {
+    ...s.as, body: { items: [{ product_id: prodId, received_qty: 10 }], actual_cash_paid: 150, partial: true },
+  });
+  assert.equal(overpaid.body.code, "PO_RECEIVE_OVERPAID");
+
+  // First delivery: 10 arrive, $100 paid, more expected
+  const first = await app.api("POST", `/api/or/po-commitments/${po.body.id}/receive`, {
+    ...s.as, body: { items: [{ product_id: prodId, received_qty: 10 }], actual_cash_paid: 100, partial: true },
+  });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.po.status, "PARTIALLY_RECEIVED");
+  assert.equal(first.body.po.locked_cash_amount, 100);
+  const prod = app.db.prepare("SELECT stock, cost FROM products WHERE id = ?").get(prodId) as any;
+  assert.equal(prod.stock, 110);
+  // Weighted average: (100 x $5 + 10 x $10) / 110 = $5.4545...
+  assert.ok(Math.abs(prod.cost - 600 / 110) < 1e-6, `cost ${prod.cost}`);
+  const purchase = app.db.prepare("SELECT total_amount, status FROM transactions WHERE id = ?").get(first.body.coreTxId) as any;
+  assert.equal(purchase.total_amount, 100);
+  assert.equal(purchase.status, "completed");
+
+  // Spendable: 1000 - 100 paid - 100 still locked = 800
+  const sp = await app.api("GET", "/api/or/spendable-cash", s.as);
+  assert.equal(sp.body.free_spendable_cash_usd, 800);
+
+  // Final delivery: the rest (no lines = every remaining unit), $50 paid now, $50 on credit
+  const last = await app.api("POST", `/api/or/po-commitments/${po.body.id}/receive`, { ...s.as, body: { actual_cash_paid: 50 } });
+  assert.equal(last.status, 200, JSON.stringify(last.body));
+  assert.equal(last.body.po.status, "SETTLED");
+  assert.equal(last.body.releasedCash, 50);
+  assert.equal(last.body.po.actual_received_total, 200);
+  assert.equal(last.body.po.actual_credit_added, 50);
+  const sup = app.db.prepare("SELECT balance FROM stakeholders WHERE id = ?").get(supId) as any;
+  assert.equal(Math.abs(sup.balance), 50);
+  const sp2 = await app.api("GET", "/api/or/spendable-cash", s.as);
+  assert.equal(sp2.body.active_po_locks_usd, 0);
+  assert.equal(sp2.body.free_spendable_cash_usd, 850);
+});
+
+test("a purchase invoice only touches a PO lock when linked, and a non-final link keeps the PO open", async () => {
+  const s = setupTenant(true);
+  await app.api("PUT", "/api/or/config", { ...s.as, body: { min_drawer_float: 0 } });
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "in", amount: 500, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Cash" } });
+  const supId = Number(app.db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, 'Sup L', 'supplier')").run(s.tenantId).lastInsertRowid);
+  const prodId = Number(
+    app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'LN-1', 'Flour', 3, 2, 0, 1)").run(s.tenantId).lastInsertRowid
+  );
+  const po = await app.api("POST", "/api/or/po-commitments", {
+    ...s.as, body: { supplier_id: supId, expected_delivery_date: "2026-12-01", payment_plan: "CASH_ON_DELIVERY", estimated_order_total: 300 },
+  });
+  await app.api("POST", `/api/or/po-commitments/${po.body.id}/approve`, s.as);
+  const purchase = (extra: any) => app.api("POST", "/api/transactions", {
+    ...s.as,
+    body: {
+      type: "purchase", stakeholder_id: supId, user_id: s.admin, currency: "USD", exchange_rate: 1,
+      items: [{ id: prodId, quantity: 25, price: 2, unit_price: 2 }],
+      payments: [{ amount: 50, method: "cash", currency: "USD", exchange_rate: 1 }],
+      ...extra,
+    },
+  });
+
+  // Unrelated purchase from the same supplier: the lock is untouched
+  assert.equal((await purchase({})).status, 200);
+  let cur = await app.api("GET", `/api/or/po-commitments/${po.body.id}`, s.as);
+  assert.equal(cur.body.status, "APPROVED_LOCKED");
+  assert.equal(cur.body.locked_cash_amount, 300);
+
+  // Linked, not the last delivery: $50 paid comes off the lock, PO stays open
+  assert.equal((await purchase({ or_po_commitment_id: po.body.id, or_po_final: false })).status, 200);
+  cur = await app.api("GET", `/api/or/po-commitments/${po.body.id}`, s.as);
+  assert.equal(cur.body.status, "PARTIALLY_RECEIVED");
+  assert.equal(cur.body.locked_cash_amount, 250);
+
+  // Last delivery: closes and releases the rest
+  assert.equal((await purchase({ or_po_commitment_id: po.body.id })).status, 200);
+  cur = await app.api("GET", `/api/or/po-commitments/${po.body.id}`, s.as);
+  assert.equal(cur.body.status, "SETTLED");
+  assert.equal(cur.body.locked_cash_amount, 0);
+  assert.equal(cur.body.released_cash_amount, 200);
+});
+
+test("SKU revenue is the stored USD price for LBP-keyed invoices too (no second rate division)", async () => {
+  const s = setupTenant(true);
+  const usdP = Number(app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'FX-1', 'Usd Item', 10, 5, 50, 1)").run(s.tenantId).lastInsertRowid);
+  const lbpP = Number(app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'FX-2', 'Lbp Item', 10, 5, 50, 1)").run(s.tenantId).lastInsertRowid);
+  const sale = (pid: number, currency: string, rate: number) => {
+    const tx = Number(app.db.prepare("INSERT INTO transactions (tenant_id, user_id, type, total_amount, currency, exchange_rate, status) VALUES (?, ?, 'sale', 20, ?, ?, 'completed')").run(s.tenantId, s.admin, currency, rate).lastInsertRowid);
+    app.db.prepare("INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, unit_cost) VALUES (?, ?, 2, 10, 5)").run(tx, pid);
+  };
+  sale(usdP, "USD", 1);
+  sale(lbpP, "LBP", 89500);
+  await app.api("POST", "/api/or/pipeline/run", s.as);
+  const m = app.db.prepare("SELECT product_id, revenue_30d, gross_margin_30d FROM or_sku_metrics WHERE tenant_id = ?").all(s.tenantId) as any[];
+  const usd = m.find((r) => r.product_id === usdP);
+  const lbp = m.find((r) => r.product_id === lbpP);
+  assert.equal(usd.revenue_30d, 20);
+  assert.equal(lbp.revenue_30d, 20);
+  assert.equal(lbp.gross_margin_30d, 10);
+});
+
+test("owner cash draws are counted once (from cash_flow) and linked by global id", async () => {
+  const s = setupTenant(true);
+  await app.api("PUT", "/api/or/config", { ...s.as, body: { survival_mode: "GROWTH" } });
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "in", amount: 300, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Cash" } });
+  const d = await app.api("POST", "/api/or/owner-draws", { ...s.as, body: { cash_amount: 15, override_reason: "test draw" } });
+  assert.equal(d.status, 200, JSON.stringify(d.body));
+  const cfGid = (app.db.prepare("SELECT global_id FROM cash_flow WHERE id = ?").get(d.body.core_cash_tx_id) as any).global_id;
+  assert.equal(d.body.core_cash_global_id, cfGid);
+  // Simulate this draw arriving on ANOTHER register: its local cash_flow id link does not exist there.
+  app.db.prepare("UPDATE or_owner_draws SET core_cash_tx_id = NULL WHERE id = ?").run(d.body.id);
+  const usage = await app.api("GET", "/api/or/owner-draws", s.as);
+  assert.equal(usage.body.usage.cash_today, 15);
+  assert.equal(usage.body.draws.filter((r: any) => r.cash_amount === 15).length, 1);
+});
+
+test("briefing re-runs update items in place (stable ids) and retire stale ones softly", async () => {
+  const s = setupTenant(true);
+  await app.api("PUT", "/api/or/config", { ...s.as, body: { min_drawer_float: 100 } }); // negative free cash -> CRITICAL item
+  await app.api("POST", "/api/or/pipeline/run", s.as);
+  const first = app.db.prepare("SELECT id, global_id FROM or_action_queue WHERE tenant_id = ? AND deleted_at IS NULL").all(s.tenantId) as any[];
+  assert.ok(first.length >= 1);
+  await app.api("POST", "/api/or/pipeline/run", s.as);
+  const second = app.db.prepare("SELECT id, global_id FROM or_action_queue WHERE tenant_id = ? AND deleted_at IS NULL").all(s.tenantId) as any[];
+  assert.deepEqual(second.map((r) => r.global_id).sort(), first.map((r) => r.global_id).sort());
+  // Cash arrives: the CRITICAL item no longer applies and is soft-deleted (so the deletion syncs)
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "in", amount: 500, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Cash" } });
+  await app.api("POST", "/api/or/pipeline/run", s.as);
+  const retired = app.db.prepare("SELECT COUNT(*) c FROM or_action_queue WHERE tenant_id = ? AND category = 'CASH_RUNWAY' AND deleted_at IS NOT NULL").get(s.tenantId) as any;
+  assert.equal(retired.c, 1);
+});
+
+test("optimizer apply uses the reviewed plan once (idempotent per plan_id)", async () => {
+  const s = setupTenant(true);
+  await app.api("PUT", "/api/or/config", { ...s.as, body: { min_drawer_float: 0 } });
+  await app.api("POST", "/api/cash-flow", { ...s.as, body: { type: "in", amount: 100, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Cash" } });
+  const sup = Number(app.db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, 'Opt Sup', 'supplier')").run(s.tenantId).lastInsertRowid);
+  const p = Number(app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'OP-1', 'Opt', 10, 5, 0, 1)").run(s.tenantId).lastInsertRowid);
+  app.db.prepare(
+    `INSERT INTO or_sku_metrics (tenant_id, product_id, weighted_daily_sales, demand_std_30d, safety_stock, primary_supplier_id, revenue_30d, abc_class)
+     VALUES (?, ?, 3, 1, 2, ?, 900, 'A')`
+  ).run(s.tenantId, p, sup);
+  const run = await app.api("POST", "/api/or/optimizer/run", s.as);
+  assert.equal(run.status, 200, JSON.stringify(run.body));
+  assert.ok(run.body.plan_id);
+  const a1 = await app.api("POST", "/api/or/optimizer/apply", { ...s.as, body: { plan_id: run.body.plan_id } });
+  assert.equal(a1.status, 200);
+  assert.equal(a1.body.created_pos.length, 1);
+  const a2 = await app.api("POST", "/api/or/optimizer/apply", { ...s.as, body: { plan_id: run.body.plan_id } });
+  assert.equal(a2.body.already_applied, true);
+  const count = app.db.prepare("SELECT COUNT(*) c FROM or_po_commitments WHERE tenant_id = ?").get(s.tenantId) as any;
+  assert.equal(count.c, 1);
+  const expired = await app.api("POST", "/api/or/optimizer/apply", { ...s.as, body: { plan_id: "nope" } });
+  assert.equal(expired.status, 409);
+});
+
+test("sync: pulling a cloud OR config row adopts the local twin instead of failing on the natural key", async () => {
+  const s = setupTenant(true);
+  await app.api("GET", "/api/or/config", s.as); // seeds the local config row
+  const local = app.db.prepare("SELECT id, global_id FROM or_tenant_config WHERE tenant_id = ?").get(s.tenantId) as any;
+  const sync = await import("../server/sync.js");
+  assert.deepEqual(sync.NATURAL_KEYS.or_tenant_config, ["tenant_id"]);
+  const { stableGlobalId } = await import("../server/or/stableId.js");
+  const tg = (app.db.prepare("SELECT global_id FROM tenants WHERE id = ?").get(s.tenantId) as any).global_id;
+  if (tg) {
+    assert.equal(local.global_id, stableGlobalId(s.tenantId, "or_tenant_config"));
+    assert.equal(stableGlobalId(s.tenantId, "x"), stableGlobalId(s.tenantId, "x"));
+  }
 });

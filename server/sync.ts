@@ -215,9 +215,24 @@ const QUANTITY_COLUMNS: Record<string, string[]> = {
 // Columns that exist only in the local database and must never be pushed.
 //  - stakeholders.balance_baseline (see server/balance.ts)
 //  - cash_flow.stakeholder_id: device-local id linking a balance payment to its party (server/cashFlow.ts)
+//  - OmniPulse OR links to Core rows by INTEGER id (device-local): never pushed, never taken from a pull.
 const LOCAL_ONLY_COLUMNS: Record<string, string[]> = {
   stakeholders: ['balance_baseline'],
   cash_flow: ['stakeholder_id'],
+  or_owner_draws: ['core_cash_tx_id', 'account_id'],
+  or_owner_draw_items: ['core_stock_tx_id'],
+  or_po_commitments: ['core_transaction_id'],
+  or_cycle_count_items: ['core_adjustment_tx_id'],
+};
+
+// OR rows that are unique per tenant by a NATURAL key (each register seeds its own copy with its own
+// global_id before it ever syncs). On pull, a cloud row we don't hold by global_id but DO hold by natural
+// key is adopted: the local row takes the cloud's global_id and values, so both sides converge on one row.
+export const NATURAL_KEYS: Record<string, string[]> = {
+  or_tenant_config: ['tenant_id'],
+  or_draw_policies: ['tenant_id', 'survival_mode'],
+  or_cash_buckets: ['tenant_id', 'code'],
+  or_supplier_profiles: ['tenant_id', 'supplier_id'],
 };
 // Columns pushed only once the cloud has them (supabase/migrations/2026-10-06_local_rates.sql,
 // 2026-11-13_stakeholder_discount.sql). They
@@ -226,6 +241,7 @@ const LOCAL_ONLY_COLUMNS: Record<string, string[]> = {
 // `_migrations` and re-marks the rows holding a value as unsynced, so values set before the cloud
 // migration get pushed once.
 export const OPTIONAL_CLOUD_COLUMNS: Record<string, string[]> = {
+  or_owner_draws: ['core_cash_global_id'],
   stakeholders: ['local_rate', 'discount_percent'],
   transactions: ['local_rate', 'local_currency', 'order_global_id'],
 };
@@ -654,8 +670,8 @@ export function applyCloudRows(localId: number, tableName: string, rawData: any[
     const { local_id, id, synced_at, ...rest } = record;
     if (embedParent) delete rest[embedParent];
     const mapped: any = { ...rest };
-    // Keep this device's local link when updating an existing row.
-    if (tableName === 'cash_flow') delete mapped.stakeholder_id;
+    // Keep this device's local links when updating an existing row.
+    for (const col of LOCAL_ONLY_COLUMNS[tableName] || []) delete mapped[col];
     if (tableName === 'order_events' && mapped.detail && typeof mapped.detail !== 'string') mapped.detail = JSON.stringify(mapped.detail);
     if (mapped.updated_at) mapped.updated_at = mapped.updated_at.replace('T', ' ').replace('Z', '');
     if (mapped.created_at) mapped.created_at = mapped.created_at.replace('T', ' ').replace('Z', '');
@@ -707,9 +723,24 @@ export function applyCloudRows(localId: number, tableName: string, rawData: any[
     ? db.prepare(`SELECT 1 FROM currencies WHERE tenant_id = ? AND UPPER(code) = UPPER(?) AND deleted_at IS NULL`) : null;
 
   const applied: PullStats = { inserted: 0, updated: 0, newSubmitted: 0 };
+  const naturalKey = NATURAL_KEYS[tableName];
+  const naturalStmt = naturalKey
+    ? db.prepare(`SELECT id FROM ${tableName} WHERE ${naturalKey.map((c) => `${c} = ?`).join(' AND ')} AND (global_id IS NULL OR global_id <> ?)`) : null;
+  const adoptStmt = naturalKey ? db.prepare(`UPDATE ${tableName} SET global_id = ? WHERE id = ?`) : null;
   const tx = db.transaction((records: any[]) => {
     for (const record of records) {
-      const exists = checkStmt.get(record.global_id) as any;
+      let exists = checkStmt.get(record.global_id) as any;
+      if (!exists && naturalStmt && naturalKey!.every((c) => record[c] != null)) {
+        const twin = naturalStmt.get(...naturalKey!.map((c) => record[c]), record.global_id) as any;
+        if (twin) {
+          // Adopt the cloud identity, then take the cloud's values (other registers already use them).
+          adoptStmt!.run(record.global_id, twin.id);
+          applied.updated++;
+          updateStmt.run(...updateColumns.map(col => record[col] ?? null), record.global_id);
+          if (record.updated_at && restoreStmt) restoreStmt.run(record.updated_at, record.last_synced_at ?? record.updated_at, record.global_id);
+          continue;
+        }
+      }
       if (!exists && skipUnknownDeleted && record.deleted_at) continue;
       if (!exists && liveCurrencyByCode && !record.deleted_at && liveCurrencyByCode.get(record.tenant_id, record.code)) continue;
       if (!exists && barcodeHolder) {

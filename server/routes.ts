@@ -1976,6 +1976,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
           totalUsd: finalTotal,
           cashPaidUsd,
           userId: resolvedUserId ?? null,
+          final: req.body.or_po_final !== false,
+          items: processedItems.map((pi: any) => ({ product_id: Number(pi.productId), quantity: Number(pi.pieces) || 0 })),
         });
       }
 

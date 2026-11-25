@@ -30,10 +30,12 @@ export function getOwnerDrawUsage(tenantId: number, dateStr = localDateIso()) {
 
   const monthPrefix = dateStr.slice(0, 7); // YYYY-MM
 
-  // 1. Direct OR draws
+  // 1. Goods taken through OR draws. Their CASH part is not summed here: every OR cash draw is also a Core
+  //    cash_flow 'owner_withdrawal' row (counted once, below) — that works on every register, because
+  //    cash_flow syncs while OR's device-local link ids do not.
   const dayOr = db
     .prepare(
-      `SELECT IFNULL(SUM(cash_amount), 0) AS cash_today,
+      `SELECT 0 AS cash_today,
               IFNULL(SUM(goods_cost_total), 0) AS goods_today
          FROM or_owner_draws
         WHERE tenant_id = ? AND draw_date = ? AND deleted_at IS NULL`
@@ -42,14 +44,14 @@ export function getOwnerDrawUsage(tenantId: number, dateStr = localDateIso()) {
 
   const monthOr = db
     .prepare(
-      `SELECT IFNULL(SUM(cash_amount), 0) AS cash_month,
+      `SELECT 0 AS cash_month,
               IFNULL(SUM(goods_cost_total), 0) AS goods_month
          FROM or_owner_draws
         WHERE tenant_id = ? AND substr(draw_date, 1, 7) = ? AND deleted_at IS NULL`
     )
     .get(tenantId, monthPrefix) as any;
 
-  // 2. Unlinked Core cash_flow + archived_cash_flow rows with category = 'owner_withdrawal' (preserves ALL historical + new cash-flow withdrawals!)
+  // 2. ALL Core cash_flow + archived_cash_flow rows with category = 'owner_withdrawal' (OR draws + manual withdrawals)
   const cfCashSum = (dateFilterSql: string, param: string): number => {
     const row = db
       .prepare(
@@ -63,13 +65,9 @@ export function getOwnerDrawUsage(tenantId: number, dateStr = localDateIso()) {
                FROM archived_cash_flow
               WHERE tenant_id = ? AND type = 'out' AND category = 'owner_withdrawal'
            ) cf
-          WHERE ${dateFilterSql}
-            AND cf.id NOT IN (
-              SELECT core_cash_tx_id FROM or_owner_draws
-               WHERE tenant_id = ? AND core_cash_tx_id IS NOT NULL AND deleted_at IS NULL
-            )`
+          WHERE ${dateFilterSql}`
       )
-      .get(tenantId, tenantId, param, tenantId) as any;
+      .get(tenantId, tenantId, param) as any;
     return Number(row?.total) || 0;
   };
 
@@ -94,14 +92,14 @@ export function getOwnerDrawUsage(tenantId: number, dateStr = localDateIso()) {
             `SELECT IFNULL(SUM(line_cost), 0) AS total
                FROM (
                  SELECT date(t.created_at, 'localtime') AS d,
-                        ti.quantity * COALESCE(NULLIF(ti.unit_cost, 0), NULLIF(p.cost, 0), ti.unit_price / IFNULL(NULLIF(t.exchange_rate, 0), 1), 0) AS line_cost
+                        ti.quantity * COALESCE(NULLIF(ti.unit_cost, 0), NULLIF(p.cost, 0), ti.unit_price, 0) AS line_cost
                    FROM transaction_items ti
                    JOIN transactions t ON t.id = ti.transaction_id
                    LEFT JOIN products p ON p.id = ti.product_id
                   WHERE t.tenant_id = ? AND t.stakeholder_id = ? AND t.type = 'sale' AND t.deleted_at IS NULL
                  UNION ALL
                  SELECT date(at.created_at, 'localtime') AS d,
-                        ati.quantity * COALESCE(NULLIF(ati.unit_cost, 0), NULLIF(p.cost, 0), ati.unit_price / IFNULL(NULLIF(at.exchange_rate, 0), 1), 0) AS line_cost
+                        ati.quantity * COALESCE(NULLIF(ati.unit_cost, 0), NULLIF(p.cost, 0), ati.unit_price, 0) AS line_cost
                    FROM archived_transaction_items ati
                    JOIN archived_transactions at ON at.id = ati.transaction_id
                    LEFT JOIN products p ON p.id = ati.product_id
@@ -251,8 +249,8 @@ export function createOwnerDraw(tenantId: number, input: CreateOwnerDrawInput) {
         `INSERT INTO or_owner_draws (
           tenant_id, owner_user_id, recorded_by_user_id, draw_date, draw_type,
           cash_amount, currency, exchange_rate, goods_cost_total, total_draw_value,
-          cash_source, account_id, exceeded_cap, override_reason, core_cash_tx_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          cash_source, account_id, exceeded_cap, override_reason, core_cash_tx_id, core_cash_global_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         tenantId,
@@ -269,7 +267,8 @@ export function createOwnerDraw(tenantId: number, input: CreateOwnerDrawInput) {
         resolvedAccountId,
         exceededCap ? 1 : 0,
         overrideReason,
-        coreCashTxId
+        coreCashTxId,
+        coreCashTxId ? ((db.prepare("SELECT global_id FROM cash_flow WHERE id = ?").get(coreCashTxId) as any)?.global_id ?? null) : null
       );
     const drawId = Number(drawInfo.lastInsertRowid);
 
@@ -364,18 +363,18 @@ export function listOwnerDraws(tenantId: number, opts?: { from?: string; to?: st
               cf.created_at,
               'cash_flow' AS source
          FROM (
-           SELECT id, amount, exchange_rate, account_id, reason, created_at, date(created_at, 'localtime') AS draw_date
+           SELECT id, global_id, amount, exchange_rate, account_id, reason, created_at, date(created_at, 'localtime') AS draw_date
              FROM cash_flow
             WHERE tenant_id = ? AND type = 'out' AND category = 'owner_withdrawal' AND deleted_at IS NULL
            UNION ALL
-           SELECT id, amount, exchange_rate, account_id, reason, created_at, date(created_at, 'localtime') AS draw_date
+           SELECT id, global_id, amount, exchange_rate, account_id, reason, created_at, date(created_at, 'localtime') AS draw_date
              FROM archived_cash_flow
             WHERE tenant_id = ? AND type = 'out' AND category = 'owner_withdrawal'
          ) cf
          LEFT JOIN cash_accounts ca ON ca.id = cf.account_id
-        WHERE cf.id NOT IN (
-          SELECT core_cash_tx_id FROM or_owner_draws
-           WHERE tenant_id = ? AND core_cash_tx_id IS NOT NULL AND deleted_at IS NULL
+        WHERE cf.global_id IS NULL OR cf.global_id NOT IN (
+          SELECT core_cash_global_id FROM or_owner_draws
+           WHERE tenant_id = ? AND core_cash_global_id IS NOT NULL AND deleted_at IS NULL
         )`
     )
     .all(tenantId, tenantId, tenantId) as any[];
@@ -396,7 +395,7 @@ export function listOwnerDraws(tenantId: number, opts?: { from?: string; to?: st
                 'owner_customer_sale' AS source
            FROM (
              SELECT tx.id, date(tx.created_at, 'localtime') AS draw_date, tx.created_at, tx.notes,
-                    IFNULL(SUM(ti.quantity * COALESCE(NULLIF(ti.unit_cost, 0), NULLIF(p.cost, 0), ti.unit_price / IFNULL(NULLIF(tx.exchange_rate, 0), 1), 0)), 0) AS cost_total
+                    IFNULL(SUM(ti.quantity * COALESCE(NULLIF(ti.unit_cost, 0), NULLIF(p.cost, 0), ti.unit_price, 0)), 0) AS cost_total
                FROM transactions tx
                JOIN transaction_items ti ON ti.transaction_id = tx.id
                LEFT JOIN products p ON p.id = ti.product_id
@@ -404,7 +403,7 @@ export function listOwnerDraws(tenantId: number, opts?: { from?: string; to?: st
               GROUP BY tx.id
              UNION ALL
              SELECT atx.id, date(atx.created_at, 'localtime') AS draw_date, atx.created_at, atx.notes,
-                    IFNULL(SUM(ati.quantity * COALESCE(NULLIF(ati.unit_cost, 0), NULLIF(p.cost, 0), ati.unit_price / IFNULL(NULLIF(atx.exchange_rate, 0), 1), 0)), 0) AS cost_total
+                    IFNULL(SUM(ati.quantity * COALESCE(NULLIF(ati.unit_cost, 0), NULLIF(p.cost, 0), ati.unit_price, 0)), 0) AS cost_total
                FROM archived_transactions atx
                JOIN archived_transaction_items ati ON ati.transaction_id = atx.id
                LEFT JOIN products p ON p.id = ati.product_id
