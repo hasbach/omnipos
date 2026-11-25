@@ -18,6 +18,9 @@ let cloud: Record<string, any[]> = {};
 let embedError: any = null;
 let cloudHasSyncedAt = true;
 let afterSelect: ((req: Req) => void) | null = null;
+// sync_changed_tables: null = the cloud doesn't have the function (PGRST202); otherwise the tables it reports.
+let rpcChanged: string[] | null = null;
+let rpcCalls: any[] = [];
 
 const ms = (v: any) => Date.parse(/(Z|[+-]\d{2}:?\d{2})$/.test(String(v)) ? String(v) : String(v) + "Z");
 // The cloud's synced_at: explicit on the fixture row, else the row's updated_at (as the DB trigger would).
@@ -30,6 +33,11 @@ function makeFake() {
       refreshSession: async () => ({ data: { session: null }, error: { message: "no" } }),
       signOut: async () => ({ error: null }),
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+    },
+    rpc(fn: string, args: any) {
+      rpcCalls.push({ fn, args });
+      if (rpcChanged === null) return Promise.resolve({ data: null, error: { code: "PGRST202", message: "Could not find the function" } });
+      return Promise.resolve({ data: rpcChanged, error: null });
     },
     from(table: string) {
       const req: Req = { table, op: "select", filters: [] };
@@ -122,12 +130,15 @@ beforeEach(() => {
   requests = []; cloud = {}; embedError = null; cloudHasSyncedAt = true; afterSelect = null;
   sync.resetEmbedProbe(); sync.resetPullSchedule(); sync.resetRequestCounts(); sync.resetSyncedAtProbe();
   sync.clearSyncCursors(); sync.__setPullPageSize();
+  rpcChanged = null; rpcCalls = []; sync.resetChangeCheckProbe();
 });
 
 test("idle cycles follow the schedule: hot every 60 s, cold every 5 min, push stays local", async () => {
+  // (cloud without sync_changed_tables: every due table is pulled, as before 1.13.3)
   const T0 = 1_000_000_000_000;
+  const hotNoOrders = sync.HOT_PULL_TABLES.filter((t) => !sync.ORDER_PULL_TABLES.includes(t));
   await sync.runSyncCycleAt(T0); // first cycle pulls everything and pushes the seed rows once
-  assert.equal(selects().length, sync.HOT_PULL_TABLES.length + sync.COLD_PULL_TABLES.length);
+  assert.equal(selects().length, hotNoOrders.length + sync.COLD_PULL_TABLES.length);
   requests = [];
 
   const perTable: Record<string, number> = {};
@@ -135,12 +146,44 @@ test("idle cycles follow the schedule: hot every 60 s, cold every 5 min, push st
   for (let s = 10; s <= 600; s += 10) await sync.runSyncCycleAt(T0 + s * 1000);
   for (const r of selects()) perTable[r.table] = (perTable[r.table] || 0) + 1;
 
-  for (const t of sync.HOT_PULL_TABLES) assert.equal(perTable[t], 10, `${t}: hot pulls at 60..600 s`);
+  for (const t of hotNoOrders) assert.equal(perTable[t], 10, `${t}: hot pulls at 60..600 s`);
+  for (const t of sync.ORDER_PULL_TABLES) assert.equal(perTable[t], undefined, `${t}: no store => never pulled`);
   for (const t of sync.COLD_PULL_TABLES) assert.equal(perTable[t], 2, `${t}: cold pulls at 300 s and 600 s`);
   assert.equal(requests.filter((r) => r.op === "upsert").length, 0, "nothing pending => no push requests");
+  assert.equal(rpcCalls.length, 1, "a missing change-check function is probed once, then skipped");
   const c = sync.getRequestCounts();
-  assert.equal(c.pull, selects().length + sync.HOT_PULL_TABLES.length + sync.COLD_PULL_TABLES.length);
+  assert.equal(c.pull, selects().length + hotNoOrders.length + sync.COLD_PULL_TABLES.length + 1);
   assert.ok(c.since);
+});
+
+test("the change check: one request per due pull, only changed tables are fetched, idle registers slow down", async () => {
+  const T0 = 2_000_000_000_000;
+  rpcChanged = [];
+  await sync.runSyncCycleAt(T0);
+  assert.equal(selects().length, 0, "nothing changed => no table requests at all");
+  assert.equal(rpcCalls.length, 1);
+  const sent = rpcCalls[0].args.p_cursors;
+  assert.ok("products" in sent && "transaction_items" in sent && !("orders" in sent), "cursors for the due tables, no order tables without a store");
+
+  rpcChanged = ["products"];
+  cloud.products = [product(uuid(), "Changed", pad(5), { tenant_id: GID })];
+  await sync.runSyncCycleAt(T0 + 60_000);
+  assert.deepEqual([...new Set(selects().map((r) => r.table))], ["products"]);
+
+  // 10 idle checks in a row => the hot schedule slows to IDLE_HOT_PULL_INTERVAL_MS
+  rpcChanged = []; requests = []; rpcCalls = [];
+  let t = T0 + 60_000;
+  for (let i = 0; i < sync.IDLE_CHECKS_BEFORE_BACKOFF; i++) { t += 60_000; await sync.runSyncCycleAt(t); }
+  const before = rpcCalls.length;
+  await sync.runSyncCycleAt(t + 60_000);
+  assert.equal(rpcCalls.length, before, "idle: no check one minute later");
+  await sync.runSyncCycleAt(t + sync.IDLE_HOT_PULL_INTERVAL_MS);
+  assert.equal(rpcCalls.length, before + 1, "idle: next check after the slow interval");
+  // local activity restores the fast schedule
+  sync.markSyncActivity();
+  await sync.runSyncCycleAt(t + sync.IDLE_HOT_PULL_INTERVAL_MS + 60_000);
+  assert.equal(rpcCalls.length, before + 2);
+  assert.equal(selects().length, 0);
 });
 
 test("child tables are pulled with ONE request however many parents exist", async () => {

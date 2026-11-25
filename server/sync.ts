@@ -73,9 +73,17 @@ function getLocalId(tableName: string, globalId: string) {
 //  - PULL "hot" tables (data other registers change all day) every HOT_PULL_INTERVAL_MS.
 //  - PULL "cold" tables (setup data that rarely changes) every COLD_PULL_INTERVAL_MS.
 //  - Initial/forced pulls (login, reconnect, forceInitialSync) always pull everything immediately.
+//  - 1.13.3: a due pull first asks the cloud WHICH of the due tables changed (one `sync_changed_tables`
+//    RPC) and only those are fetched. Every request is also a Supabase log line (Free plan: 1 GB/month
+//    of log ingestion), so an idle register now costs ~1 request a minute instead of ~17.
+//  - Online-order tables (and the orders_sweep RPC) are only pulled for a tenant that has a store.
+//  - After IDLE_CHECKS_BEFORE_BACKOFF change checks in a row found nothing (and nothing was pushed),
+//    the hot schedule slows to IDLE_HOT_PULL_INTERVAL_MS until something changes again.
 export const SYNC_INTERVAL_MS = 10_000;
 export const HOT_PULL_INTERVAL_MS = 60_000;
 export const COLD_PULL_INTERVAL_MS = 5 * 60_000;
+export const IDLE_HOT_PULL_INTERVAL_MS = 3 * 60_000;
+export const IDLE_CHECKS_BEFORE_BACKOFF = 10;
 // PostgREST returns at most 1000 rows per request; pulls page with .range() until a short page.
 export const PULL_PAGE_SIZE = 1000;
 
@@ -777,9 +785,9 @@ export function applyCloudRows(localId: number, tableName: string, rawData: any[
 }
 
 
-export async function pullFromCloud(client: SupabaseClient, localId: number, globalId: string, tables: readonly string[] = PULL_TABLES) {
+export async function pullFromCloud(client: SupabaseClient, localId: number, globalId: string, tables: readonly string[] = PULL_TABLES, opts: { sweepDone?: boolean } = {}) {
   const counts: Record<string, PullStats> = {};
-  if (tables.some(t => ORDER_PULL_TABLES.includes(t))) await callRpc(localId, 'orders_sweep', {}, { timeoutMs: 10000 });
+  if (!opts.sweepDone && tables.some(t => ORDER_PULL_TABLES.includes(t))) await callRpc(localId, 'orders_sweep', {}, { timeoutMs: 10000 });
   // KEYSET paging on (col, global_id): page 1 is `col >= start`, later pages `col > last OR (col = last
   // AND global_id > lastId)`, so rows inserted or changed between pages can neither be skipped nor
   // duplicated, and any number of rows sharing one timestamp are all returned. `onPage` stores the page.
@@ -927,6 +935,7 @@ let scheduleTenant: string | null = null;
 let lastHotPullAt = 0;
 let lastColdPullAt = 0;
 let lastOrdersPullAt = 0;
+let idleChecks = 0;
 type Pulled = { tenantId: number; newSubmitted: number; changed: number };
 let onPulled: ((event: Pulled) => void) | undefined;
 function reportOrders(tenantId: number, counts: Record<string, PullStats>) {
@@ -935,19 +944,58 @@ function reportOrders(tenantId: number, counts: Record<string, PullStats>) {
 }
 
 /** Which tables are due for a pull at `now` (injectable clock for tests). Advances the schedule. */
-export function duePullTables(now: number, sessionKey: string, onlineOrdering = false): string[] {
-  if (scheduleTenant !== sessionKey) { scheduleTenant = sessionKey; lastHotPullAt = 0; lastColdPullAt = 0; lastOrdersPullAt = 0; }
-  const hot = now - lastHotPullAt >= HOT_PULL_INTERVAL_MS;
+export function duePullTables(now: number, sessionKey: string, onlineOrdering = false, hasStore = true): string[] {
+  if (scheduleTenant !== sessionKey) { scheduleTenant = sessionKey; lastHotPullAt = 0; lastColdPullAt = 0; lastOrdersPullAt = 0; idleChecks = 0; }
+  const hotInterval = idleChecks >= IDLE_CHECKS_BEFORE_BACKOFF ? IDLE_HOT_PULL_INTERVAL_MS : HOT_PULL_INTERVAL_MS;
+  const hot = now - lastHotPullAt >= hotInterval;
   const cold = now - lastColdPullAt >= COLD_PULL_INTERVAL_MS;
   if (hot) lastHotPullAt = now;
   if (cold) lastColdPullAt = now;
-  const orders = onlineOrdering && now - lastOrdersPullAt >= 30000;
+  const orders = hasStore && onlineOrdering && now - lastOrdersPullAt >= 30000;
   if (orders || hot) lastOrdersPullAt = now;
   if (!hot && !cold && !orders) return [];
-  return PULL_TABLES.filter(t => (orders && ORDER_PULL_TABLES.includes(t)) || (hot && HOT_PULL_TABLES.includes(t)) || (cold && COLD_PULL_TABLES.includes(t)));
+  return PULL_TABLES.filter(t => {
+    if (ORDER_PULL_TABLES.includes(t)) return hasStore && (orders || hot || cold);
+    return (hot && HOT_PULL_TABLES.includes(t)) || (cold && COLD_PULL_TABLES.includes(t));
+  });
 }
 /** Test hook: forget the pull schedule. */
-export function resetPullSchedule() { scheduleTenant = null; lastHotPullAt = 0; lastColdPullAt = 0; lastOrdersPullAt = 0; }
+export function resetPullSchedule() { scheduleTenant = null; lastHotPullAt = 0; lastColdPullAt = 0; lastOrdersPullAt = 0; idleChecks = 0; }
+/** Something changed locally or in the cloud: leave the idle (slow) pull schedule. */
+export function markSyncActivity() { idleChecks = 0; }
+
+// ---- change check ----------------------------------------------------------------------------
+// When the cloud doesn't have sync_changed_tables yet (migration not run), pull as before and re-probe later.
+let changeCheckUnavailableUntil = 0;
+export function resetChangeCheckProbe() { changeCheckUnavailableUntil = 0; }
+/**
+ * Of `tables`, the ones the cloud has rows for newer than this register's pull cursor (same overlap the
+ * pull itself uses). Tables without a synced_at cursor are always returned. Any problem => all `tables`.
+ */
+export async function tablesWithCloudChanges(client: SupabaseClient, localId: number, tables: string[]): Promise<string[]> {
+  if (tables.length === 0 || Date.now() < changeCheckUnavailableUntil || typeof (client as any)?.rpc !== 'function') return tables;
+  const cursors: Record<string, string | null> = {};
+  for (const t of tables) {
+    const cur = syncedAtAvailable(t) && !embedUnsupported.has(t) ? getCursor(localId, t) : null;
+    cursors[t] = cur ? shiftIso(cur.synced_at, -CURSOR_OVERLAP_MS) : null;
+  }
+  try {
+    requestCounts.pull++;
+    const { data, error } = await (client as any).rpc('sync_changed_tables', { p_cursors: cursors });
+    if (error) {
+      if (['PGRST202', '42883', 'PGRST205'].includes(String(error.code)) || error.status === 404) {
+        changeCheckUnavailableUntil = Date.now() + CLOUD_COLUMN_REPROBE_MS;
+        console.warn('⚠️ [SYNC] Cloud has no sync_changed_tables yet - pulling every due table until the cloud schema is migrated.');
+      }
+      return tables;
+    }
+    if (!Array.isArray(data)) return tables;
+    const changed = new Set(data.map(String));
+    return tables.filter((t) => changed.has(t));
+  } catch {
+    return tables;
+  }
+}
 
 /**
  * One sync cycle for the currently logged-in tenant. No-op if nobody is logged in
@@ -970,12 +1018,26 @@ async function runSyncCycleInner(now: number) {
   const session = getActiveSession();
   if (!session || !session.globalId || !syncableTenant(session.email)) return;
   await purgeTombstonedFromCloud(session.client, session.localId);
+  const pushesBefore = requestCounts.push;
   await pushToCloud(session.client, session.localId);
+  if (requestCounts.push !== pushesBefore) markSyncActivity(); // this register is busy: stay on the fast schedule
   if (!syncPaused) lastPushAt = Date.now();
-  const onlineOrdering = (db.prepare('SELECT settings FROM stores WHERE tenant_id = ? AND deleted_at IS NULL').all(session.localId) as any[]).some(s => { try { return JSON.parse(s.settings || '{}').ordering_mode === 'online'; } catch { return false; } });
-  const due = duePullTables(now, `${session.localId}:${session.globalId}`, onlineOrdering);
+  const stores = db.prepare('SELECT settings FROM stores WHERE tenant_id = ? AND deleted_at IS NULL').all(session.localId) as any[];
+  const onlineOrdering = stores.some(s => { try { return JSON.parse(s.settings || '{}').ordering_mode === 'online'; } catch { return false; } });
+  const due = duePullTables(now, `${session.localId}:${session.globalId}`, onlineOrdering, stores.length > 0);
   if (due.length === 0) return;
-  await pullFromCloud(session.client, session.localId, session.globalId, due);
+  // Pending online orders expire server-side only when swept, so the sweep runs on schedule even when
+  // the change check finds nothing (an expiry it makes is then a change the check reports).
+  const sweepDone = due.some(t => ORDER_PULL_TABLES.includes(t));
+  if (sweepDone) await callRpc(session.localId, 'orders_sweep', {}, { timeoutMs: 10000 });
+  const changed = await tablesWithCloudChanges(session.client, session.localId, due);
+  if (changed.length === 0) {
+    idleChecks++;
+    if (!syncPaused) lastPullAt = Date.now(); // the cloud confirmed nothing new: this register is up to date
+    return;
+  }
+  markSyncActivity();
+  await pullFromCloud(session.client, session.localId, session.globalId, changed, { sweepDone });
   if (!syncPaused) lastPullAt = Date.now();
   recomputeBalancesAfterPull(session.localId);
 }
@@ -1016,6 +1078,7 @@ async function forcePushToCloudInner() {
 const NOTIFY_DEBOUNCE_MS = 2000;
 let notifyTimer: ReturnType<typeof setTimeout> | null = null;
 export function notifyLocalChange(): void {
+  markSyncActivity();
   if (notifyTimer) return;
   notifyTimer = setTimeout(() => {
     notifyTimer = null;

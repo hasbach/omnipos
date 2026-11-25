@@ -90,6 +90,8 @@ Other items: _(add fixes and ideas here)_
 - [x] Cloud migration `supabase/migrations/2026-11-25_omnipulse_or_fixes.sql` applied 2026-11-25 (set_synced_at triggers +
       indexes on the 14 `or_*` tables, `or_owner_draws.core_cash_global_id`, old 5-arg `admin_update_tenant_license`
       dropped, `trg_tenants_guard_protected` blocks tenants from editing their own email/license columns).
+- [x] Cloud migration `supabase/migrations/2026-11-25b_sync_changed_tables.sql` applied 2026-11-25 (`sync_changed_tables`
+      RPC used by 1.13.3 registers; older registers keep polling every table until updated).
 - [ ] OmniPulse OR future: Restaurant recipe/BOM deduction (`enable_recipe_deduction`) once a Recipes module exists, and
       optional Python Google OR-Tools cloud microservice (`OR_SOLVER_URL`) for VRP/shift scheduling via
       `server/or/solver/orToolsCloudAdapter.ts`.
@@ -101,6 +103,14 @@ Other items: _(add fixes and ideas here)_
 ---
 
 ## Shipped
+
+### 1.13.3 — Lighter sync: Supabase log ingestion & egress (2026-11-25)
+- Supabase Free plan log ingestion was at 142% (1.42 / 1 GB): 99% were API-gateway request logs from registers polling
+  ~17 endpoints every minute, almost always for nothing.
+- A due pull now first calls `sync_changed_tables` (one request with the register's cursors) and fetches only the tables
+  with newer rows; idle registers send ~1 request a minute instead of ~17.
+- Online-order tables and `orders_sweep` are only polled by tenants that have a store.
+- After 10 empty checks in a row the hot pull slows to every 3 minutes; any local change or pulled change restores 60 s.
 
 ### 1.13.2 — OmniPulse OR review fixes (2026-11-25)
 Review of 1.13.0/1.13.1 by Claude + Codex; every must-fix item and improvement addressed.
