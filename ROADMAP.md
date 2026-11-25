@@ -84,6 +84,12 @@ Other items: _(add fixes and ideas here)_
       stay ("product deleted" in the back office). No cloud migration. Known gap: a register that edits the product
       offline and pushes before pulling the deletion clears the cloud `deleted_at` again. Products deleted before
       the fix stay live in the cloud.
+- [x] Cloud migration (OmniPulse OR) `supabase/migrations/2026-11-24_omnipulse_or.sql` applied 2026-11-25 (14 synced
+      `or_*` tables with RLS + `or_license_type`/`or_license_expiry` on `tenants` + updated `admin_update_tenant_license`
+      RPC); Web Monitor / Super Admin deployed to Vercel (`omnipos-monitor.vercel.app`).
+- [ ] OmniPulse OR future: Restaurant recipe/BOM deduction (`enable_recipe_deduction`) once a Recipes module exists, and
+      optional Python Google OR-Tools cloud microservice (`OR_SOLVER_URL`) for VRP/shift scheduling via
+      `server/or/solver/orToolsCloudAdapter.ts`.
 
 **Housekeeping**
 - [ ] [task.md](task.md) is the original July 2026 improvement plan (all items done, folded into "Foundation" below) —
@@ -92,6 +98,39 @@ Other items: _(add fixes and ideas here)_
 ---
 
 ## Shipped
+
+### 1.13.1 — Purchase Invoice ↔ Locked PO link & negative-stock briefing alerts (2026-11-25)
+- **Purchase Invoice ↔ PO Cash-Lock link:** `InvoiceEditor` (`Purchases → New Purchase`) detects open `APPROVED_LOCKED`
+  POs for the selected supplier and lets staff link & settle the lock atomically inside `POST /api/transactions`
+  (`or_po_commitment_id`), updating stock/payments/supplier balance while releasing any unused locked cash with zero
+  double counting. Amount-only Receive modal in OmniPulse OR also directs staff to Purchases for itemized receiving.
+- **Negative-stock Class A briefing alerts:** Class A items with negative `products.stock` now display a clear
+  *Negative stock — physical count & stock adjustment required* alert (instead of negative Days of Supply) and are
+  auto-queued into `or_stock_anomalies` for the next 5-minute Cycle Count.
+
+### 1.13.0 — OmniPulse OR paid add-on module & HiGHS WASM MILP optimizer (2026-11-25)
+- **Paid add-on licensing & RBAC:** `or_license_type` (`none`/`monthly`/`year`/`lifetime`) + `or_license_expiry` on
+  `tenants` (SQLite + Supabase migration `2026-11-24_omnipulse_or.sql`), `requireOrLicense` server gate (`403
+  OR_LICENSE_REQUIRED`), locked add-on preview for unlicensed tenants, Super Admin license controls on both desktop
+  (`SuperAdminDashboard.tsx`) and web (`SuperAdminWeb.tsx`, deployed to `omnipos-monitor.vercel.app`), and `or.*`
+  role permissions (`ROLE_PERMISSIONS_VERSION = 4`).
+- **Real Spendable Cash & survival modes:** derived live from `cash_accounts` (Drawer + Savings/Safe + Bank) minus
+  `min_drawer_float`, virtual `OPEX_RESERVE` bucket (`or_fixed_obligations` daily accrual), and active PO locks, with
+  automatic 14-day runway survival mode switching (`CRISIS` / `RECOVERY` / `GROWTH`) and industry presets
+  (`RETAIL`, `RESTAURANT`, `SERVICE`, `HYBRID`).
+- **Unified Owner Draws:** aggregates all historical + new Core `cash_flow` / `archived_cash_flow` outflows with
+  `category = 'owner_withdrawal'` plus at-cost POS sales to a designated **Business Owner Customer**
+  (`or_tenant_config.owner_stakeholder_id`), enforced against daily/monthly survival-mode caps with override logging.
+- **PO Cash-Lock & partial receiving:** pre-delivery `or_po_commitments` + `or_po_commitment_items`, cash-collision
+  warning on approval, partial/full receiving that creates Core `transactions(type='purchase')`, releases unused locks
+  immediately, and tracks supplier `fill_rate_score`.
+- **5-Minute Blind Cycle Count & Stock anomalies:** auto-flags negative-stock POS sales, adds a **Shelf Empty** button
+  next to **Adjust** on `StockManagement`, hides system quantities during blind counting, routes variances above
+  `variance_alert_pct` to owner approval, and posts adjustments to Core `stock_adjustments`.
+- **Hybrid Dynamic MILP Optimizer (`server/or/solver/`):** offline-first `HighsWasmAdapter` (`highs` WASM) solving
+  tenant-specific cash-constrained restocking, supplier MOQ, cash-vs-credit split, debt paydown, and marginal cash ROI
+  shadow prices using recency-weighted 7d/14d/30d demand and ABC safety stock — behind a pluggable `SolverAdapter`
+  with `OrToolsCloudAdapter` (`OR_SOLVER_URL`) ready for future cloud OR-Tools models.
 
 ### 1.12.0 — Cash accounts & savings, combined Money Out report, Arabic printing & POS/monitor fixes (2026-11-23)
 - **Cash accounts & savings:** named accounts (`Cash Drawer` built-in default plus custom Savings / Safe / Bank accounts)
