@@ -174,9 +174,9 @@ export function approvePoCommitment(
   if (cashCollision && !opts.force) {
     const shortfall = round2(lockAmount - spendable.free_spendable_cash_usd);
     throw new ValidationError(
-      `Cash collision warning: locking $${lockAmount.toFixed(2)} exceeds Free Spendable Cash ($${spendable.free_spendable_cash_usd.toFixed(2)}) by $${shortfall.toFixed(2)}. Pass force=true to lock anyway.`,
+      `Locking $${lockAmount.toFixed(2)} is more than your free spendable cash ($${spendable.free_spendable_cash_usd.toFixed(2)}): you would be $${shortfall.toFixed(2)} short.`,
       409,
-      { code: "OR_PO_CASH_COLLISION", shortfall }
+      { code: "OR_PO_CASH_COLLISION", shortfall, lock_amount: lockAmount, free_spendable_usd: spendable.free_spendable_cash_usd }
     );
   }
 

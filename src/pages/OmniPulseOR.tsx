@@ -4,7 +4,7 @@ import {
   ShieldAlert, Sliders, Truck, Wallet, XCircle,
 } from 'lucide-react';
 import {
-  Badge, Button, Card, Checkbox, Input, Modal, PageHeader, Select, StatCard, Tabs, useToast,
+  Badge, Button, Card, Checkbox, Input, Modal, PageHeader, Select, StatCard, Tabs, useConfirm, useToast,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
@@ -32,6 +32,7 @@ const PO_STATUS_VARIANT: Record<string, 'neutral' | 'warning' | 'success' | 'dan
 export default function OmniPulseOR() {
   const { t, lang } = useI18n();
   const toast = useToast();
+  const confirm = useConfirm();
   const { can } = usePermissions();
 
   const [loading, setLoading] = useState(true);
@@ -203,8 +204,26 @@ export default function OmniPulseOR() {
       toast.success('PO approved & cash locked');
       await loadAll();
     } catch (e: any) {
-      if (e.code === 'OR_PO_CASH_COLLISION' && window.confirm(`${e.message}\n\nLock cash anyway?`)) {
-        await handleApprovePo(id, true);
+      if (e.code === 'OR_PO_CASH_COLLISION') {
+        const b = e.body || {};
+        const ok = await confirm({
+          title: t('or_cash_collision_title', 'Not enough free cash'),
+          description: (
+            <div className="space-y-2 text-sm">
+              <p>
+                {t('or_cash_collision_body', 'Locking {lock} for this PO is more than your free spendable cash ({free}). You would be {short} short.')
+                  .replace('{lock}', formatMoney(Number(b.lock_amount) || 0, USD))
+                  .replace('{free}', formatMoney(Number(b.free_spendable_usd) || 0, USD))
+                  .replace('{short}', formatMoney(Number(b.shortfall) || 0, USD))}
+              </p>
+              <p className="text-text-3">{t('or_cash_collision_hint', 'You can still lock it; the shortfall is shown in the Morning Briefing.')}</p>
+            </div>
+          ),
+          confirmLabel: t('or_cash_collision_confirm', 'Lock anyway'),
+          cancelLabel: t('or_cancel', 'Cancel'),
+          variant: 'danger',
+        });
+        if (ok) await handleApprovePo(id, true);
       } else {
         toast.error(e.message);
       }

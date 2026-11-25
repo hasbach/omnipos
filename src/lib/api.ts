@@ -8,6 +8,8 @@ export interface ApiError extends Error {
   field?: string;
   available?: number;
   state?: string;
+  /** The whole JSON error body (extra numbers some errors carry, e.g. OR_PO_CASH_COLLISION). */
+  body?: any;
 }
 
 async function parse(res: Response) {
@@ -22,6 +24,7 @@ async function parse(res: Response) {
       `Request failed (${res.status})`;
     const err = new Error(message) as ApiError;
     if (body && typeof body === 'object') {
+      err.body = body;
       if ('state' in body) err.state = (body as any).state;
       if ('code' in body) err.code = (body as any).code;
       if ('field' in body) err.field = (body as any).field;
