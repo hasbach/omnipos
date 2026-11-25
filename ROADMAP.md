@@ -92,6 +92,8 @@ Other items: _(add fixes and ideas here)_
       dropped, `trg_tenants_guard_protected` blocks tenants from editing their own email/license columns).
 - [x] Cloud migration `supabase/migrations/2026-11-25b_sync_changed_tables.sql` applied 2026-11-25 (`sync_changed_tables`
       RPC used by 1.13.3 registers; older registers keep polling every table until updated).
+- [x] Cloud migration `supabase/migrations/2026-11-25c_sync_changed_tables_exact.sql` applied 2026-11-25 (exact keyset
+      cursors; 1.13.3 overlap-string cursors are corrected server-side).
 - [ ] OmniPulse OR future: Restaurant recipe/BOM deduction (`enable_recipe_deduction`) once a Recipes module exists, and
       optional Python Google OR-Tools cloud microservice (`OR_SOLVER_URL`) for VRP/shift scheduling via
       `server/or/solver/orToolsCloudAdapter.ts`.
@@ -103,6 +105,12 @@ Other items: _(add fixes and ideas here)_
 ---
 
 ## Shipped
+
+### 1.13.4 — Change check uses exact cursors (2026-11-25)
+- 1.13.3 sent "cursor minus the 2-minute pull overlap" to `sync_changed_tables`, so the last pulled rows always looked
+  new and tables with recent data were pulled every cycle anyway (the overlap re-read was also ~1 row per table per
+  poll of avoidable egress). The check now sends exact keyset cursors (synced_at, global_id); the cloud function also
+  corrects 1.13.3's strings. A full pull (with the overlap) every 15 minutes still catches late-committed rows.
 
 ### 1.13.3 — Lighter sync: Supabase log ingestion & egress (2026-11-25)
 - Supabase Free plan log ingestion was at 142% (1.42 / 1 GB): 99% were API-gateway request logs from registers polling

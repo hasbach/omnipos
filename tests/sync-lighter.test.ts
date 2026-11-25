@@ -159,30 +159,41 @@ test("idle cycles follow the schedule: hot every 60 s, cold every 5 min, push st
 test("the change check: one request per due pull, only changed tables are fetched, idle registers slow down", async () => {
   const T0 = 2_000_000_000_000;
   rpcChanged = [];
-  await sync.runSyncCycleAt(T0);
+  await sync.runSyncCycleAt(T0); // first cycle: safety full pull (no check)
+  assert.equal(rpcCalls.length, 0);
+  requests = [];
+  sync.markSyncActivity();
+  await sync.runSyncCycleAt(T0 + 60_000);
   assert.equal(selects().length, 0, "nothing changed => no table requests at all");
   assert.equal(rpcCalls.length, 1);
   const sent = rpcCalls[0].args.p_cursors;
   assert.ok("products" in sent && "transaction_items" in sent && !("orders" in sent), "cursors for the due tables, no order tables without a store");
+  for (const v of Object.values(sent)) assert.ok(v === null || (typeof (v as any).s === "string" && "g" in (v as any)), "exact keyset cursors");
 
   rpcChanged = ["products"];
   cloud.products = [product(uuid(), "Changed", pad(5), { tenant_id: GID })];
-  await sync.runSyncCycleAt(T0 + 60_000);
+  await sync.runSyncCycleAt(T0 + 120_000);
   assert.deepEqual([...new Set(selects().map((r) => r.table))], ["products"]);
 
   // 10 idle checks in a row => the hot schedule slows to IDLE_HOT_PULL_INTERVAL_MS
   rpcChanged = []; requests = []; rpcCalls = [];
-  let t = T0 + 60_000;
+  let t = T0 + 120_000;
   for (let i = 0; i < sync.IDLE_CHECKS_BEFORE_BACKOFF; i++) { t += 60_000; await sync.runSyncCycleAt(t); }
   const before = rpcCalls.length;
+  assert.equal(selects().length, 0);
   await sync.runSyncCycleAt(t + 60_000);
   assert.equal(rpcCalls.length, before, "idle: no check one minute later");
+  assert.equal(selects().length, 0);
+  // t + 3 min is also the 15-minute safety mark: the due tables are pulled WITHOUT the check
+  assert.equal(t + sync.IDLE_HOT_PULL_INTERVAL_MS, T0 + sync.SAFETY_FULL_PULL_MS);
   await sync.runSyncCycleAt(t + sync.IDLE_HOT_PULL_INTERVAL_MS);
-  assert.equal(rpcCalls.length, before + 1, "idle: next check after the slow interval");
-  // local activity restores the fast schedule
+  assert.equal(rpcCalls.length, before, "safety pull skips the check");
+  assert.ok(selects().length > 0, "safety full pull");
+  // local activity restores the fast schedule (and the next cycle uses the check again)
+  requests = [];
   sync.markSyncActivity();
   await sync.runSyncCycleAt(t + sync.IDLE_HOT_PULL_INTERVAL_MS + 60_000);
-  assert.equal(rpcCalls.length, before + 2);
+  assert.equal(rpcCalls.length, before + 1);
   assert.equal(selects().length, 0);
 });
 

@@ -84,6 +84,10 @@ export const HOT_PULL_INTERVAL_MS = 60_000;
 export const COLD_PULL_INTERVAL_MS = 5 * 60_000;
 export const IDLE_HOT_PULL_INTERVAL_MS = 3 * 60_000;
 export const IDLE_CHECKS_BEFORE_BACKOFF = 10;
+// The change check compares EXACT cursors (no overlap), so a row committed late with an older synced_at
+// could be missed by it; every SAFETY_FULL_PULL_MS the due tables are pulled without the check (with the
+// usual overlap), as before 1.13.3.
+export const SAFETY_FULL_PULL_MS = 15 * 60_000;
 // PostgREST returns at most 1000 rows per request; pulls page with .range() until a short page.
 export const PULL_PAGE_SIZE = 1000;
 
@@ -967,17 +971,20 @@ export function markSyncActivity() { idleChecks = 0; }
 // ---- change check ----------------------------------------------------------------------------
 // When the cloud doesn't have sync_changed_tables yet (migration not run), pull as before and re-probe later.
 let changeCheckUnavailableUntil = 0;
-export function resetChangeCheckProbe() { changeCheckUnavailableUntil = 0; }
+let lastFullPullAt = 0;
+export function resetChangeCheckProbe() { changeCheckUnavailableUntil = 0; lastFullPullAt = 0; }
 /**
  * Of `tables`, the ones the cloud has rows for newer than this register's pull cursor (same overlap the
  * pull itself uses). Tables without a synced_at cursor are always returned. Any problem => all `tables`.
  */
 export async function tablesWithCloudChanges(client: SupabaseClient, localId: number, tables: string[]): Promise<string[]> {
   if (tables.length === 0 || Date.now() < changeCheckUnavailableUntil || typeof (client as any)?.rpc !== 'function') return tables;
-  const cursors: Record<string, string | null> = {};
+  // Exact keyset cursors {s: synced_at, g: global_id}: a table counts as changed only for rows this register has
+  // not pulled yet. (1.13.3 sent cursor-minus-overlap strings, so the last pulled rows always looked new.)
+  const cursors: Record<string, { s: string; g: string } | null> = {};
   for (const t of tables) {
     const cur = syncedAtAvailable(t) && !embedUnsupported.has(t) ? getCursor(localId, t) : null;
-    cursors[t] = cur ? shiftIso(cur.synced_at, -CURSOR_OVERLAP_MS) : null;
+    cursors[t] = cur ? { s: cur.synced_at, g: cur.global_id } : null;
   }
   try {
     requestCounts.pull++;
@@ -1030,7 +1037,9 @@ async function runSyncCycleInner(now: number) {
   // the change check finds nothing (an expiry it makes is then a change the check reports).
   const sweepDone = due.some(t => ORDER_PULL_TABLES.includes(t));
   if (sweepDone) await callRpc(session.localId, 'orders_sweep', {}, { timeoutMs: 10000 });
-  const changed = await tablesWithCloudChanges(session.client, session.localId, due);
+  const safetyPull = now - lastFullPullAt >= SAFETY_FULL_PULL_MS;
+  if (safetyPull) lastFullPullAt = now;
+  const changed = safetyPull ? due : await tablesWithCloudChanges(session.client, session.localId, due);
   if (changed.length === 0) {
     idleChecks++;
     if (!syncPaused) lastPullAt = Date.now(); // the cloud confirmed nothing new: this register is up to date
