@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Search, ShoppingCart, User, Banknote, Menu, Pencil, Plus,
+  Search, User, Banknote, Menu, Pencil, Plus,
   BarChart3, LayoutDashboard, Shield, Sun, Moon, Wallet, Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -14,6 +14,8 @@ import { formatMoney, partyDisplayName } from '../lib/format';
 import type { PriceLevel } from '../lib/pricing';
 import { usePermissions, refreshPermissions } from '../lib/usePermissions';
 import { BalancePaymentModal } from '../pages/cashflow/BalancePaymentModal';
+// Same artwork as the window / taskbar icon (assets/posicon.ico).
+import posIcon from '../assets/posicon.png';
 
 export default function PosHeader() {
   const pos = usePosContext();
@@ -68,9 +70,7 @@ export default function PosHeader() {
   return (
     <header className="border-b border-border px-4 py-2.5 flex justify-between items-center bg-surface gap-3">
       <div className="flex items-center gap-3 shrink-0">
-        <div className="bg-primary text-on-primary p-2 rounded-lg">
-          <ShoppingCart size={18} />
-        </div>
+        <img src={posIcon} alt="OmniPOS" className="h-[34px] w-[34px] rounded-lg object-contain" draggable={false} />
         <h1 className="text-base font-bold text-text hidden sm:block">OmniPOS</h1>
       </div>
 

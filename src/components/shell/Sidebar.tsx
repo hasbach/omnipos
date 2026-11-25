@@ -23,6 +23,8 @@ import { usePermissions } from '../../lib/usePermissions';
 import { Badge } from '../ui';
 import { useOrderBadge } from '../../hooks/useOrderNotifications';
 import { pagePermissions } from '../../lib/permissions';
+// Same artwork as the window / taskbar icon (assets/posicon.ico).
+import posIcon from '../../assets/posicon.png';
 
 export interface NavItem {
   key: string;
@@ -126,9 +128,7 @@ export function Sidebar() {
       ].join(' ')}
     >
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary font-bold text-on-primary">
-          Ω
-        </div>
+        <img src={posIcon} alt="OmniPOS" className="h-8 w-8 shrink-0 rounded-md object-contain" draggable={false} />
         {!collapsed && <span className="truncate text-sm font-semibold tracking-tight text-text">{t('shell_version', 'OmniPOS')}</span>}
       </div>
 
