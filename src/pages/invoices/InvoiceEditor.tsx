@@ -124,6 +124,8 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const [archived, setArchived] = useState(false);
 
   const [partyId, setPartyId] = useState<number | ''>('');
+  const [lockedPos, setLockedPos] = useState<any[]>([]);
+  const [linkedPoId, setLinkedPoId] = useState<string>('');
   const [priceLevel, setPriceLevel] = useState<PriceLevel>('retail');
   const [dateTime, setDateTime] = useState(nowLocalDateTime());
   // What the loaded invoice's date looked like — only send created_at when the user changed it,
@@ -190,6 +192,33 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   useEffect(() => { setNewPayCurrency(entryCurrency); }, [entryCurrency]);
 
   const party = stakeholders.find((s) => s.id === partyId) || null;
+
+  // OmniPulse OR: load open APPROVED_LOCKED POs when creating a new purchase invoice so staff can
+  // settle a supplier's cash-lock atomically (updating stock + releasing unused cash, no double count).
+  useEffect(() => {
+    if (!open || !isPurchase || editingId) {
+      setLockedPos([]);
+      setLinkedPoId('');
+      return;
+    }
+    api.get<any[]>('/api/or/po-commitments', { status: 'APPROVED_LOCKED' })
+      .then((rows) => setLockedPos(Array.isArray(rows) ? rows : []))
+      .catch(() => setLockedPos([]));
+  }, [open, isPurchase, editingId]);
+
+  const supplierLockedPos = useMemo(
+    () => (isPurchase && partyId ? lockedPos.filter((po) => Number(po.supplier_id) === Number(partyId)) : []),
+    [isPurchase, partyId, lockedPos],
+  );
+
+  useEffect(() => {
+    if (!isPurchase || editingId) return;
+    if (supplierLockedPos.length > 0) {
+      setLinkedPoId((prev) => (supplierLockedPos.some((p) => String(p.id) === prev) ? prev : String(supplierLockedPos[0].id)));
+    } else {
+      setLinkedPoId('');
+    }
+  }, [isPurchase, editingId, supplierLockedPos]);
 
   useEffect(() => {
     if (!open) return;
@@ -517,6 +546,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           price_level: priceLevelsEnabled ? priceLevel : 'retail',
           notes,
           reference,
+          ...(isPurchase && linkedPoId ? { or_po_commitment_id: Number(linkedPoId) } : {}),
         };
         const res = await postJson('/api/transactions', body);
         toast.success(t('inv_editor_created_toast', 'Invoice #{id} created.').replace('{id}', String(res.id)));
@@ -598,6 +628,25 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
                       { value: 'retail', label: t('inv_editor_price_level_retail', 'Retail') },
                       { value: 'wholesale', label: t('inv_editor_price_level_wholesale', 'Wholesale') },
                       { value: 'super_wholesale', label: t('inv_editor_price_level_super_wholesale', 'Super wholesale') },
+                    ]}
+                  />
+                </Field>
+              )}
+
+              {isPurchase && !editingId && supplierLockedPos.length > 0 && (
+                <Field
+                  label={t('or_link_locked_po', 'Settle Locked PO (OmniPulse OR)')}
+                  helper={t('or_link_locked_po_hint', 'Saving this purchase updates stock and releases any unused cash lock automatically.')}
+                >
+                  <Select
+                    value={linkedPoId}
+                    onChange={(e) => setLinkedPoId(e.target.value)}
+                    options={[
+                      { value: '', label: t('or_link_locked_po_none', 'None — keep PO lock open') },
+                      ...supplierLockedPos.map((po) => ({
+                        value: String(po.id),
+                        label: `${po.po_number || `#${po.id}`} · Locked ${formatMoney(po.locked_cash_amount || 0, USD)} (due ${po.expected_delivery_date})`,
+                      })),
                     ]}
                   />
                 </Field>

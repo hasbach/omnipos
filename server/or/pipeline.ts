@@ -8,7 +8,7 @@ import { db } from "../db.js";
 import { dailyObligationRate, ensureOrInitialized, type SurvivalMode } from "./config.js";
 import { localDateIso, round2 } from "./coreBridge.js";
 import { computeSpendableCash, recordBucketLedger } from "./spendableCash.js";
-import { generateCycleCountSession } from "./cycleCount.js";
+import { generateCycleCountSession, recordStockAnomaly } from "./cycleCount.js";
 import { isOrLicenseValid } from "./license.js";
 
 export interface PipelineSummary {
@@ -277,16 +277,31 @@ export function runNightlyOrPipeline(
       )
       .all(tenantId) as any[];
     for (const sku of lowStockA) {
-      insAction.run(
-        tenantId,
-        runDate,
-        "HIGH",
-        "LOW_STOCK_A",
-        `Class A stockout risk: ${sku.name}`,
-        `Only ${Number(sku.stock || 0)} units left (~${Number(sku.days_of_supply).toFixed(1)} days of supply).`,
-        "PRODUCT",
-        sku.product_id
-      );
+      const stk = Number(sku.stock || 0);
+      if (stk < 0) {
+        recordStockAnomaly(tenantId, sku.product_id, "NEGATIVE_STOCK_SALE", null);
+        insAction.run(
+          tenantId,
+          runDate,
+          "HIGH",
+          "NEGATIVE_STOCK_A",
+          `Class A negative stock: ${sku.name}`,
+          `System shows ${stk} units — physical count & stock adjustment required (queued for 5-Min Cycle Count).`,
+          "PRODUCT",
+          sku.product_id
+        );
+      } else {
+        insAction.run(
+          tenantId,
+          runDate,
+          "HIGH",
+          "LOW_STOCK_A",
+          `Class A stockout risk: ${sku.name}`,
+          `Only ${stk} units left (~${Math.max(0, Number(sku.days_of_supply)).toFixed(1)} days of supply).`,
+          "PRODUCT",
+          sku.product_id
+        );
+      }
       actionsCreated++;
     }
   })();

@@ -406,3 +406,116 @@ export function cancelPoCommitment(tenantId: number, id: number, userId?: number
   logAction(tenantId, resolveTenantUserId(tenantId, userId), "OR PO Cancelled", `${po.po_number || `#${id}`} (released $${locked.toFixed(2)})`);
   return getPoCommitmentById(tenantId, id);
 }
+
+/**
+ * Settles an open `or_po_commitments` cash lock from a Core `POST /api/transactions` (`type = 'purchase'`)
+ * inside the caller's ACID transaction — so stock + payments + supplier balance are updated by Core
+ * AND the cash lock is released atomically without double-counting Free Spendable Cash.
+ */
+export function settlePoFromCorePurchase(params: {
+  tenantId: number;
+  poCommitmentId: number;
+  coreTransactionId: number;
+  supplierId: number;
+  totalUsd: number;
+  cashPaidUsd: number;
+  userId?: number | null;
+}): { releasedCash: number; poNumber: string | null } {
+  const { tenantId, poCommitmentId, coreTransactionId, supplierId } = params;
+  const po = db
+    .prepare("SELECT * FROM or_po_commitments WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL")
+    .get(poCommitmentId, tenantId) as any;
+  if (!po) {
+    throw new ValidationError("Linked PO commitment not found.", 404, {
+      code: "OR_PO_NOT_FOUND",
+      field: "or_po_commitment_id",
+    });
+  }
+  if (Number(po.supplier_id) !== Number(supplierId)) {
+    throw new ValidationError("Linked PO commitment belongs to a different supplier.", 400, {
+      code: "OR_PO_SUPPLIER_MISMATCH",
+      field: "or_po_commitment_id",
+    });
+  }
+  if (!["APPROVED_LOCKED", "PARTIALLY_RECEIVED", "DRAFT"].includes(po.status)) {
+    throw new ValidationError(`Linked PO commitment is already ${po.status}.`, 400, {
+      code: "OR_PO_STATUS_INVALID",
+      field: "or_po_commitment_id",
+    });
+  }
+
+  const totalUsd = round2(Math.max(0, Number(params.totalUsd) || 0));
+  const cashPaid = round2(Math.max(0, Number(params.cashPaidUsd) || 0));
+  const creditAdded = round2(Math.max(0, totalUsd - cashPaid));
+  const prevLocked = round2(Number(po.locked_cash_amount) || 0);
+  const releasedCash = round2(Math.max(0, prevLocked - cashPaid));
+
+  if (cashPaid > 0) {
+    recordBucketLedger({
+      tenantId,
+      bucketCode: "CORE_RESTOCK",
+      txType: "PO_PAYMENT",
+      amount: -cashPaid,
+      bucketDelta: -Math.min(prevLocked, cashPaid),
+      referenceType: "PO_COMMITMENT",
+      referenceId: po.id,
+      note: `Settled via Purchase Invoice #${coreTransactionId} (${po.po_number || `PO #${po.id}`})`,
+    });
+  }
+  if (releasedCash > 0) {
+    recordBucketLedger({
+      tenantId,
+      bucketCode: "CORE_RESTOCK",
+      txType: "PO_RELEASE",
+      amount: releasedCash,
+      bucketDelta: -releasedCash,
+      referenceType: "PO_COMMITMENT",
+      referenceId: po.id,
+      note: `Released unused lock via Purchase Invoice #${coreTransactionId}`,
+    });
+  }
+
+  const totalReceived = round2((Number(po.actual_received_total) || 0) + totalUsd);
+  const totalCashPaid = round2((Number(po.actual_cash_paid) || 0) + cashPaid);
+  const totalCredit = round2((Number(po.actual_credit_added) || 0) + creditAdded);
+  const totalReleased = round2((Number(po.released_cash_amount) || 0) + releasedCash);
+
+  db.prepare(
+    `UPDATE or_po_commitments
+        SET core_transaction_id = COALESCE(?, core_transaction_id),
+            actual_received_total = ?,
+            actual_cash_paid = ?,
+            actual_credit_added = ?,
+            released_cash_amount = ?,
+            locked_cash_amount = 0,
+            status = 'SETTLED',
+            settled_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND tenant_id = ?`
+  ).run(coreTransactionId, totalReceived, totalCashPaid, totalCredit, totalReleased, po.id, tenantId);
+
+  if (Number(po.estimated_order_total) > 0) {
+    const fillRatio = Math.min(1, Math.max(0, totalReceived / Number(po.estimated_order_total)));
+    const prof = db
+      .prepare("SELECT * FROM or_supplier_profiles WHERE tenant_id = ? AND supplier_id = ? AND deleted_at IS NULL")
+      .get(tenantId, supplierId) as any;
+    if (prof) {
+      const count = Number(prof.deliveries_count || 0);
+      const newScore = round2(count === 0 ? fillRatio : (Number(prof.fill_rate_score) * count + fillRatio) / (count + 1));
+      db.prepare("UPDATE or_supplier_profiles SET fill_rate_score = ?, deliveries_count = ? WHERE id = ?")
+        .run(newScore, count + 1, prof.id);
+    } else {
+      db.prepare(
+        `INSERT INTO or_supplier_profiles (tenant_id, supplier_id, fill_rate_score, deliveries_count, default_payment_plan)
+         VALUES (?, ?, ?, 1, ?)`
+      ).run(tenantId, supplierId, round2(fillRatio), po.payment_plan);
+    }
+  }
+
+  logAction(
+    tenantId,
+    resolveTenantUserId(tenantId, params.userId),
+    "OR PO Settled via Purchase Invoice",
+    `${po.po_number || `#${po.id}`} linked to Invoice #${coreTransactionId} (released $${releasedCash.toFixed(2)})`
+  );
+  return { releasedCash, poNumber: po.po_number || null };
+}

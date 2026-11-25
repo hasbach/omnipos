@@ -356,3 +356,58 @@ test("Owner Draw unifies existing cash_flow owner_withdrawal rows and Owner Cust
   assert.ok(dr.body.draws.some((d: any) => d.source === "cash_flow" && d.cash_amount === 20));
   assert.ok(dr.body.draws.some((d: any) => d.source === "owner_customer_sale" && d.goods_cost_total === 18));
 });
+
+test("Core Purchase Invoice linked to an amount-only Locked PO updates stock and releases unused cash without double-counting", async () => {
+  const s = setupTenant(true);
+  await app.api("PUT", "/api/or/config", { ...s.as, body: { min_drawer_float: 0 } });
+  await app.api("POST", "/api/cash-flow", {
+    ...s.as,
+    body: { type: "in", amount: 500, currency: "USD", exchange_rate: 1, category: "top_up", reason: "Drawer cash" },
+  });
+  const supId = Number(
+    app.db.prepare("INSERT INTO stakeholders (tenant_id, name, type) VALUES (?, 'Wholesale Co', 'supplier')").run(s.tenantId).lastInsertRowid
+  );
+  const prodId = Number(
+    app.db.prepare("INSERT INTO products (tenant_id, barcode, name, price, cost, stock, track_inventory) VALUES (?, 'LK-1', 'Sugar 1kg', 3, 2, 10, 1)").run(s.tenantId).lastInsertRowid
+  );
+
+  // 1. Create amount-only PO ($200) and Approve & Lock -> Free Spendable Cash drops 500 -> 300
+  const po = await app.api("POST", "/api/or/po-commitments", {
+    ...s.as,
+    body: { supplier_id: supId, expected_delivery_date: "2026-11-26", payment_plan: "CASH_ON_DELIVERY", estimated_order_total: 200 },
+  });
+  assert.equal(po.status, 200);
+  await app.api("POST", `/api/or/po-commitments/${po.body.id}/approve`, s.as);
+  const spLocked = await app.api("GET", "/api/or/spendable-cash", s.as);
+  assert.equal(spLocked.body.free_spendable_cash_usd, 300);
+
+  // 2. Staff enters itemized Purchase Invoice in Purchases for 60 units @ $2 = $120 cash, linked to the locked PO
+  const tx = await app.api("POST", "/api/transactions", {
+    ...s.as,
+    body: {
+      type: "purchase",
+      stakeholder_id: supId,
+      user_id: s.admin,
+      currency: "USD",
+      exchange_rate: 1,
+      items: [{ id: prodId, quantity: 60, price: 2, unit_price: 2 }],
+      payments: [{ amount: 120, method: "cash", currency: "USD", exchange_rate: 1 }],
+      or_po_commitment_id: po.body.id,
+    },
+  });
+  assert.equal(tx.status, 200, JSON.stringify(tx.body));
+
+  // Verify stock updated (10 -> 70), PO is SETTLED with $80 released, and Free Spendable Cash = 500 - 120 = 380 (NO double count!)
+  const prod = app.db.prepare("SELECT stock FROM products WHERE id = ?").get(prodId) as any;
+  assert.equal(prod.stock, 70);
+
+  const poAfter = await app.api("GET", `/api/or/po-commitments/${po.body.id}`, s.as);
+  assert.equal(poAfter.body.status, "SETTLED");
+  assert.equal(poAfter.body.locked_cash_amount, 0);
+  assert.equal(poAfter.body.released_cash_amount, 80);
+  assert.equal(poAfter.body.core_transaction_id, tx.body.id);
+
+  const spAfter = await app.api("GET", "/api/or/spendable-cash", s.as);
+  assert.equal(spAfter.body.active_po_locks_usd, 0);
+  assert.equal(spAfter.body.free_spendable_cash_usd, 380);
+});

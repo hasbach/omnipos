@@ -1088,6 +1088,11 @@ export default function OmniPulseOR() {
       <Modal open={!!receiveModalPo} onClose={() => setReceiveModalPo(null)} title={`Receive ${receiveModalPo?.po_number || ''}`}>
         {receiveModalPo && (
           <div className="space-y-4">
+            {Number(receiveModalPo.item_count || 0) === 0 && (
+              <div className="p-3 rounded-lg border border-warning/40 bg-warning-soft text-xs text-text">
+                <strong>Amount-only cash lock (no line items):</strong> To add stock items and release this lock together without double-counting cash, create the itemized invoice in <strong>Purchases → New Purchase</strong> and select this locked PO. Use this form only to settle cash-only without stock lines.
+              </div>
+            )}
             <p className="text-xs text-text-3">
               Locked Cash: <strong>{formatMoney(receiveModalPo.locked_cash_amount, USD)}</strong>. Any unused lock will be released immediately back to Free Spendable Cash.
             </p>

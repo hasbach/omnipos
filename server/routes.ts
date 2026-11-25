@@ -36,6 +36,7 @@ import { setupCommerceRoutes } from "./commerce.js";
 import { setupOrRoutes } from "./or/routes.js";
 import { isOrLicenseValid } from "./or/license.js";
 import { recordStockAnomaly } from "./or/cycleCount.js";
+import { settlePoFromCorePurchase } from "./or/poCommitments.js";
 import { runNightlyOrPipeline } from "./or/pipeline.js";
 import { localDateIso } from "./or/coreBridge.js";
 import { normalizeLevel, saleLineUnitPrice, saleLineUnitPriceLbp, lineTotal, computeTotals, uomUnitPrice, uomUnitPriceLbp, type PriceLevel } from "./pricing.js";
@@ -1959,6 +1960,25 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         validatedTotal = finalTotal;
         throw dryRunRollback;
       }
+
+      // Optional OmniPulse OR hook: if a purchase invoice links an open PO Cash-Lock, settle & release it atomically.
+      if (type === 'purchase' && req.body.or_po_commitment_id && resolvedStakeholderId && isOrLicenseValid(tenantId)) {
+        const cashPaidUsd = (payments || []).reduce((sum: number, p: any) => {
+          if (p.method !== 'cash') return sum;
+          const r = isLocalCode(localCur, p.currency) ? localCur!.rate : (p.exchange_rate || 1);
+          return sum + (Number(p.amount) || 0) / (r || 1);
+        }, 0);
+        settlePoFromCorePurchase({
+          tenantId,
+          poCommitmentId: Number(req.body.or_po_commitment_id),
+          coreTransactionId: Number(transactionId),
+          supplierId: Number(resolvedStakeholderId),
+          totalUsd: finalTotal,
+          cashPaidUsd,
+          userId: resolvedUserId ?? null,
+        });
+      }
+
       return transactionId;
     });
 
