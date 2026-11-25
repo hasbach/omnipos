@@ -172,7 +172,7 @@ export default function Settlement() {
         canView ? api.get<YearlyReport[]>('/api/reports/yearly') : Promise.resolve([] as YearlyReport[]),
         showEndOfDay ? api.get<Summary>('/api/cash-flow/summary') : Promise.resolve(null),
         canClose ? api.get<Summary>('/api/cash-flow/summary?scope=day') : Promise.resolve(null),
-        api.get<AppUser[]>('/api/users'),
+        api.get<AppUser[]>('/api/users', { include_inactive: '1' }),
         showShifts ? api.get<CashierShift[]>('/api/tenant/cashier-shifts') : Promise.resolve([] as CashierShift[]),
         api.get<Currency[]>('/api/currencies'),
       ]);

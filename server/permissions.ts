@@ -315,6 +315,7 @@ export const ROUTE_RULES: RouteRule[] = [
 
   // --- users, settings, currencies, printers, logs ---
   { method: 'POST', pattern: '/api/users', need: 'users.manage' },
+  { method: 'PUT', pattern: '/api/users/:id/active', need: 'users.manage' },
   { method: 'PUT', pattern: '/api/users/:id', need: 'users.manage' },
   { method: 'DELETE', pattern: '/api/users/:id', need: 'users.manage' },
   {

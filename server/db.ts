@@ -399,6 +399,8 @@ try { db.exec("ALTER TABLE transactions ADD COLUMN terminal_sequence INTEGER;");
 try { db.exec("ALTER TABLE archived_transactions ADD COLUMN terminal_id TEXT;"); } catch {}
 try { db.exec("ALTER TABLE archived_transactions ADD COLUMN terminal_sequence INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE users ADD COLUMN pin TEXT DEFAULT '0000';"); } catch {}
+// Disabled users keep their history (invoices, shifts, logs) but can't sign in and leave the pickers.
+try { db.exec("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1;"); } catch {}
 try { db.exec("ALTER TABLE products ADD COLUMN track_inventory INTEGER DEFAULT 1;"); } catch {}
 // 1 = active, 0 = disabled (can't be sold; hidden from the POS; purchases/history keep working).
 try { db.exec("ALTER TABLE products ADD COLUMN active INTEGER DEFAULT 1;"); } catch {}

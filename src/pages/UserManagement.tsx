@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Edit2, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Plus, Edit2, Trash2, Eye, EyeOff, UserX, UserCheck } from 'lucide-react';
 import {
   PageHeader,
   DataTable,
@@ -22,7 +22,10 @@ interface UserRow {
   name: string;
   role: string;
   pin: string;
+  active?: number;
 }
+
+const isActive = (u: { active?: number }) => Number(u.active ?? 1) !== 0;
 
 const ROLE_VARIANT: Record<string, 'primary' | 'info' | 'neutral' | 'warning'> = {
   admin: 'primary',
@@ -44,7 +47,7 @@ export default function UserManagement() {
   const fetchUsers = () => {
     setLoading(true);
     return api
-      .get<UserRow[]>('/api/users')
+      .get<UserRow[]>('/api/users', { include_inactive: '1' })
       .then(setUsers)
       .catch((err) => toast.error(err.message))
       .finally(() => setLoading(false));
@@ -93,10 +96,36 @@ export default function UserManagement() {
     }
   };
 
+  const handleToggleActive = async (u: UserRow) => {
+    const enable = !isActive(u);
+    if (!enable) {
+      const ok = await confirm({
+        title: t('usr_disable_confirm_title', 'Disable this user?'),
+        description: t('usr_disable_confirm_desc', '{name} will no longer be able to sign in or be picked as a cashier. Their invoices, shifts and logs stay. You can enable them again at any time.').replace('{name}', u.name),
+        confirmLabel: t('usr_disable', 'Disable'),
+      });
+      if (!ok) return;
+    }
+    try {
+      await api.put(`/api/users/${u.id}/active`, { active: enable });
+      toast.success(enable ? t('usr_toast_enabled', 'User enabled.') : t('usr_toast_disabled', 'User disabled.'));
+      fetchUsers();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
   const roleLabel = (role: string) => t(`usr_role_${role}`, role);
 
   const columns: DataTableColumn<UserRow>[] = [
-    { key: 'name', header: t('usr_col_name'), sortable: true, render: (u) => <span className="font-medium text-text">{u.name}</span> },
+    {
+      key: 'name',
+      header: t('usr_col_name'),
+      sortable: true,
+      render: (u) => (
+        <span className={['font-medium', isActive(u) ? 'text-text' : 'text-text-3 line-through'].join(' ')}>{u.name}</span>
+      ),
+    },
     {
       key: 'role',
       header: t('usr_col_role'),
@@ -104,14 +133,30 @@ export default function UserManagement() {
       render: (u) => <Badge variant={ROLE_VARIANT[u.role] || 'neutral'}>{roleLabel(u.role)}</Badge>,
     },
     {
+      key: 'active',
+      header: t('usr_col_status', 'Status'),
+      sortable: true,
+      render: (u) => isActive(u)
+        ? <Badge variant="success">{t('usr_status_active', 'Active')}</Badge>
+        : <Badge variant="neutral">{t('usr_status_disabled', 'Disabled')}</Badge>,
+    },
+    {
       key: 'actions',
       header: '',
       align: 'end',
-      width: 88,
+      width: 124,
       render: (u) => (
         <div className="flex justify-end gap-1">
           <IconButton aria-label={t('stk_edit')} size="sm" onClick={() => { setEditing(u); setShowPin(false); }}>
             <Edit2 size={15} />
+          </IconButton>
+          <IconButton
+            aria-label={isActive(u) ? t('usr_disable', 'Disable') : t('usr_enable', 'Enable')}
+            title={isActive(u) ? t('usr_disable', 'Disable') : t('usr_enable', 'Enable')}
+            size="sm"
+            onClick={() => handleToggleActive(u)}
+          >
+            {isActive(u) ? <UserX size={15} /> : <UserCheck size={15} />}
           </IconButton>
           <IconButton aria-label={t('usr_delete')} size="sm" onClick={() => handleDelete(u)}>
             <Trash2 size={15} />

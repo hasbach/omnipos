@@ -64,7 +64,7 @@ export default function PurchaseManagement() {
     api.get<Product[]>('/api/products').then(setProducts).catch(() => {});
     api.get<Stakeholder[]>('/api/stakeholders').then((all) => setSuppliers(all.filter((s) => s.type === 'supplier'))).catch(() => {});
     api.get<CurrencyRow[]>('/api/currencies').then((rows) => { if (rows?.length) setCurrencies(rows); }).catch(() => {});
-    api.get<any[]>('/api/users').then((users) => {
+    api.get<any[]>('/api/users', { include_inactive: '1' }).then((users) => {
       const raw = sessionStorage.getItem('currentCashierId');
       const id = raw ? parseInt(raw, 10) : NaN;
       const me = users.find((u) => u.id === id);

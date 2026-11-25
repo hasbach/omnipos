@@ -617,6 +617,10 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       return res.status(404).json({ error: "User not found" });
     }
 
+    if (Number(user.active ?? 1) === 0) {
+      return res.status(403).json({ error: "This user is disabled. An admin can enable it again in Users.", code: "USER_DISABLED" });
+    }
+
     // Default pin is '0000'. Optional support backdoor — only active if explicitly configured;
     // no hardcoded fallback, so a fresh install has no bypass PIN at all.
     const superAdminPin = process.env.SUPER_ADMIN_PIN;
@@ -1274,8 +1278,10 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   });
 
   // --- USER MANAGEMENT ---
+  // Disabled users (active = 0) are left out unless ?include_inactive=1 (User Management, history filters).
   app.get("/api/users", authenticate, (req: any, res) => {
-    const users = db.prepare("SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL").all(req.session.tenantId);
+    const all = req.query.include_inactive === '1' || req.query.include_inactive === 'true';
+    const users = db.prepare(`SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL${all ? '' : ' AND IFNULL(active, 1) = 1'} ORDER BY IFNULL(active, 1) DESC, id`).all(req.session.tenantId);
     res.json(users);
   });
 
@@ -1291,13 +1297,34 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     res.json({ success: true });
   });
 
+  // Disable / enable a user instead of deleting it: history keeps the name, sign-in and pickers drop it.
+  app.put("/api/users/:id/active", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const active = req.body?.active === true || req.body?.active === 1 || req.body?.active === '1';
+    const u = db.prepare("SELECT id, name, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(req.params.id, tenantId) as any;
+    if (!u) return res.status(404).json({ error: "User not found" });
+    if (!active) {
+      if (req.session.userId && Number(req.session.userId) === Number(u.id)) {
+        return res.status(400).json({ error: "You can't disable the user you are signed in as.", code: "USER_DISABLE_SELF" });
+      }
+      if (u.role === 'admin') {
+        const others = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE tenant_id = ? AND role = 'admin' AND deleted_at IS NULL AND IFNULL(active, 1) = 1 AND id <> ?").get(tenantId, u.id) as any).c;
+        if (others === 0) return res.status(400).json({ error: "You can't disable the last active admin user.", code: "USER_LAST_ADMIN" });
+      }
+    }
+    db.prepare("UPDATE users SET active = ? WHERE id = ? AND tenant_id = ?").run(active ? 1 : 0, u.id, tenantId);
+    logAction(tenantId, req.session.userId ?? null, active ? 'User Enabled' : 'User Disabled', u.name);
+    broadcast({ type: 'USERS_UPDATED' }, tenantId);
+    res.json({ success: true, active });
+  });
+
   app.delete("/api/users/:id", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const u = db.prepare("SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL").get(req.params.id, tenantId) as any;
     if (!u) return res.json({ success: true });
     if (u.role === 'admin') {
-      const others = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE tenant_id = ? AND role = 'admin' AND deleted_at IS NULL AND id <> ?").get(tenantId, u.id) as any).c;
-      if (others === 0) return res.status(400).json({ error: "You can't delete the last admin user." });
+      const others = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE tenant_id = ? AND role = 'admin' AND deleted_at IS NULL AND IFNULL(active, 1) = 1 AND id <> ?").get(tenantId, u.id) as any).c;
+      if (others === 0) return res.status(400).json({ error: "You can't delete the last active admin user." });
     }
     // Soft delete: old invoices and reports keep showing this user's name.
     db.prepare("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?").run(u.id, tenantId);
@@ -2152,10 +2179,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   });
 
 
-  app.get("/api/users", authenticate, (req: any, res) => {
-    const users = db.prepare("SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL").all(req.session.tenantId);
-    res.json(users);
-  });
+
 
   app.get("/api/reports/daily-sales", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
