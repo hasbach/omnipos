@@ -1,6 +1,7 @@
 import { EscPos, paperWidthToColumns, type ArabicTextMode } from "./escpos.js";
 import { encodeArabicLine, type ArabicEncoding } from "./arabic.js";
 import { receiptLabels, paymentMethodLabel, type ReceiptLanguage } from "./receiptLabels.js";
+import { groupBundleLines } from "../pricing.js";
 
 interface ReceiptItem {
   name?: string;
@@ -14,6 +15,13 @@ interface ReceiptItem {
   uom_factor?: number | null;
   uom_qty?: number | null;
   discount?: { type: 'percentage' | 'fixed'; value: number };
+  // Bundle snapshot: the component rows of one sold bundle share bundle_line and print as ONE line.
+  discount_type?: string | null;
+  discount_value?: number | null;
+  bundle_id?: number | null;
+  bundle_name?: string | null;
+  bundle_qty?: number | null;
+  bundle_line?: number | null;
 }
 
 interface ReceiptPayment {
@@ -126,7 +134,33 @@ export function buildReceiptBuffer(opts: {
     return `$${Number(v.toFixed(2))}`;
   };
 
-  for (const item of tx.items || []) {
+  const fmtQty = (n: number) => String(Math.round(n * 1000) / 1000);
+  for (const entry of groupBundleLines((tx.items || []).map((it) => ({
+    ...it,
+    unit_price: it.price ?? it.unit_price ?? 0,
+    discount_type: it.discount_type ?? it.discount?.type ?? null,
+    discount_value: it.discount_value ?? it.discount?.value ?? null,
+  })))) {
+    if (entry.kind === 'bundle') {
+      // "Breakfast deal  x2  26.00", then each component indented ("  2 x Coffee"). The bundle's
+      // price before its line discount; a line discount prints once, below it.
+      const gross = entry.unit_price * entry.bundle_qty;
+      p.itemLine(entry.bundle_name || 'Bundle', entry.bundle_qty, gross.toFixed(2));
+      for (const c of entry.components) {
+        const cName = c.row.name || c.row.product_name || 'Item';
+        p.labeled(`  ${fmtQty(c.row.quantity)} x`, cName); // Arabic-safe (labeled rasterizes an Arabic name)
+      }
+      const first = entry.components[0]?.row;
+      const discAmount = gross - entry.line_total;
+      if (first?.discount_value && discAmount > 0.0049) {
+        const disc = first.discount_type === 'percentage'
+          ? `-${discountText({ type: 'percentage', value: Number(first.discount_value) })}`
+          : `-${discountText({ type: 'fixed', value: discAmount })}`;
+        p.text(`  ${labels.discount}: ${disc}`).feed(1);
+      }
+      continue;
+    }
+    const item = entry.row;
     let name = item.name || item.product_name || 'Item';
     // quantity/price are stored per base piece; a unit-of-measure line prints its own unit
     // ("Water 0.5L - Carton x24", qty in cartons). The line total is the same either way.

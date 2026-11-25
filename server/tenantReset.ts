@@ -85,6 +85,7 @@ function hasSyncedData(tenantId: number, scopes: ResetScope[]): boolean {
   if (scopes.includes("products")) {
     add("SELECT 1 FROM products WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
     add("SELECT 1 FROM product_units WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
+    add("SELECT 1 FROM product_bundle_items WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
     add("SELECT 1 FROM store_listings WHERE tenant_id = ? AND last_synced_at IS NOT NULL", tenantId);
     add("SELECT 1 FROM product_barcodes WHERE last_synced_at IS NOT NULL AND product_id IN (SELECT id FROM products WHERE tenant_id = ?)", tenantId);
   }
@@ -155,6 +156,8 @@ async function purgeCloudScopes(
     if (le && !isMissingTable(le)) throw le;
     const { error: ue } = await client.from("product_units").delete().eq("tenant_id", tg);
     if (ue && !isMissingTable(ue)) throw ue;
+    const { error: be } = await client.from("product_bundle_items").delete().eq("tenant_id", tg);
+    if (be && !isMissingTable(be)) throw be;
     for (const ids of chunk(productIds, 100)) {
       const { error } = await client.from("product_barcodes").delete().in("product_id", ids);
       if (error) throw error;
@@ -217,6 +220,7 @@ function localDelete(t: number, scopes: ResetScope[], walkInId: number | null) {
     }
     db.prepare("DELETE FROM product_barcodes WHERE product_id IN (SELECT id FROM products WHERE tenant_id = ?)").run(t);
     db.prepare("DELETE FROM product_units WHERE tenant_id = ?").run(t);
+    db.prepare("DELETE FROM product_bundle_items WHERE tenant_id = ?").run(t);
     db.prepare("DELETE FROM products WHERE tenant_id = ?").run(t);
   }
 

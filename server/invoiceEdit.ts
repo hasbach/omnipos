@@ -7,6 +7,7 @@ import { getActiveSession } from "./session.js";
 import { addTombstones, markTombstonesPurged } from "./sync.js";
 import { normalizeLevel, saleLineUnitPrice, lineTotal, computeTotals, uomUnitPrice, type PriceLevel } from "./pricing.js";
 import { loadUnit, loadUnitsForProduct } from "./uom.js";
+import { loadBundleItems, expandBundleSale, bundleUnitCost } from "./bundles.js";
 import { updatePurchaseProductCost } from "./purchaseCost.js";
 import { applyPurchaseCost, reversePurchaseCost } from "./costing.js";
 import { ValidationError } from "./errors.js";
@@ -142,7 +143,17 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   }
   // Resolve each line's unit of measure from the DB (never trust a client factor). Quantities are
   // converted to base pieces from here on; stored unit_price / unit_cost are per piece.
+  // Bundles (a line whose product is a bundle) are expanded into their component rows below, exactly
+  // like checkout; they can't carry a unit of measure and can't be on a purchase.
+  const bundleFlag = db.prepare("SELECT IFNULL(is_bundle, 0) AS b FROM products WHERE id = ? AND tenant_id = ?");
+  const isBundleLine = items.map((item) => !!(bundleFlag.get(item.product_id, tenantId) as any)?.b);
+  items.forEach((item, idx) => {
+    if (!isBundleLine[idx]) return;
+    if (tx.type !== 'sale') throw new ValidationError("A bundle can't be purchased - purchase its products instead.", 400, { code: 'BUNDLE_NOT_PURCHASABLE', field: `items.${idx}.product_id` });
+    if (item.uom_id !== undefined && item.uom_id !== null) throw new ValidationError(`Unit ${item.uom_id} is not valid for product ${item.product_id}.`, 400, { code: 'UOM_INVALID', field: `items.${idx}.uom_id` });
+  });
   const lineUoms = items.map((item, idx) => {
+    if (isBundleLine[idx]) return null;
     if (item.uom_id === undefined || item.uom_id === null) return null;
     const uom = loadUnit(tenantId, item.product_id, item.uom_id);
     if (!uom) throw new ValidationError(`Unit ${item.uom_id} is not valid for product ${item.product_id}.`, 400, { code: 'UOM_INVALID', field: `items.${idx}.uom_id` });
@@ -181,6 +192,12 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     const refunded = refundedQuantityByProduct(tenantId, id);
     const newQtyByProduct: Record<number, number> = {};
     items.forEach((it, i) => {
+      if (isBundleLine[i]) {
+        for (const c of loadBundleItems(tenantId, it.product_id)) {
+          newQtyByProduct[c.component_id] = (newQtyByProduct[c.component_id] || 0) + it.quantity * c.quantity;
+        }
+        return;
+      }
       newQtyByProduct[it.product_id] = (newQtyByProduct[it.product_id] || 0) + it.quantity * (lineUoms[i]?.factor || 1);
     });
     for (const [productIdStr, refundedQty] of Object.entries(refunded)) {
@@ -300,7 +317,7 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   const getProduct = (pid: number) => {
     if (!(pid in productCache)) {
       productCache[pid] = db.prepare(
-        "SELECT id, price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock, active FROM products WHERE id = ? AND tenant_id = ?"
+        "SELECT id, name, price, price_wholesale, price_super_wholesale, package_price, units_per_package, track_inventory, cost, min_price, stock, active, IFNULL(is_bundle, 0) AS is_bundle FROM products WHERE id = ? AND tenant_id = ?"
       ).get(pid, tenantId) as any;
     }
     return productCache[pid];
@@ -309,7 +326,9 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
   // Recompute each new line's price/discount/total/cost-snapshot, using the pricing math shared
   // with POST /api/transactions.
   const lineTotals: number[] = [];
-  const processedItems = items.map((item, idx) => {
+  let bundleLineNo = 0;
+  const noBundle = { bundleId: null as number | null, bundleName: null as string | null, bundleQty: null as number | null, bundleLine: null as number | null };
+  const processedItems = items.flatMap((item, idx) => {
     const product = getProduct(item.product_id);
     if (!product) throw new ValidationError(`Product ${item.product_id} not found.`);
 
@@ -328,6 +347,34 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     const total = lineTotal(perUnit as number, item.quantity, { type: discountType, value: discountValue });
     lineTotals.push(total);
     const unitPrice = (perUnit as number) / factor; // stored per base piece
+
+    if (isBundleLine[idx]) {
+      // A disabled bundle can't be ADDED (one already on the invoice may stay).
+      if (product.active === 0 && !oldItems.some((oi) => oi.bundle_id === item.product_id)) {
+        throw new ValidationError(`Product ${item.product_id} is disabled.`, 400, { code: 'PRODUCT_DISABLED', field: `items.${idx}.product_id`, product_id: item.product_id });
+      }
+      // Component rows keep the cost they were sold at (same component); a new one snapshots the current cost.
+      const rows = expandBundleSale(tenantId, {
+        bundleId: item.product_id, bundleName: product.name, bundleQty: item.quantity, perBundle: perUnit as number,
+        discountType, discountValue, line: ++bundleLineNo, idx,
+        costFor: (cid) => (oldByProduct[cid] ? oldByProduct[cid].unit_cost : undefined),
+      });
+      const perBundleCost = bundleUnitCost(rows);
+      if (settings.allow_below_cost === '0' && perBundleCost > 0 && item.quantity > 0 && total / item.quantity < perBundleCost - 1e-9) {
+        throw new ValidationError(
+          `Price for product ${item.product_id} is below its cost of ${perBundleCost}.`,
+          400,
+          { code: 'BELOW_COST', field: `items.${idx}.unit_price`, cost: perBundleCost }
+        );
+      }
+      return rows.map((r) => ({
+        ...item, product_id: r.productId, unitPrice: r.unitPrice, discountType: r.discountType, discountValue: r.discountValue,
+        unitCost: r.unitCost, product: getProduct(r.productId), pieces: r.pieces,
+        uomId: null, uomName: null, uomFactor: null, uomQty: null,
+        bundleId: r.bundleId as number | null, bundleName: r.bundleName as string | null,
+        bundleQty: r.bundleQty as number | null, bundleLine: r.bundleLine as number | null,
+      }));
+    }
 
     // Lines keep their old unit_cost for the same product (and unit); a newly-added product snapshots
     // the current cost (sale) or its own price (purchase — the cost paid IS this line's unit cost).
@@ -353,10 +400,11 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
 
     const unitCost = tx.type === 'purchase' ? unitPrice : (oldLine ? oldLine.unit_cost : (product.cost ?? null));
 
-    return {
+    return [{
       ...item, unitPrice, discountType, discountValue, unitCost, product, pieces,
       uomId: uom ? uom.id : null, uomName: uom ? uom.name : null, uomFactor: uom ? uom.factor : null, uomQty: uom ? item.quantity : null,
-    };
+      ...noBundle,
+    }];
   });
 
   const finalTotal = computeTotals(lineTotals, body.discount, body.tax);
@@ -426,11 +474,11 @@ export async function editTransaction(tenantId: number, id: number, body: EditTr
     // Both tables use a plain INTEGER PRIMARY KEY (not AUTOINCREMENT for the archived twin, since
     // settlement inserts explicit ids carried over from the live table) — omitting the id column
     // lets SQLite assign the next rowid itself, exactly like AUTOINCREMENT would.
-    const insertItem = db.prepare(`INSERT INTO ${itemsTable} (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insertItem = db.prepare(`INSERT INTO ${itemsTable} (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, bundle_id, bundle_name, bundle_qty, bundle_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const newItemIds: number[] = [];
     for (const item of processedItems) {
       const rowId = archived ? reserveSharedId('transaction_items', 'archived_transaction_items') : null;
-      const info = insertItem.run(rowId, id, item.product_id, item.pieces, item.unitPrice, item.discountType, item.discountValue, null, null, item.unitCost, item.uomId, item.uomName, item.uomFactor, item.uomQty);
+      const info = insertItem.run(rowId, id, item.product_id, item.pieces, item.unitPrice, item.discountType, item.discountValue, null, null, item.unitCost, item.uomId, item.uomName, item.uomFactor, item.uomQty, item.bundleId, item.bundleName, item.bundleQty, item.bundleLine);
       newItemIds.push(Number(rowId ?? info.lastInsertRowid));
     }
     // Lines were just replaced with new ids: re-point refunds that reference the old sale lines
