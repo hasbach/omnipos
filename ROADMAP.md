@@ -94,6 +94,9 @@ Other items: _(add fixes and ideas here)_
       RPC used by 1.13.3 registers; older registers keep polling every table until updated).
 - [x] Cloud migration `supabase/migrations/2026-11-25c_sync_changed_tables_exact.sql` applied 2026-11-25 (exact keyset
       cursors; 1.13.3 overlap-string cursors are corrected server-side).
+- [x] Cloud migrations applied 2026-11-26: `2026-11-26_or_owner_stakeholder.sql` (or_tenant_config.owner_stakeholder_id),
+      `2026-11-26b_users_active.sql` (users.active), `2026-11-26_product_bundles.sql` (products.is_bundle,
+      product_bundle_items, transaction_items bundle_* columns, sync_changed_tables knows product_bundle_items).
 - [ ] OmniPulse OR future: Restaurant recipe/BOM deduction (`enable_recipe_deduction`) once a Recipes module exists, and
       optional Python Google OR-Tools cloud microservice (`OR_SOLVER_URL`) for VRP/shift scheduling via
       `server/or/solver/orToolsCloudAdapter.ts`.
@@ -105,6 +108,20 @@ Other items: _(add fixes and ideas here)_
 ---
 
 ## Shipped
+
+### 1.13.5 — Product bundles, disable users, OR on real data, logo (2026-11-26)
+- **Product bundles:** a product flagged as a bundle (own barcode, price, photo) made of existing products with
+  quantities; sold at the POS like any product and stored as one line per component (stock, unit cost, reports and
+  OmniPulse OR keep working), the bundle price split over components by list price; refunds, invoice edit, receipts
+  and statements group the bundle; synced via `product_bundle_items`. Design: `docs/superpowers/specs/2026-11-26-product-bundles-design.md`.
+- **Disable users** instead of deleting them: disabled users keep their history but can't sign in and leave the
+  POS pickers; Users shows a Status column and Disable/Enable (last active admin and yourself are protected).
+- **OmniPulse OR on Quick Market data:** runway uses the net daily burn (bills + owner draws - 30-day average gross
+  profit), so a shop whose profit covers its bills is no longer in permanent CRISIS; the optimizer orders whole
+  supplier packs (box unit, else the shop's usual purchase quantity); the PO cash-lock warning uses the app's dialog.
+- **Invoices paid later through Balance Payment show as paid** (oldest invoice first, like the statement) in the
+  Purchases and Invoices lists, purchase detail and the invoice report.
+- **Logo:** the POS header and dashboard sidebar use the posicon artwork (same as the window / taskbar icon).
 
 ### 1.13.4 — Change check uses exact cursors (2026-11-25)
 - 1.13.3 sent "cursor minus the 2-minute pull overlap" to `sync_changed_tables`, so the last pulled rows always looked
