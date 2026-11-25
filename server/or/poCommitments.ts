@@ -4,6 +4,7 @@
 // releases any unused locked cash back to Free Spendable Cash, and updates supplier fill_rate_score.
 import { db, logAction } from "../db.js";
 import { ValidationError } from "../errors.js";
+import { rowGlobalId, stableGlobalId } from "./stableId.js";
 import { ensureOrInitialized } from "./config.js";
 import { createPurchaseFromPoCore, localDateIso, resolveTenantUserId, round2 } from "./coreBridge.js";
 import { computeSpendableCash, recordBucketLedger } from "./spendableCash.js";
@@ -206,16 +207,21 @@ export function approvePoCommitment(
 }
 
 export interface ReceivePoInput {
+  /** Delivered lines (base pieces). Omitted = every remaining ordered quantity arrived. */
   items?: Array<{ product_id: number; received_qty: number; unit_cost?: number }>;
-  actual_received_total?: number;
   actual_cash_paid: number;
-  actual_credit_added?: number;
   account_id?: number | null;
+  /** true = more deliveries expected (PO stays open with the rest of its lock). */
   partial?: boolean;
   notes?: string | null;
   userId?: number | null;
 }
 
+/**
+ * Receives an ITEMIZED PO: creates the Core purchase (stock, weighted cost, cash payment, supplier debt) and moves the
+ * cash lock in one transaction. Every figure derives from the delivered lines, so OR and Core can never disagree.
+ * Amount-only POs (no lines) are received through Purchases -> New Purchase with the PO linked instead.
+ */
 export function receivePoCommitment(tenantId: number, id: number, input: ReceivePoInput) {
   const po = db
     .prepare("SELECT * FROM or_po_commitments WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL")
@@ -229,17 +235,30 @@ export function receivePoCommitment(tenantId: number, id: number, input: Receive
   const existingItems = db
     .prepare("SELECT * FROM or_po_commitment_items WHERE po_commitment_id = ? AND tenant_id = ? AND deleted_at IS NULL")
     .all(id, tenantId) as any[];
+  if (existingItems.length === 0) {
+    throw new ValidationError(
+      "This PO has no item lines. Record the delivery in Purchases -> New Purchase and link this PO there, so stock, cash and the supplier balance move together.",
+      400,
+      { code: "OR_PO_RECEIVE_NEEDS_INVOICE" }
+    );
+  }
 
   const receivedLines: Array<{ product_id: number; quantity: number; unit_cost: number }> = [];
   if (Array.isArray(input.items) && input.items.length > 0) {
     for (const it of input.items) {
-      const qty = Number(it.received_qty) || 0;
-      if (qty <= 0) continue;
-      const orig = existingItems.find((e) => e.product_id === it.product_id);
-      const cost = it.unit_cost != null ? Number(it.unit_cost) : Number(orig?.unit_cost ?? 0);
-      receivedLines.push({ product_id: it.product_id, quantity: qty, unit_cost: cost });
+      const qty = Number(it.received_qty);
+      if (!Number.isFinite(qty) || qty < 0) {
+        throw new ValidationError("Received quantities must be zero or more.", 400, { code: "PO_RECEIVE_LINE_INVALID", field: "items" });
+      }
+      if (qty === 0) continue;
+      const orig = existingItems.find((e) => Number(e.product_id) === Number(it.product_id));
+      if (!orig) {
+        throw new ValidationError(`Product #${it.product_id} is not on this PO.`, 400, { code: "OR_PO_ITEM_NOT_ON_PO", field: "items" });
+      }
+      const cost = it.unit_cost != null && it.unit_cost !== ("" as any) ? Number(it.unit_cost) : Number(orig.unit_cost ?? 0);
+      receivedLines.push({ product_id: Number(orig.product_id), quantity: qty, unit_cost: cost });
     }
-  } else if (existingItems.length > 0) {
+  } else {
     for (const orig of existingItems) {
       const remaining = Math.max(0, Number(orig.ordered_qty) - Number(orig.received_qty || 0));
       if (remaining > 0) {
@@ -247,40 +266,30 @@ export function receivePoCommitment(tenantId: number, id: number, input: Receive
       }
     }
   }
+  if (receivedLines.length === 0) {
+    throw new ValidationError("Enter at least one received quantity.", 400, { code: "PO_RECEIVE_EMPTY", field: "items" });
+  }
 
-  const linesTotal = round2(receivedLines.reduce((s, l) => s + l.quantity * l.unit_cost, 0));
-  const actualReceivedTotal = round2(
-    input.actual_received_total != null && Number(input.actual_received_total) > 0
-      ? Number(input.actual_received_total)
-      : linesTotal
-  );
   const cashPaid = round2(Math.max(0, Number(input.actual_cash_paid) || 0));
-  const creditAdded = round2(
-    input.actual_credit_added != null
-      ? Math.max(0, Number(input.actual_credit_added) || 0)
-      : Math.max(0, actualReceivedTotal - cashPaid)
-  );
-
   const prevLocked = round2(Number(po.locked_cash_amount) || 0);
   const nextStatus = input.partial ? "PARTIALLY_RECEIVED" : "SETTLED";
   const releasedCash = nextStatus === "SETTLED" ? round2(Math.max(0, prevLocked - cashPaid)) : 0;
   const remainingLock = nextStatus === "SETTLED" ? 0 : round2(Math.max(0, prevLocked - cashPaid));
 
   const result = db.transaction(() => {
-    let coreTxId: number | null = po.core_transaction_id ?? null;
-    if (receivedLines.length > 0) {
-      const coreRes = createPurchaseFromPoCore({
-        tenantId,
-        supplierId: po.supplier_id,
-        userId,
-        poNumber: po.po_number,
-        notes: input.notes || po.notes,
-        items: receivedLines,
-        cashPaidUsd: cashPaid,
-        accountId: input.account_id,
-      });
-      coreTxId = coreRes.transactionId;
-    }
+    const coreRes = createPurchaseFromPoCore({
+      tenantId,
+      supplierId: po.supplier_id,
+      userId,
+      poNumber: po.po_number,
+      notes: input.notes || po.notes,
+      items: receivedLines,
+      cashPaidUsd: cashPaid,
+      accountId: input.account_id,
+    });
+    const coreTxId = coreRes.transactionId;
+    const actualReceivedTotal = coreRes.totalUsd;
+    const creditAdded = coreRes.creditAddedUsd;
 
     // Update received quantities on PO commitment items
     const updItem = db.prepare(
@@ -345,7 +354,7 @@ export function receivePoCommitment(tenantId: number, id: number, input: Receive
       tenantId
     );
 
-    // Update supplier fill_rate_score in or_supplier_profiles (exponential moving average)
+    // Update supplier fill_rate_score in or_supplier_profiles (running average)
     if (nextStatus === "SETTLED" && Number(po.estimated_order_total) > 0) {
       const fillRatio = Math.min(1, Math.max(0, totalReceived / Number(po.estimated_order_total)));
       const prof = db
@@ -358,20 +367,20 @@ export function receivePoCommitment(tenantId: number, id: number, input: Receive
           .run(newScore, count + 1, prof.id);
       } else {
         db.prepare(
-          `INSERT INTO or_supplier_profiles (tenant_id, supplier_id, fill_rate_score, deliveries_count, default_payment_plan)
-           VALUES (?, ?, ?, 1, ?)`
-        ).run(tenantId, po.supplier_id, round2(fillRatio), po.payment_plan);
+          `INSERT INTO or_supplier_profiles (global_id, tenant_id, supplier_id, fill_rate_score, deliveries_count, default_payment_plan)
+           VALUES (?, ?, ?, ?, 1, ?)`
+        ).run(stableGlobalId(tenantId, "or_supplier_profiles", rowGlobalId("stakeholders", po.supplier_id) || po.supplier_id), tenantId, po.supplier_id, round2(fillRatio), po.payment_plan);
       }
     }
 
-    return { coreTxId, releasedCash, nextStatus };
+    return { coreTxId, releasedCash, nextStatus, actualReceivedTotal };
   })();
 
   logAction(
     tenantId,
     userId,
     "OR PO Received",
-    `${po.po_number || `#${id}`}: received $${actualReceivedTotal.toFixed(2)}, paid $${cashPaid.toFixed(2)}, released $${result.releasedCash.toFixed(2)}`
+    `${po.po_number || `#${id}`}: received $${result.actualReceivedTotal.toFixed(2)}, paid $${cashPaid.toFixed(2)}, released $${result.releasedCash.toFixed(2)}`
   );
   return { po: getPoCommitmentById(tenantId, id), ...result };
 }
@@ -420,7 +429,11 @@ export function settlePoFromCorePurchase(params: {
   totalUsd: number;
   cashPaidUsd: number;
   userId?: number | null;
-}): { releasedCash: number; poNumber: string | null } {
+  /** false = more deliveries expected: keep the PO open with the remaining lock. Default true. */
+  final?: boolean;
+  /** Invoice lines in base pieces, used to track received quantities on itemized POs. */
+  items?: Array<{ product_id: number; quantity: number }>;
+}): { releasedCash: number; poNumber: string | null; status: string } {
   const { tenantId, poCommitmentId, coreTransactionId, supplierId } = params;
   const po = db
     .prepare("SELECT * FROM or_po_commitments WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL")
@@ -447,8 +460,11 @@ export function settlePoFromCorePurchase(params: {
   const totalUsd = round2(Math.max(0, Number(params.totalUsd) || 0));
   const cashPaid = round2(Math.max(0, Number(params.cashPaidUsd) || 0));
   const creditAdded = round2(Math.max(0, totalUsd - cashPaid));
+  const isFinal = params.final !== false;
   const prevLocked = round2(Number(po.locked_cash_amount) || 0);
-  const releasedCash = round2(Math.max(0, prevLocked - cashPaid));
+  const releasedCash = isFinal ? round2(Math.max(0, prevLocked - cashPaid)) : 0;
+  const remainingLock = isFinal ? 0 : round2(Math.max(0, prevLocked - cashPaid));
+  const nextStatus = isFinal ? "SETTLED" : "PARTIALLY_RECEIVED";
 
   if (cashPaid > 0) {
     recordBucketLedger({
@@ -459,8 +475,18 @@ export function settlePoFromCorePurchase(params: {
       bucketDelta: -Math.min(prevLocked, cashPaid),
       referenceType: "PO_COMMITMENT",
       referenceId: po.id,
-      note: `Settled via Purchase Invoice #${coreTransactionId} (${po.po_number || `PO #${po.id}`})`,
+      note: `Paid via Purchase Invoice #${coreTransactionId} (${po.po_number || `PO #${po.id}`})`,
     });
+  }
+
+  // Itemized POs: record what this invoice delivered against the ordered lines.
+  if (Array.isArray(params.items) && params.items.length > 0) {
+    const updItem = db.prepare(
+      "UPDATE or_po_commitment_items SET received_qty = IFNULL(received_qty, 0) + ? WHERE po_commitment_id = ? AND product_id = ? AND tenant_id = ? AND deleted_at IS NULL"
+    );
+    for (const it of params.items) {
+      if (Number(it.quantity) > 0) updItem.run(Number(it.quantity), po.id, it.product_id, tenantId);
+    }
   }
   if (releasedCash > 0) {
     recordBucketLedger({
@@ -487,13 +513,13 @@ export function settlePoFromCorePurchase(params: {
             actual_cash_paid = ?,
             actual_credit_added = ?,
             released_cash_amount = ?,
-            locked_cash_amount = 0,
-            status = 'SETTLED',
-            settled_at = CURRENT_TIMESTAMP
+            locked_cash_amount = ?,
+            status = ?,
+            settled_at = CASE WHEN ? = 'SETTLED' THEN CURRENT_TIMESTAMP ELSE settled_at END
       WHERE id = ? AND tenant_id = ?`
-  ).run(coreTransactionId, totalReceived, totalCashPaid, totalCredit, totalReleased, po.id, tenantId);
+  ).run(coreTransactionId, totalReceived, totalCashPaid, totalCredit, totalReleased, remainingLock, nextStatus, nextStatus, po.id, tenantId);
 
-  if (Number(po.estimated_order_total) > 0) {
+  if (isFinal && Number(po.estimated_order_total) > 0) {
     const fillRatio = Math.min(1, Math.max(0, totalReceived / Number(po.estimated_order_total)));
     const prof = db
       .prepare("SELECT * FROM or_supplier_profiles WHERE tenant_id = ? AND supplier_id = ? AND deleted_at IS NULL")
@@ -505,9 +531,9 @@ export function settlePoFromCorePurchase(params: {
         .run(newScore, count + 1, prof.id);
     } else {
       db.prepare(
-        `INSERT INTO or_supplier_profiles (tenant_id, supplier_id, fill_rate_score, deliveries_count, default_payment_plan)
-         VALUES (?, ?, ?, 1, ?)`
-      ).run(tenantId, supplierId, round2(fillRatio), po.payment_plan);
+        `INSERT INTO or_supplier_profiles (global_id, tenant_id, supplier_id, fill_rate_score, deliveries_count, default_payment_plan)
+         VALUES (?, ?, ?, ?, 1, ?)`
+      ).run(stableGlobalId(tenantId, "or_supplier_profiles", rowGlobalId("stakeholders", supplierId) || supplierId), tenantId, supplierId, round2(fillRatio), po.payment_plan);
     }
   }
 
@@ -517,5 +543,5 @@ export function settlePoFromCorePurchase(params: {
     "OR PO Settled via Purchase Invoice",
     `${po.po_number || `#${po.id}`} linked to Invoice #${coreTransactionId} (released $${releasedCash.toFixed(2)})`
   );
-  return { releasedCash, poNumber: po.po_number || null };
+  return { releasedCash, poNumber: po.po_number || null, status: nextStatus };
 }

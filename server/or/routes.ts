@@ -2,6 +2,7 @@
 import { db } from "../db.js";
 import { ValidationError, validationErrorBody } from "../errors.js";
 import { getOrLicenseStatus, requireOrLicense } from "./license.js";
+import { sessionHasPermission } from "../permissions.js";
 import {
   applyIndustryPreset,
   createFixedObligation,
@@ -41,6 +42,9 @@ import { localDateIso } from "./coreBridge.js";
 export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) {
   const fail = (res: any, e: any) => {
     if (e instanceof ValidationError) return res.status(e.status).json(validationErrorBody(e));
+    if (e?.code === "OR_OPTIMIZER_BUSY" || e?.code === "OR_OPTIMIZER_TIMEOUT") {
+      return res.status(e.code === "OR_OPTIMIZER_BUSY" ? 409 : 503).json({ error: e.message, code: e.code });
+    }
     return res.status(500).json({ error: e?.message || String(e) });
   };
 
@@ -377,7 +381,8 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
         force: !!req.body?.force,
       });
       broadcast({ type: "OR_UPDATED" }, req.session.tenantId);
-      res.json(session || { empty: true });
+      const visible = session ? getCycleCountSession(req.session.tenantId, session.id, !sessionHasPermission(req, "or.manage")) : null;
+      res.json(visible || { empty: true });
     } catch (e) {
       fail(res, e);
     }
@@ -385,7 +390,9 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
 
   app.get("/api/or/cycle-counts/:id", authenticate, requireOrLicense, (req: any, res: any) => {
     try {
-      const blind = req.query.blind !== "0";
+      // Blind mode is decided by the server: only managers (or.manage) may see system quantities
+      // before a session is submitted.
+      const blind = req.query.blind === "1" || !sessionHasPermission(req, "or.manage");
       const session = getCycleCountSession(req.session.tenantId, parseInt(req.params.id, 10), blind);
       if (!session) return res.status(404).json({ error: "Cycle count session not found." });
       res.json(session);
@@ -438,6 +445,7 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
       const tenantId = req.session.tenantId;
       const b = req.body || {};
       const out = await applyOptimizationPlan(tenantId, req.session.userId ?? null, {
+        planId: typeof b.plan_id === "string" ? b.plan_id : undefined,
         supplierIds: Array.isArray(b.supplier_ids) ? b.supplier_ids.map(Number) : undefined,
         horizonDays: b.horizon_days !== undefined ? Number(b.horizon_days) : undefined,
         cashBudgetOverride: b.cash_budget_usd !== undefined ? Number(b.cash_budget_usd) : undefined,

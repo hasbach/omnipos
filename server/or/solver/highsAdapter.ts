@@ -2,6 +2,8 @@
 // Builds a CPLEX LP format MILP model directly from `OrOptimizationProblem`, solves the integer program,
 // and runs an LP relaxation pass to extract marginal cash ROI (shadow price on the cash budget).
 import highsLoader from "highs";
+import { createRequire } from "module";
+import { Worker } from "worker_threads";
 import { localDateIso, round2 } from "../coreBridge.js";
 import type {
   BindingConstraintInsight,
@@ -18,6 +20,91 @@ async function getHighs(): Promise<any> {
     highsInstancePromise = (highsLoader as any)();
   }
   return highsInstancePromise;
+}
+
+/** HiGHS options for every solve: a hard time limit so a hard instance can never stall the register. */
+export const HIGHS_TIME_LIMIT_S = 8;
+const WORKER_TIMEOUT_MS = 20000;
+const HIGHS_OPTIONS = { time_limit: HIGHS_TIME_LIMIT_S, mip_rel_gap: 0.01, output_flag: false };
+
+// The solve runs in a worker thread so the POS server's event loop (sales, payments, sync) keeps
+// answering while HiGHS works. A fresh worker per solve also isolates the WASM heap: a crashed or
+// stuck solve is simply terminated.
+const WORKER_SOURCE = `
+const { parentPort, workerData } = require('worker_threads');
+Promise.resolve()
+  .then(() => require(workerData.highsPath)())
+  .then((h) => {
+    const out = {};
+    for (const job of workerData.jobs) {
+      try { out[job.key] = { sol: h.solve(job.lp, workerData.options) }; }
+      catch (e) { out[job.key] = { error: String((e && e.message) || e) }; }
+    }
+    parentPort.postMessage(out);
+  })
+  .catch((e) => parentPort.postMessage({ __fatal: String((e && e.message) || e) }));
+`;
+
+let highsPath: string | null = null;
+function resolveHighsPath(): string | null {
+  if (highsPath === null) {
+    try {
+      highsPath = createRequire(import.meta.url).resolve("highs");
+    } catch {
+      highsPath = "";
+    }
+  }
+  return highsPath || null;
+}
+
+let solveInFlight = false;
+
+/** Solves several LP-format models; worker thread first, in-process fallback (still time-limited). */
+export async function solveLpModels(jobs: Array<{ key: string; lp: string }>): Promise<Record<string, { sol?: any; error?: string }>> {
+  if (solveInFlight) {
+    throw Object.assign(new Error("The optimizer is already running. Try again in a moment."), { status: 409, code: "OR_OPTIMIZER_BUSY" });
+  }
+  solveInFlight = true;
+  try {
+    const path = resolveHighsPath();
+    if (path) {
+      try {
+        return await new Promise((resolve, reject) => {
+          const worker = new Worker(WORKER_SOURCE, { eval: true, workerData: { highsPath: path, jobs, options: HIGHS_OPTIONS } });
+          const timer = setTimeout(() => {
+            worker.terminate();
+            reject(Object.assign(new Error("The optimizer took too long and was stopped."), { code: "OR_OPTIMIZER_TIMEOUT" }));
+          }, WORKER_TIMEOUT_MS);
+          worker.once("message", (msg: any) => {
+            clearTimeout(timer);
+            worker.terminate();
+            if (msg && msg.__fatal) reject(new Error(msg.__fatal));
+            else resolve(msg);
+          });
+          worker.once("error", (e) => {
+            clearTimeout(timer);
+            reject(e);
+          });
+        });
+      } catch (e: any) {
+        if (e?.code === "OR_OPTIMIZER_TIMEOUT") throw e;
+        console.warn("[OR] HiGHS worker unavailable, solving in-process:", e?.message || e);
+      }
+    }
+    const highs = await getHighs();
+    const out: Record<string, { sol?: any; error?: string }> = {};
+    for (const job of jobs) {
+      try {
+        out[job.key] = { sol: highs.solve(job.lp, HIGHS_OPTIONS) };
+      } catch (e: any) {
+        out[job.key] = { error: String(e?.message || e) };
+        highsInstancePromise = null; // a failed WASM instance is not reused
+      }
+    }
+    return out;
+  } finally {
+    solveInFlight = false;
+  }
 }
 
 function fmt(n: number): string {
@@ -248,9 +335,14 @@ export class HighsWasmAdapter implements SolverAdapter {
       };
     }
 
-    const highs = await getHighs();
-    const sol = highs.solve(built.milp);
-    const status = sol?.Status === "Optimal" ? "Optimal" : sol?.Status === "Infeasible" ? "Infeasible" : "Error";
+    const solved = await solveLpModels([
+      { key: "milp", lp: built.milp },
+      { key: "lp", lp: built.lpRelaxed },
+    ]);
+    const sol = solved.milp?.sol;
+    // A time-limited solve that found a feasible plan is still usable (HiGHS keeps the incumbent).
+    const hasIncumbent = sol?.Status === "Time limit reached" && sol?.Columns && Object.keys(sol.Columns).length > 0;
+    const status = sol?.Status === "Optimal" || hasIncumbent ? "Optimal" : sol?.Status === "Infeasible" ? "Infeasible" : "Error";
 
     if (status !== "Optimal") {
       return {
@@ -275,7 +367,7 @@ export class HighsWasmAdapter implements SolverAdapter {
     // LP relaxation pass to extract dual / shadow price on c_cash_budget
     let marginalCashRoi: number | null = null;
     try {
-      const lpSol = highs.solve(built.lpRelaxed);
+      const lpSol = solved.lp?.sol;
       const cashRow = lpSol?.Rows?.find((r: any) => r.Name === "c_cash_budget");
       if (cashRow && typeof cashRow.Dual === "number" && Math.abs(cashRow.Dual) > 0.001) {
         marginalCashRoi = round2(Math.abs(cashRow.Dual));

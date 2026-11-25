@@ -1,7 +1,7 @@
 import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Plus, Search, Trash2 } from 'lucide-react';
 import {
-  Modal, Badge, Button, Field, Input, Select, Combobox, NumberInput, MoneyInput, Textarea, useToast, useConfirm,
+  Modal, Badge, Button, Checkbox, Field, Input, Select, Combobox, NumberInput, MoneyInput, Textarea, useToast, useConfirm,
 } from '../../components/ui';
 import { useI18n } from '../../intl/index';
 import { api } from '../../lib/api';
@@ -126,6 +126,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
   const [partyId, setPartyId] = useState<number | ''>('');
   const [lockedPos, setLockedPos] = useState<any[]>([]);
   const [linkedPoId, setLinkedPoId] = useState<string>('');
+  const [linkedPoFinal, setLinkedPoFinal] = useState(true);
   const [priceLevel, setPriceLevel] = useState<PriceLevel>('retail');
   const [dateTime, setDateTime] = useState(nowLocalDateTime());
   // What the loaded invoice's date looked like — only send created_at when the user changed it,
@@ -201,8 +202,10 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       setLinkedPoId('');
       return;
     }
-    api.get<any[]>('/api/or/po-commitments', { status: 'APPROVED_LOCKED' })
-      .then((rows) => setLockedPos(Array.isArray(rows) ? rows : []))
+    api.get<any[]>('/api/or/po-commitments')
+      .then((rows) => setLockedPos(Array.isArray(rows)
+        ? rows.filter((po) => po.status === 'APPROVED_LOCKED' || po.status === 'PARTIALLY_RECEIVED')
+        : []))
       .catch(() => setLockedPos([]));
   }, [open, isPurchase, editingId]);
 
@@ -211,13 +214,12 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
     [isPurchase, partyId, lockedPos],
   );
 
+  // Linking is always an explicit choice (default "None"): an unrelated purchase from the same
+  // supplier must never settle a PO lock. Drop a selection that no longer belongs to the supplier.
   useEffect(() => {
     if (!isPurchase || editingId) return;
-    if (supplierLockedPos.length > 0) {
-      setLinkedPoId((prev) => (supplierLockedPos.some((p) => String(p.id) === prev) ? prev : String(supplierLockedPos[0].id)));
-    } else {
-      setLinkedPoId('');
-    }
+    setLinkedPoId((prev) => (prev && supplierLockedPos.some((p) => String(p.id) === prev) ? prev : ''));
+    setLinkedPoFinal(true);
   }, [isPurchase, editingId, supplierLockedPos]);
 
   useEffect(() => {
@@ -546,7 +548,7 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
           price_level: priceLevelsEnabled ? priceLevel : 'retail',
           notes,
           reference,
-          ...(isPurchase && linkedPoId ? { or_po_commitment_id: Number(linkedPoId) } : {}),
+          ...(isPurchase && linkedPoId ? { or_po_commitment_id: Number(linkedPoId), or_po_final: linkedPoFinal } : {}),
         };
         const res = await postJson('/api/transactions', body);
         toast.success(t('inv_editor_created_toast', 'Invoice #{id} created.').replace('{id}', String(res.id)));
@@ -636,19 +638,27 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
               {isPurchase && !editingId && supplierLockedPos.length > 0 && (
                 <Field
                   label={t('or_link_locked_po', 'Settle Locked PO (OmniPulse OR)')}
-                  helper={t('or_link_locked_po_hint', 'Saving this purchase updates stock and releases any unused cash lock automatically.')}
+                  helper={t('or_link_locked_po_hint', 'Only if this invoice is the delivery for that PO: stock, cash and the PO lock then update together.')}
                 >
                   <Select
                     value={linkedPoId}
                     onChange={(e) => setLinkedPoId(e.target.value)}
                     options={[
-                      { value: '', label: t('or_link_locked_po_none', 'None — keep PO lock open') },
+                      { value: '', label: t('or_link_locked_po_none', 'None — not linked to a PO') },
                       ...supplierLockedPos.map((po) => ({
                         value: String(po.id),
                         label: `${po.po_number || `#${po.id}`} · Locked ${formatMoney(po.locked_cash_amount || 0, USD)} (due ${po.expected_delivery_date})`,
                       })),
                     ]}
                   />
+                  {linkedPoId && (
+                    <Checkbox
+                      className="mt-2 text-xs"
+                      checked={linkedPoFinal}
+                      onChange={(e) => setLinkedPoFinal(e.target.checked)}
+                      label={t('or_link_locked_po_final', 'Last delivery for this PO (close it and release the unused lock)')}
+                    />
+                  )}
                 </Field>
               )}
 

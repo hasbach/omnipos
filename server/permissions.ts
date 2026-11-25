@@ -64,7 +64,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
 const ROLE_PERMISSIONS_VERSION = 4;
 
 /**
- * v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
+ * v4 adds OmniPulse OR defaults. v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
  * correct a day. Grant each once, then stamp the version. Idempotent and
  * lazy — runs the first time a tenant's stored map is read. Tenants without a stored map use the
  * defaults (which already include the new key) and are stamped without a rewrite.
@@ -80,12 +80,19 @@ function migrateStoredMap(tenantId: number | string, map: Record<string, string[
         out[role] = [...list, 'settlement.view'];
       }
     }
-    // Grant order defaults once so later role edits can remove them.
-    for (const [role, list] of Object.entries(out)) {
-      if (!Array.isArray(list)) continue;
-      const defaults = (DEFAULT_ROLE_PERMISSIONS[role] || []).filter((key) => key.startsWith('orders.'));
-      out[role] = Array.from(new Set([...list, ...defaults]));
-    }
+    // Each version's new defaults are granted ONCE (only when upgrading past that version), so later
+    // role edits that remove them stick: v3 = order keys, v4 = OmniPulse OR keys.
+    const from = Number(ver?.value || 0);
+    const grantOnce = (sinceVersion: number, prefix: string) => {
+      if (from >= sinceVersion) return;
+      for (const [role, list] of Object.entries(out!)) {
+        if (!Array.isArray(list)) continue;
+        const defaults = (DEFAULT_ROLE_PERMISSIONS[role] || []).filter((key) => key.startsWith(prefix));
+        out![role] = Array.from(new Set([...list, ...defaults]));
+      }
+    };
+    grantOnce(3, 'orders.');
+    grantOnce(4, 'or.');
     db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(out));
   }
   db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions_version', ?)").run(tenantId, String(ROLE_PERMISSIONS_VERSION));
@@ -408,6 +415,13 @@ function satisfied(need: Need, granted: Set<string>): boolean {
   if (typeof need === 'string') return granted.has(need);
   if (Array.isArray(need)) return need.some((k) => granted.has(k));
   return need.allOf.every((n) => satisfied(n, granted));
+}
+
+/** Does the current session hold `key`? Owner / legacy sessions with no PIN user are unrestricted. */
+export function sessionHasPermission(req: any, key: string): boolean {
+  const user = sessionUser(req);
+  if (!user) return req.session?.locked !== true;
+  return new Set(permissionsForRole(req.session.tenantId, user.role)).has(key);
 }
 
 /** Would `role` be allowed to make this request? (Pure rule evaluation — used by the tests.) */

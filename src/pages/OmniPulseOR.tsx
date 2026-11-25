@@ -4,7 +4,7 @@ import {
   ShieldAlert, Sliders, Truck, Wallet, XCircle,
 } from 'lucide-react';
 import {
-  Badge, Button, Card, Input, Modal, PageHeader, Select, StatCard, Tabs, useToast,
+  Badge, Button, Card, Checkbox, Input, Modal, PageHeader, Select, StatCard, Tabs, useToast,
 } from '../components/ui';
 import { useI18n } from '../intl/index';
 import { api } from '../lib/api';
@@ -75,7 +75,8 @@ export default function OmniPulseOR() {
   });
 
   const [receiveModalPo, setReceiveModalPo] = useState<any>(null);
-  const [receiveForm, setReceiveForm] = useState({ actual_received_total: '', actual_cash_paid: '', account_id: '', partial: false });
+  const [receiveForm, setReceiveForm] = useState({ actual_cash_paid: '', partial: false });
+  const [receiveLines, setReceiveLines] = useState<Record<number, { qty: string; cost: string }>>({});
 
   const [obForm, setObForm] = useState({ name: '', amount_usd: '', frequency: 'monthly', due_day: '1', category: 'opex' });
   const [runningPipeline, setRunningPipeline] = useState(false);
@@ -213,10 +214,14 @@ export default function OmniPulseOR() {
   const handleReceivePo = async () => {
     if (!receiveModalPo) return;
     try {
+      const items = (receiveModalPo.items || []).map((it: any) => ({
+        product_id: it.product_id,
+        received_qty: Number(receiveLines[it.id]?.qty) || 0,
+        unit_cost: receiveLines[it.id]?.cost !== '' ? Number(receiveLines[it.id]?.cost) : undefined,
+      }));
       const res = await api.post<any>(`/api/or/po-commitments/${receiveModalPo.id}/receive`, {
-        actual_received_total: Number(receiveForm.actual_received_total) || 0,
+        items,
         actual_cash_paid: Number(receiveForm.actual_cash_paid) || 0,
-        account_id: receiveForm.account_id ? Number(receiveForm.account_id) : undefined,
         partial: receiveForm.partial,
       });
       toast.success(`PO received${res.releasedCash > 0 ? ` — $${res.releasedCash.toFixed(2)} released to Free Cash` : ''}`);
@@ -226,6 +231,26 @@ export default function OmniPulseOR() {
       toast.error(e.message);
     }
   };
+
+  const openReceiveModal = async (po: any) => {
+    try {
+      const full = await api.get<any>(`/api/or/po-commitments/${po.id}`);
+      const lines: Record<number, { qty: string; cost: string }> = {};
+      for (const it of full.items || []) {
+        const remaining = Math.max(0, Number(it.ordered_qty) - Number(it.received_qty || 0));
+        lines[it.id] = { qty: String(remaining), cost: String(it.unit_cost ?? '') };
+      }
+      setReceiveLines(lines);
+      setReceiveForm({ actual_cash_paid: String(full.locked_cash_amount || ''), partial: false });
+      setReceiveModalPo(full);
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  const receiveTotal = receiveModalPo
+    ? (receiveModalPo.items || []).reduce((sum: number, it: any) => sum + (Number(receiveLines[it.id]?.qty) || 0) * (Number(receiveLines[it.id]?.cost) || 0), 0)
+    : 0;
 
   const handleCancelPo = async (id: number) => {
     try {
@@ -253,7 +278,7 @@ export default function OmniPulseOR() {
   const handleApplyOptimizer = async () => {
     setOptLoading(true);
     try {
-      const out = await api.post<any>('/api/or/optimizer/apply');
+      const out = await api.post<any>('/api/or/optimizer/apply', optSolution?.plan_id ? { plan_id: optSolution.plan_id } : {});
       setOptSolution(out.solution);
       toast.success(`Created ${out.created_pos?.length || 0} Draft PO(s) for review`);
       await loadAll();
@@ -726,15 +751,7 @@ export default function OmniPulseOR() {
                           <Button
                             size="sm"
                             variant="secondary"
-                            onClick={() => {
-                              setReceiveModalPo(po);
-                              setReceiveForm({
-                                actual_received_total: String(po.estimated_order_total || ''),
-                                actual_cash_paid: String(po.locked_cash_amount || ''),
-                                account_id: '',
-                                partial: false,
-                              });
-                            }}
+                            onClick={() => openReceiveModal(po)}
                           >
                             Receive
                           </Button>
@@ -1086,26 +1103,67 @@ export default function OmniPulseOR() {
 
       {/* MODAL: RECEIVE PO */}
       <Modal open={!!receiveModalPo} onClose={() => setReceiveModalPo(null)} title={`Receive ${receiveModalPo?.po_number || ''}`}>
-        {receiveModalPo && (
+        {receiveModalPo && (receiveModalPo.items || []).length === 0 && (
           <div className="space-y-4">
-            {Number(receiveModalPo.item_count || 0) === 0 && (
-              <div className="p-3 rounded-lg border border-warning/40 bg-warning-soft text-xs text-text">
-                <strong>Amount-only cash lock (no line items):</strong> To add stock items and release this lock together without double-counting cash, create the itemized invoice in <strong>Purchases → New Purchase</strong> and select this locked PO. Use this form only to settle cash-only without stock lines.
-              </div>
-            )}
+            <div className="p-3 rounded-lg border border-warning/40 bg-warning-soft text-xs text-text">
+              {t('or_receive_amount_only', 'This PO has no item lines. Record the delivery in Purchases → New Purchase and choose this PO under "Settle Locked PO": stock, cash, the supplier balance and this lock then update together. To drop the order without a delivery, cancel the PO instead.')}
+            </div>
             <p className="text-xs text-text-3">
-              Locked Cash: <strong>{formatMoney(receiveModalPo.locked_cash_amount, USD)}</strong>. Any unused lock will be released immediately back to Free Spendable Cash.
+              Locked Cash: <strong>{formatMoney(receiveModalPo.locked_cash_amount, USD)}</strong>
             </p>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-text-2">Actual Received Total (USD)</label>
-                <Input type="number" value={receiveForm.actual_received_total} onChange={(e) => setReceiveForm({ ...receiveForm, actual_received_total: e.target.value })} />
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setReceiveModalPo(null)}>{t('or_close', 'Close')}</Button>
+            </div>
+          </div>
+        )}
+        {receiveModalPo && (receiveModalPo.items || []).length > 0 && (
+          <div className="space-y-4">
+            <p className="text-xs text-text-3">
+              Locked Cash: <strong>{formatMoney(receiveModalPo.locked_cash_amount, USD)}</strong>. {t('or_receive_hint', 'Enter what actually arrived. Stock, product cost, the supplier balance and the cash lock all follow these lines.')}
+            </p>
+            <div className="max-h-64 overflow-auto border border-border rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-surface-2 text-text-3">
+                  <tr>
+                    <th className="p-2 text-start">{t('or_product', 'Product')}</th>
+                    <th className="p-2 text-end">{t('or_ordered', 'Ordered')}</th>
+                    <th className="p-2 text-end">{t('or_received_qty', 'Received now')}</th>
+                    <th className="p-2 text-end">{t('or_unit_cost', 'Unit cost (USD)')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {(receiveModalPo.items || []).map((it: any) => (
+                    <tr key={it.id}>
+                      <td className="p-2">{it.product_name || `#${it.product_id}`}</td>
+                      <td className="p-2 text-end">{Number(it.ordered_qty)}{Number(it.received_qty || 0) > 0 ? ` (${Number(it.received_qty)} in)` : ''}</td>
+                      <td className="p-2 text-end">
+                        <Input type="number" min={0} className="w-20 ms-auto" value={receiveLines[it.id]?.qty ?? ''}
+                          onChange={(e) => setReceiveLines({ ...receiveLines, [it.id]: { ...(receiveLines[it.id] || { cost: '' }), qty: e.target.value } })} />
+                      </td>
+                      <td className="p-2 text-end">
+                        <Input type="number" min={0} className="w-24 ms-auto" value={receiveLines[it.id]?.cost ?? ''}
+                          onChange={(e) => setReceiveLines({ ...receiveLines, [it.id]: { ...(receiveLines[it.id] || { qty: '' }), cost: e.target.value } })} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3 items-end">
+              <div className="text-sm">
+                {t('or_delivery_total', 'Delivery total')}: <strong>{formatMoney(receiveTotal, USD)}</strong>
               </div>
               <div>
-                <label className="text-xs font-medium text-text-2">Actual Cash Paid (USD)</label>
-                <Input type="number" value={receiveForm.actual_cash_paid} onChange={(e) => setReceiveForm({ ...receiveForm, actual_cash_paid: e.target.value })} />
+                <label className="text-xs font-medium text-text-2">{t('or_cash_paid_now', 'Cash paid now (USD)')}</label>
+                <Input type="number" min={0} value={receiveForm.actual_cash_paid} onChange={(e) => setReceiveForm({ ...receiveForm, actual_cash_paid: e.target.value })} />
               </div>
             </div>
+            <Checkbox
+              className="text-xs"
+              checked={receiveForm.partial}
+              onChange={(e) => setReceiveForm({ ...receiveForm, partial: e.target.checked })}
+              label={t('or_receive_partial', 'More deliveries expected (keep the PO open with the rest of its lock)')}
+            />
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setReceiveModalPo(null)}>Cancel</Button>
               <Button onClick={handleReceivePo}>Confirm Receiving</Button>

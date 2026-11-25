@@ -1,6 +1,7 @@
 // OmniPulse OR configuration, industry presets, draw policies, and fixed obligations.
 import { db } from "../db.js";
 import { ValidationError } from "../errors.js";
+import { stableGlobalId } from "./stableId.js";
 
 export type BusinessType = "RETAIL" | "RESTAURANT" | "SERVICE" | "HYBRID";
 export type SurvivalMode = "CRISIS" | "RECOVERY" | "GROWTH";
@@ -121,10 +122,11 @@ export function ensureOrInitialized(tenantId: number, defaultType: BusinessType 
     const preset = INDUSTRY_PRESETS[defaultType];
     db.prepare(
       `INSERT INTO or_tenant_config (
-        tenant_id, business_type, survival_mode, enable_owner_draw, enable_po_cash_lock,
+        global_id, tenant_id, business_type, survival_mode, enable_owner_draw, enable_po_cash_lock,
         enable_cycle_count, enable_recipe_deduction, min_drawer_float, cycle_count_daily_limit, variance_alert_pct
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
+      stableGlobalId(tenantId, "or_tenant_config"),
       tenantId,
       preset.config.business_type,
       preset.config.survival_mode,
@@ -142,21 +144,21 @@ export function ensureOrInitialized(tenantId: number, defaultType: BusinessType 
   const presetType = (existing?.business_type || defaultType) as BusinessType;
   const presetPolicies = INDUSTRY_PRESETS[presetType]?.policies || INDUSTRY_PRESETS.RETAIL.policies;
   const insertPolicy = db.prepare(
-    `INSERT OR IGNORE INTO or_draw_policies (tenant_id, survival_mode, max_daily_cash, max_daily_goods_cost, max_monthly_total, require_override_reason)
-     VALUES (?, ?, ?, ?, ?, 1)`
+    `INSERT OR IGNORE INTO or_draw_policies (global_id, tenant_id, survival_mode, max_daily_cash, max_daily_goods_cost, max_monthly_total, require_override_reason)
+     VALUES (?, ?, ?, ?, ?, ?, 1)`
   );
   for (const mode of ["CRISIS", "RECOVERY", "GROWTH"] as SurvivalMode[]) {
     const p = presetPolicies[mode];
-    insertPolicy.run(tenantId, mode, p.max_daily_cash, p.max_daily_goods_cost, p.max_monthly_total);
+    insertPolicy.run(stableGlobalId(tenantId, "or_draw_policies", mode), tenantId, mode, p.max_daily_cash, p.max_daily_goods_cost, p.max_monthly_total);
   }
 
   // Ensure core virtual buckets exist
   const insertBucket = db.prepare(
-    `INSERT OR IGNORE INTO or_cash_buckets (tenant_id, code, name, target_amount, current_balance, priority)
-     VALUES (?, ?, ?, 0, 0, ?)`
+    `INSERT OR IGNORE INTO or_cash_buckets (global_id, tenant_id, code, name, target_amount, current_balance, priority)
+     VALUES (?, ?, ?, ?, 0, 0, ?)`
   );
-  insertBucket.run(tenantId, "OPEX_RESERVE", "OpEx & Fixed Obligations Reserve", 1);
-  insertBucket.run(tenantId, "CORE_RESTOCK", "Supplier PO Cash-Lock Reserve", 2);
+  insertBucket.run(stableGlobalId(tenantId, "or_cash_buckets", "OPEX_RESERVE"), tenantId, "OPEX_RESERVE", "OpEx & Fixed Obligations Reserve", 1);
+  insertBucket.run(stableGlobalId(tenantId, "or_cash_buckets", "CORE_RESTOCK"), tenantId, "CORE_RESTOCK", "Supplier PO Cash-Lock Reserve", 2);
 
   return db
     .prepare("SELECT * FROM or_tenant_config WHERE tenant_id = ? AND deleted_at IS NULL")

@@ -991,6 +991,9 @@ try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN demand_std_30d REAL NOT NUL
 try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN safety_stock REAL NOT NULL DEFAULT 0;"); } catch {}
 try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN primary_supplier_id INTEGER;"); } catch {}
 try { db.exec("ALTER TABLE or_tenant_config ADD COLUMN owner_stakeholder_id INTEGER;"); } catch {}
+// 1.13.2: portable link from an OR owner draw to its Core cash_flow row (the integer core_cash_tx_id is
+// device-local and is no longer synced).
+try { db.exec("ALTER TABLE or_owner_draws ADD COLUMN core_cash_global_id TEXT;"); } catch {}
 
 // Sync Metadata Migration (for Supabase Offline-First Sync)
 // Local-only tables are never synced, so they get no sync columns or triggers (adding created_at
@@ -1053,6 +1056,24 @@ for (const table of allTables) {
     console.error(`Trigger error on ${table.name}:`, e);
   }
 }
+
+// 1.13.2 backfill: link existing OR cash draws to their cash_flow row by global id. Only rows whose local
+// core_cash_tx_id really points at a matching owner withdrawal (draws pulled from another register carry
+// that register's ids and simply stay unlinked).
+try {
+  db.exec(`
+    UPDATE or_owner_draws SET core_cash_global_id = COALESCE(
+      (SELECT cf.global_id FROM cash_flow cf
+        WHERE cf.id = or_owner_draws.core_cash_tx_id AND cf.tenant_id = or_owner_draws.tenant_id
+          AND cf.category = 'owner_withdrawal' AND cf.type = 'out'
+          AND ABS(cf.amount / IFNULL(NULLIF(cf.exchange_rate, 0), 1) - or_owner_draws.cash_amount) < 0.01),
+      (SELECT cf.global_id FROM archived_cash_flow cf
+        WHERE cf.id = or_owner_draws.core_cash_tx_id AND cf.tenant_id = or_owner_draws.tenant_id
+          AND cf.category = 'owner_withdrawal' AND cf.type = 'out'
+          AND ABS(cf.amount / IFNULL(NULLIF(cf.exchange_rate, 0), 1) - or_owner_draws.cash_amount) < 0.01))
+    WHERE core_cash_global_id IS NULL AND core_cash_tx_id IS NOT NULL AND cash_amount > 0
+  `);
+} catch (e) { console.error('[OR] core_cash_global_id backfill failed:', e); }
 
 // One live listing per (store, product); soft-deleted listings don't count. Needs deleted_at, which
 // the sync-metadata block above adds.
