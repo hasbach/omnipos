@@ -1,4 +1,5 @@
 import CashForecastTab from './or/CashForecastTab';
+import CashiersTab from './or/CashiersTab';
 import React, { useEffect, useState } from 'react';
 import {
   Activity, AlertTriangle, CheckCircle2, ClipboardCheck, Lock, Plus, RefreshCw,
@@ -15,7 +16,7 @@ import type { Product, Stakeholder } from '../types';
 import MarginsTab from './or/MarginsTab';
 import { BundleIdeas } from './or/BundleIdeas';
 
-type TabKey = 'briefing' | 'cash-forecast' | 'margins' | 'bundle-ideas' | 'draws' | 'pos' | 'cycle' | 'settings';
+type TabKey = 'cashiers' | 'briefing' | 'cash-forecast' | 'margins' | 'bundle-ideas' | 'draws' | 'pos' | 'cycle' | 'settings';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -490,6 +491,7 @@ export default function OmniPulseOR() {
         onChange={(v) => setTab(v as TabKey)}
         items={[
           { value: 'briefing', label: t('or_tab_briefing', 'Morning Briefing') },
+          ...(can('or.manage') ? [{ value: 'cashiers', label: t('cr_title') }] : []),
           { value: 'cash-forecast', label: t('cf_title') },
           { value: 'margins', label: t('or_margins') },
           { value: 'bundle-ideas', label: t('bi_title') },
@@ -500,6 +502,7 @@ export default function OmniPulseOR() {
         ]}
       />
 
+      {tab === 'cashiers' && can('or.manage') && <CashiersTab />}
       {tab === 'cash-forecast' && <CashForecastTab />}
       {tab === 'margins' && <MarginsTab />}
       {tab === 'bundle-ideas' && <BundleIdeas products={products} onSaved={loadAll} />}
