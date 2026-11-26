@@ -1,3 +1,4 @@
+import { PurchaseScanSection } from './settings/PurchaseScanSection';
 import React, { useEffect, useState } from 'react';
 import { Store, Tag, Coins, Printer, Globe, Shield, AlertTriangle, Network, KeyRound, Tags, ShoppingBag } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
@@ -96,7 +97,15 @@ export default function Settings({ onShowUpdate }: { onShowUpdate: () => void })
         </nav>
 
         <div className="min-w-0 flex-1">
-          {section === 'general' && <GeneralSection settings={settings} onSaved={fetchSettings} />}
+          {section === 'general' && (
+            <div className="space-y-4">
+              <GeneralSection
+                settings={settings}
+                onSaved={fetchSettings}
+              />
+              <PurchaseScanSection />
+            </div>
+          )}
           {section === 'pricing' && <SalesPricingSection settings={settings} onSaved={fetchSettings} />}
           {section === 'currencies' && <CurrenciesSection />}
           {section === 'printers' && <PrintersSection settings={settings} onSaved={fetchSettings} />}

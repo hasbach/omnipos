@@ -1,3 +1,4 @@
+import { PurchaseScan } from './PurchaseScan';
 import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Plus, Search, Trash2 } from 'lucide-react';
 import {
@@ -593,6 +594,25 @@ export function InvoiceEditor({ open, onClose, txType, editingId, products, stak
       ) : (
         <div className="grid grid-cols-3 gap-6">
           <div className="col-span-2 space-y-4">
+            {isPurchase && !editingId && <PurchaseScan
+              key={String(open)}
+              products={products}
+              suppliers={parties}
+              currencies={currencies}
+              onApply={draft => {
+                setLines(draft.lines);
+                setPartyId(draft.supplier);
+                // The purchase is recorded today (POST keeps its own date); the supplier's date goes in the notes.
+                setNotes(t('scan_invoice_date_note', 'Supplier invoice date: {date}').replace('{date}', draft.date));
+                setReference(draft.reference);
+                setGlobalDiscount({ type: 'fixed', value: draft.discount });
+                setGlobalTax({ type: 'fixed', value: 0 });
+                setFieldErrors({});
+                setEntryCurrency('USD');
+                setSavedRate(null);
+                setDirty(true);
+              }}
+            />}
             {archived && (
               <div className="flex items-start gap-2 rounded-[var(--radius-card)] border border-accent/40 bg-accent-soft p-3 text-sm text-text">
                 <AlertTriangle size={18} className="mt-0.5 shrink-0 text-accent" />

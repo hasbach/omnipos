@@ -305,6 +305,10 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/stock/adjustments', need: 'stock.view' },
   { method: 'GET', pattern: '/api/stock/movements/:productId', need: 'stock.view' },
 
+  { method: 'GET', pattern: '/api/purchase-scan/key', need: 'settings.manage' },
+  { method: 'POST', pattern: '/api/purchase-scan/key', need: 'settings.manage' },
+  { method: 'POST', pattern: '/api/purchase-scan', need: 'purchases.edit' },
+  { method: 'POST', pattern: '/api/purchase-scan/mappings', need: 'purchases.edit' },
   // --- purchases ---
   { method: 'GET', pattern: '/api/purchases', need: 'purchases.view' },
   { method: 'GET', pattern: '/api/purchases/:id', need: 'purchases.view' },
