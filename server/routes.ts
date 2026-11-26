@@ -33,6 +33,7 @@ import { callRpc } from './cloudCall.js';
 import { loadCompletableOrder, orderEffectiveState, orderSaleExists, orderPricedItems } from './orderSale.js';
 import { applyResult, setupOrderRoutes } from './orders.js';
 import { setupCommerceRoutes } from "./commerce.js";
+import { APP_VERSION } from "./appVersion.js";
 import { applyLaterPayments, filterBySettlement } from "./invoiceSettlement.js";
 import { setupOrRoutes } from "./or/routes.js";
 import { isOrLicenseValid } from "./or/license.js";
@@ -289,6 +290,10 @@ async function establishLogin(
   if (cloudSession && cloudUserId) {
     // Read the tenant's own row (RLS-scoped) to mirror it locally.
     const authed = await createAuthedClient(cloudSession);
+    // Best effort: record which version this register runs, so the super admin / monitor see real versions
+    // (tenants.current_version is not a protected column). Never blocks or fails the login.
+    void Promise.resolve(authed.from('tenants').update({ current_version: APP_VERSION }).eq('global_id', cloudUserId))
+      .catch(() => {});
     const { data: cloudTenant, error: tErr } = await authed
       .from('tenants')
       .select('*')
@@ -434,9 +439,11 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         or_license_type: tenant.or_license_type ?? 'none',
         or_license_expiry: tenant.or_license_expiry ?? null,
         or_license_valid: isOrLicenseValid(tenant.id),
-        current_version: tenant.current_version,
-        available_version: tenant.available_version,
-        scheduled_update_at: tenant.scheduled_update_at
+        // The running app's real version. The old tenants.current_version / available_version pair was a
+        // placeholder (always "2.5.0"); real updates come from electron-updater (Settings -> Updates).
+        current_version: APP_VERSION,
+        available_version: null,
+        scheduled_update_at: null
       });
     } catch (err) {
       console.error("Login Error:", err);
@@ -580,9 +587,9 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       or_license_type: tenant.or_license_type ?? 'none',
       or_license_expiry: tenant.or_license_expiry ?? null,
       or_license_valid: isOrLicenseValid(tenant.id),
-      current_version: tenant.current_version,
-      available_version: tenant.available_version,
-      scheduled_update_at: tenant.scheduled_update_at
+      current_version: APP_VERSION,
+      available_version: null,
+      scheduled_update_at: null
     });
   });
 
