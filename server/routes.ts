@@ -1,5 +1,6 @@
 import { writeProductFields } from './productEditFields.js';
 import { setupLbpRateAlertRoutes, refreshLbpRateBriefing } from './lbpRateAlertData.js';
+import { setupAssistantRoutes } from './assistant/routes.js';
 import { setupPurchaseScanRoutes } from './purchaseScan/routes.js';
 import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
@@ -382,6 +383,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   setupCashFlowRoutes(app, authenticate, broadcast);
   setupCashAccountRoutes(app, authenticate, broadcast);
   setupPurchaseScanRoutes(app, authenticate);
+  setupAssistantRoutes(app, authenticate);
   setupCommerceRoutes(app, authenticate);
   setupOrderRoutes(app, authenticate, broadcast);
   setupOrRoutes(app, authenticate, broadcast);

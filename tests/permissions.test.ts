@@ -330,7 +330,7 @@ test("migration v2: roles that could close or correct get settlement.view once; 
   assert.ok(!(await who(s.staff)).includes("settlement.view"));
   assert.equal((await who(s.cashier)).filter((k) => k === "settlement.view").length, 1);
   const ver = app.db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'role_permissions_version'").get(s.tenantId) as any;
-  assert.equal(ver.value, "4");
+  assert.equal(ver.value, "5");
 
   // The admin later removes it on purpose: the version stamp keeps the migration from re-adding it.
   const saved = await app.api("POST", "/api/permissions", { tenantId: s.tenantId, body: { role_permissions: { manager: ["settlement.close"] } } });
@@ -546,9 +546,10 @@ test('stored role maps gain order defaults once without granting commerce permis
   app.db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(stored));
   app.db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions_version', '2')").run(tenantId);
   for (const role of EDITABLE_ROLES) {
-    // v3 order defaults, then v4 OmniPulse OR defaults — each granted once.
+    // v3 order defaults, v4 OmniPulse OR defaults, then v5 assistant defaults — each granted once.
     const orDefaults = (DEFAULT_ROLE_PERMISSIONS[role] || []).filter((k: string) => k.startsWith('or.'));
-    const expected = [...(role === 'manager' ? ['orders.view', 'orders.manage'] : ['orders.view']), ...orDefaults];
+    const assistantDefaults = (DEFAULT_ROLE_PERMISSIONS[role] || []).filter((k: string) => k.startsWith('assistant.'));
+    const expected = [...(role === 'manager' ? ['orders.view', 'orders.manage'] : ['orders.view']), ...orDefaults, ...assistantDefaults];
     const permissions = permissionsForRole(tenantId, role);
     assert.deepEqual(permissions, ['daily_sales.view', ...expected]);
     assert.ok(!permissions.some((key) => key.startsWith('store.')));

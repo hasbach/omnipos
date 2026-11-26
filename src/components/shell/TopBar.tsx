@@ -1,3 +1,4 @@
+import { AssistantPanel } from '../assistant/AssistantPanel';
 import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { Moon, Sun, ExternalLink, Globe } from 'lucide-react';
@@ -56,6 +57,7 @@ export function TopBar({ isDarkMode, onToggleTheme, onOpenPos }: TopBarProps) {
       <h1 className="truncate text-base font-semibold text-text">{t(titleKey)}</h1>
 
       <div className="flex shrink-0 items-center gap-2">
+        <AssistantPanel />
         <div className="flex items-center gap-1.5">
           <Globe size={15} className="text-text-3" aria-hidden="true" />
           <Select

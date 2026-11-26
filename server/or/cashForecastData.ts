@@ -6,8 +6,8 @@ import { loadOpenPayablesReceivables } from "./payablesData.js";
 import { localDateIso } from "./coreBridge.js";
 import { forecastDate, projectCashForecast, type ForecastObligation } from "./cashForecast.js";
 
-export function loadCashForecast(tenantId: number, today = localDateIso()) {
-  const cash = computeSpendableCash(tenantId, today);
+export function loadCashForecast(tenantId: number, today = localDateIso(), readOnly = false) {
+  const cash = computeSpendableCash(tenantId, today, readOnly);
   const debts = loadOpenPayablesReceivables(tenantId, today);
   const branch = (table: string, payments: string) => `
     SELECT date(t.created_at, 'localtime') AS date, t.total_amount AS revenue_usd,
