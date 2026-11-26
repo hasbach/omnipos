@@ -97,6 +97,12 @@ Other items: _(add fixes and ideas here)_
 - [x] Cloud migrations applied 2026-11-26: `2026-11-26_or_owner_stakeholder.sql` (or_tenant_config.owner_stakeholder_id),
       `2026-11-26b_users_active.sql` (users.active), `2026-11-26_product_bundles.sql` (products.is_bundle,
       product_bundle_items, transaction_items bundle_* columns, sync_changed_tables knows product_bundle_items).
+- [ ] **Growth backlog** — [docs/plans/2026-11-26-growth-backlog.md](docs/plans/2026-11-26-growth-backlog.md): 14 tasks,
+      each with a self-contained brief to paste into a new session. Priority 1: (1) payables & receivables in OR,
+      (2) 13-week cash forecast, (3) supplier invoice photo -> purchase (AI). Priority 2: (4) profit & break-even,
+      (5) margin erosion alerts, (6) cash tied up in stock / dead stock, (10) "bought together" -> bundle ideas,
+      (14) daily WhatsApp summary in Arabic. Priority 3-4: (7) supplier scorecard, (8) LBP rate alerts,
+      (9) seasonal demand forecast, (12) cashier risk alerts, (11) price suggestions, (13) "Ask your shop" assistant.
 - [ ] OmniPulse OR future: Restaurant recipe/BOM deduction (`enable_recipe_deduction`) once a Recipes module exists, and
       optional Python Google OR-Tools cloud microservice (`OR_SOLVER_URL`) for VRP/shift scheduling via
       `server/or/solver/orToolsCloudAdapter.ts`.
