@@ -97,12 +97,11 @@ Other items: _(add fixes and ideas here)_
 - [x] Cloud migrations applied 2026-11-26: `2026-11-26_or_owner_stakeholder.sql` (or_tenant_config.owner_stakeholder_id),
       `2026-11-26b_users_active.sql` (users.active), `2026-11-26_product_bundles.sql` (products.is_bundle,
       product_bundle_items, transaction_items bundle_* columns, sync_changed_tables knows product_bundle_items).
-- [ ] **Growth backlog** — [docs/plans/2026-11-26-growth-backlog.md](docs/plans/2026-11-26-growth-backlog.md): 14 tasks,
-      each with a self-contained brief to paste into a new session. Priority 1: (1) payables & receivables in OR,
-      (2) 13-week cash forecast, (3) supplier invoice photo -> purchase (AI). Priority 2: (4) profit & break-even,
-      (5) margin erosion alerts, (6) cash tied up in stock / dead stock, (10) "bought together" -> bundle ideas,
-      (14) daily WhatsApp summary in Arabic. Priority 3-4: (7) supplier scorecard, (8) LBP rate alerts,
-      (9) seasonal demand forecast, (12) cashier risk alerts, (11) price suggestions, (13) "Ask your shop" assistant.
+- [x] **Growth backlog** — [docs/plans/2026-11-26-growth-backlog.md](docs/plans/2026-11-26-growth-backlog.md): all 14
+      tasks shipped in 1.14.0 (see Shipped). Cloud migration `2026-11-27_or_payables_receivables.sql` applied 2026-11-26.
+- [ ] Growth follow-ups: try invoice photo scan and "Ask your shop" with a real Anthropic API key on a real register;
+      check the new screens in Arabic/French (RTL); WhatsApp Business API for a fully automatic morning summary;
+      `lbp_rounding_step` has no Settings field yet (defaults to 1,000 LBP).
 - [ ] OmniPulse OR future: Restaurant recipe/BOM deduction (`enable_recipe_deduction`) once a Recipes module exists, and
       optional Python Google OR-Tools cloud microservice (`OR_SOLVER_URL`) for VRP/shift scheduling via
       `server/or/solver/orToolsCloudAdapter.ts`.
@@ -114,6 +113,22 @@ Other items: _(add fixes and ideas here)_
 ---
 
 ## Shipped
+
+### 1.14.0 — Growth: the shop's CFO (2026-11-26)
+- **OmniPulse OR:** money owed both ways (supplier payment terms, due dates, 0-30/31-60/60+ aging, payables reserved in
+  spendable cash and runway, customers to chase); 13-week cash forecast; seasonal demand forecast (weekday, salary
+  days, holiday/Ramadan periods) feeding reorder quantities, with an accuracy tab; margin erosion alerts; advisory price
+  suggestions; supplier scorecard (the optimizer prefers the cheapest reliable supplier); "bought together" bundle
+  ideas; cashier risk alerts (admin only); daily owner summary (Arabic default) with "Send via WhatsApp".
+- **Reports:** Profit & break-even (this vs last month, daily sales target) and Inventory health (stock value, dead
+  stock, turns/GMROI, negative stock by cause).
+- **Purchases:** scan a supplier invoice photo/PDF into a purchase draft (Claude API key in Settings -> General,
+  remembered supplier item names, Arabic-aware matching).
+- **Products:** LBP rate alerts with one-click LBP repricing (rounded to 1,000 LBP by default).
+- **"Ask your shop" assistant** (admin/manager, new permission `assistant.use`): answers from read-only, shop-scoped
+  tools and shows the numbers it used.
+- **Fixes:** invoice edit history names the editor (was "Unknown user"); settlement keeps `deleted_at` when archiving;
+  chart axis labels no longer clipped.
 
 ### 1.13.6 — Real app version in Settings (2026-11-26)
 - Settings -> Updates, the dashboard and the POS update notice showed "v2.5.0" forever: they read
