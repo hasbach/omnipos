@@ -1,4 +1,5 @@
 import { readSupplierScorecard } from './supplierScorecardData.js';
+import { loadForecastAccuracy, saveForecastConfig } from "./demandForecastData.js";
 import { loadCashForecast } from "./cashForecastData.js";
 import { loadOpenPayablesReceivables } from "./payablesData.js";
 import { stableGlobalId, rowGlobalId } from "./stableId.js";
@@ -68,6 +69,13 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
       if (!result.suppliers.length) return res.status(404).json({ error: 'Supplier not found' });
       res.json(result);
     } catch (e) { fail(res, e); }
+  });
+
+  app.get('/api/or/forecast-accuracy', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(loadForecastAccuracy(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+  app.put('/api/or/forecast-config', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(saveForecastConfig(req.session.tenantId, req.body)); } catch (e) { fail(res, e); }
   });
 
   // Public (for authenticated tenants): returns whether the OmniPulse OR add-on is licensed

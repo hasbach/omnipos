@@ -1,4 +1,5 @@
 import { lbpBriefingItems } from '../lbpRateAlertData.js';
+import { loadDemandForecasts } from "./demandForecastData.js";
 import { cashForecastBriefing } from "./cashForecastData.js";
 // Unified Nightly OR Pipeline (`runNightlyOrPipeline`): single idempotent pipeline per (tenant, business_date).
 // 1. Sync & classify `or_sku_metrics` (30-day weighted velocity, DOS, ABC class)
@@ -90,6 +91,8 @@ function computeSkuMetrics(tenantId: number): number {
     entry.dailyQtys.push(q);
   }
 
+  const forecasts = loadDemandForecasts(tenantId);
+
   // Sort by 30d revenue descending for Pareto ABC classification (top 80% = A, next 15% = B, rest = C)
   const ranked = products
     .map((p) => {
@@ -97,13 +100,14 @@ function computeSkuMetrics(tenantId: number): number {
       const d7 = s.qty7 / 7;
       const d14 = s.qty14 / 14;
       const d30 = s.qty30 / 30;
-      const weightedDaily = 0.5 * d7 + 0.3 * d14 + 0.2 * d30;
+      const forecast = forecasts.get(p.id);
+      const weightedDaily = forecast?.method === "seasonal-trend" ? forecast.daily : 0.5 * d7 + 0.3 * d14 + 0.2 * d30;
       // Empirical 30-day daily std dev (including zero-sale days)
       const mean = d30;
       const sumSqNonZero = s.dailyQtys.reduce((acc, q) => acc + (q - mean) ** 2, 0);
       const zeroDays = Math.max(0, 30 - s.dailyQtys.length);
       const variance = (sumSqNonZero + zeroDays * mean * mean) / 30;
-      const std30 = Math.sqrt(Math.max(0, variance));
+      const std30 = forecast?.method === "seasonal-trend" ? forecast.residualStd : Math.sqrt(Math.max(0, variance));
       const stock = Number(p.stock) || 0;
       const dos = weightedDaily > 0.0001 ? round2(stock / weightedDaily) : null;
       const cashVelocity = round2(s.margin30 > 0 ? s.margin30 : s.rev30 * 0.25);
@@ -111,6 +115,7 @@ function computeSkuMetrics(tenantId: number): number {
         product_id: p.id,
         dailySales: round2(weightedDaily),
         std30: round2(std30),
+        leadDays: forecast?.method === "seasonal-trend" ? forecast.leadDays : 2,
         rev30d: round2(s.rev30),
         margin30d: round2(s.margin30),
         dos,
@@ -148,7 +153,7 @@ function computeSkuMetrics(tenantId: number): number {
       else if (share <= 0.95) abc = "B";
     }
     const z = abc === "A" ? 1.65 : abc === "B" ? 1.28 : 0.84;
-    const safetyStock = round2(z * r.std30 * Math.sqrt(2)); // 2-day baseline lead time
+    const safetyStock = round2(z * r.std30 * Math.sqrt(r.leadDays)); // supplier lead time, 2-day fallback
     upsert.run(tenantId, r.product_id, r.dailySales, r.std30, safetyStock, r.rev30d, r.margin30d, r.dos, abc, r.cashVelocity);
   }
   return ranked.length;

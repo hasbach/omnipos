@@ -1,4 +1,5 @@
 import SuppliersTab from './or/SuppliersTab';
+import ForecastTab from './or/ForecastTab';
 import CashForecastTab from './or/CashForecastTab';
 import React, { useEffect, useState } from 'react';
 import {
@@ -16,7 +17,7 @@ import type { Product, Stakeholder } from '../types';
 import MarginsTab from './or/MarginsTab';
 import { BundleIdeas } from './or/BundleIdeas';
 
-type TabKey = 'suppliers' | 'briefing' | 'cash-forecast' | 'margins' | 'bundle-ideas' | 'draws' | 'pos' | 'cycle' | 'settings';
+type TabKey = 'suppliers' | 'briefing' | 'cash-forecast' | 'margins' | 'bundle-ideas' | 'draws' | 'pos' | 'cycle' | 'settings' | 'forecast';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -492,6 +493,7 @@ export default function OmniPulseOR() {
         items={[
           { value: 'suppliers', label: t('sc_title') },
           { value: 'briefing', label: t('or_tab_briefing', 'Morning Briefing') },
+          { value: 'forecast', label: t('df_title') },
           { value: 'cash-forecast', label: t('cf_title') },
           { value: 'margins', label: t('or_margins') },
           { value: 'bundle-ideas', label: t('bi_title') },
@@ -503,6 +505,7 @@ export default function OmniPulseOR() {
       />
 
       {tab === 'suppliers' && <SuppliersTab />}
+      {tab === 'forecast' && <ForecastTab />}
       {tab === 'cash-forecast' && <CashForecastTab />}
       {tab === 'margins' && <MarginsTab />}
       {tab === 'bundle-ideas' && <BundleIdeas products={products} onSaved={loadAll} />}
