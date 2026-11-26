@@ -11,8 +11,9 @@ import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { usePermissions } from '../lib/usePermissions';
 import type { Product, Stakeholder } from '../types';
+import MarginsTab from './or/MarginsTab';
 
-type TabKey = 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings';
+type TabKey = 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings' | 'margins';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -490,10 +491,12 @@ export default function OmniPulseOR() {
           { value: 'draws', label: t('or_tab_draws', 'Owner Draws') },
           { value: 'pos', label: t('or_tab_pos', 'PO Cash-Lock') },
           { value: 'cycle', label: t('or_tab_cycle', '5-Min Cycle Count') },
+          { value: 'margins', label: t('or_margins') },
           ...(can('or.manage') ? [{ value: 'settings', label: t('or_tab_settings', 'Settings & Presets') }] : []),
         ]}
       />
 
+      {tab === 'margins' && <MarginsTab />}
       {/* TAB 1: MORNING BRIEFING */}
       {tab === 'briefing' && sp && (
         <div className="space-y-6">
