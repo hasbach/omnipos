@@ -168,6 +168,8 @@ function isCustomerStandingDiscount(tenantId: number, stakeholderId: unknown, pe
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
   // --- OmniPulse OR (paid add-on module) ---
+  { method: 'GET', pattern: '/api/or/forecast-accuracy', need: 'or.view' },
+  { method: 'PUT', pattern: '/api/or/forecast-config', need: 'or.manage' },
   { method: 'GET', pattern: '/api/or/cash-forecast', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/status', need: null },
   { method: 'GET', pattern: '/api/or/margins', need: 'or.view' },
