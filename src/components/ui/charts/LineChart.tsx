@@ -6,6 +6,7 @@ export interface LineChartSeries {
   name: string;
   color?: string;
   data: number[];
+  reference?: boolean;
 }
 
 export interface LineChartProps {
@@ -73,6 +74,21 @@ export function LineChart({ labels, series, height = 220, width = 640, valueForm
 
           {series.map((s, si) => {
             const color = s.color || DEFAULT_COLORS[si % DEFAULT_COLORS.length];
+            if (s.reference && s.data.length) {
+              const y = yFor(s.data[0]);
+              return (
+                <line
+                  key={s.name}
+                  x1={0}
+                  x2={innerW}
+                  y1={y}
+                  y2={y}
+                  stroke={color}
+                  strokeWidth={2}
+                  strokeDasharray="5 4"
+                />
+              );
+            }
             const points = s.data.map((v, i) => `${xFor(i)},${yFor(v)}`).join(' ');
             return (
               <g key={s.name}>
