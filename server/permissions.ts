@@ -168,7 +168,10 @@ function isCustomerStandingDiscount(tenantId: number, stakeholderId: unknown, pe
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
   // --- OmniPulse OR (paid add-on module) ---
+  { method: 'GET', pattern: '/api/or/cash-forecast', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/status', need: null },
+  { method: 'GET', pattern: '/api/or/margins', need: 'or.view' },
+  { method: 'GET', pattern: '/api/or/bundle-ideas', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/cycle-counts', need: ['or.cycle_count', 'or.view'] },
   { method: 'GET', pattern: '/api/or/cycle-counts/*', need: ['or.cycle_count', 'or.view'] },
   { method: 'POST', pattern: '/api/or/cycle-counts/:id/submit', need: ['or.cycle_count', 'or.manage'] },
@@ -237,6 +240,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/reports/daily-sales-by-customer', need: ['daily_sales.view', 'reports.view'] },
   { method: 'GET', pattern: '/api/reports/daily-sales-by-category', need: ['daily_sales.view', 'reports.view'] },
   { method: 'GET', pattern: '/api/reports/sales', need: 'reports.view' },
+  { method: 'GET', pattern: '/api/reports/inventory-health', need: 'reports.view' },
   { method: 'GET', pattern: '/api/reports/profit', need: 'reports.view' },
   { method: 'GET', pattern: '/api/reports/summary', need: OVERVIEW_OR_REPORTS },
   { method: 'GET', pattern: '/api/reports/sales-trend', need: OVERVIEW_OR_REPORTS },

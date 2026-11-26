@@ -1,3 +1,4 @@
+import { loadCashForecast } from "./cashForecastData.js";
 import { loadOpenPayablesReceivables } from "./payablesData.js";
 import { stableGlobalId, rowGlobalId } from "./stableId.js";
 // Express routes for OmniPulse OR (paid add-on module).
@@ -40,8 +41,13 @@ import {
 import { runNightlyOrPipeline } from "./pipeline.js";
 import { applyOptimizationPlan, runOrOptimizer } from "./optimizer.js";
 import { localDateIso } from "./coreBridge.js";
+import { loadMarginAlerts } from "./marginAlerts.js";
+import { readBundleIdeas } from "./bundleIdeasData.js";
 
 export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) {
+  app.get('/api/or/bundle-ideas', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(readBundleIdeas(req.session.tenantId, req.query)); } catch (e) { fail(res, e); }
+  });
   const fail = (res: any, e: any) => {
     if (e instanceof ValidationError) return res.status(e.status).json(validationErrorBody(e));
     if (e?.code === "OR_OPTIMIZER_BUSY" || e?.code === "OR_OPTIMIZER_TIMEOUT") {
@@ -60,6 +66,14 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
     } catch (e) {
       fail(res, e);
     }
+  });
+
+  app.get("/api/or/cash-forecast", authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(loadCashForecast(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+
+  app.get("/api/or/margins", authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(loadMarginAlerts(req.session.tenantId)); } catch (e) { fail(res, e); }
   });
 
   // --- Morning Briefing / Overview ---

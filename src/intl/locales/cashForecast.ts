@@ -1,0 +1,32 @@
+﻿export default {
+  en: {
+    cf_brief_title: 'Cash shortfall forecast: {date}',
+    cf_brief_details: 'Projected closing {closing} falls below drawer float {float}. Review Cash Forecast for the largest outflows.',
+    cf_title: 'Cash Forecast', cf_assumptions: '91 days · 8-week weekday cash sales · collections: 80% (0–30 days), 50% (31–60), 20% (older or undated), spread over 30 days. Future stock purchases beyond locked POs are excluded.',
+    cf_refresh: 'Refresh', cf_error: 'Could not load the cash forecast.', cf_loading: 'Loading forecast…',
+    cf_lowest: 'Lowest balance day', cf_shortfall: 'First closing below drawer float', cf_none: 'No shortfall in 91 days',
+    cf_closing: 'Closing balance', cf_float: 'Minimum drawer float', cf_drivers: 'Biggest outflows through the first shortfall (or lowest day)',
+    cf_date: 'Date', cf_kind: 'Type', cf_name: 'Description', cf_amount: 'Amount (USD)', cf_obligation: 'Fixed obligation',
+    cf_payable: 'Supplier payable', cf_po: 'Locked PO', cf_draw: 'Owner draws', cf_daily: 'Daily projection (USD)', cf_opening: 'Opening', cf_inflows: 'Inflows', cf_outflows: 'Outflows',
+  },
+  ar: {
+    cf_brief_title: '??? ???? ?????: {date}',
+    cf_brief_details: '???? ??????? ??????? {closing} ??? ?? ???? ?????? ??????? {float}. ???? ?????? ????? ?????? ???? ?????????.',
+    cf_title: 'توقعات النقد', cf_assumptions: '٩١ يوماً · مبيعات نقدية حسب أيام الأسبوع خلال ٨ أسابيع · التحصيل: ٨٠٪ (٠–٣٠ يوماً)، ٥٠٪ (٣١–٦٠)، ٢٠٪ (أقدم أو دون تاريخ)، موزع على ٣٠ يوماً. مشتريات المخزون المستقبلية خارج الطلبات المحجوزة غير مشمولة.',
+    cf_refresh: 'تحديث', cf_error: 'تعذر تحميل توقعات النقد.', cf_loading: 'جارٍ تحميل التوقعات…',
+    cf_lowest: 'يوم أدنى رصيد', cf_shortfall: 'أول إقفال دون الحد الأدنى للصندوق', cf_none: 'لا عجز خلال ٩١ يوماً',
+    cf_closing: 'رصيد الإقفال', cf_float: 'الحد الأدنى للصندوق', cf_drivers: 'أكبر المدفوعات حتى أول عجز (أو أدنى رصيد)',
+    cf_date: 'التاريخ', cf_kind: 'النوع', cf_name: 'الوصف', cf_amount: 'المبلغ (دولار)', cf_obligation: 'التزام ثابت',
+    cf_payable: 'مستحقات المورد', cf_po: 'طلب شراء محجوز', cf_draw: 'مسحوبات المالك', cf_daily: 'التوقع اليومي (دولار)', cf_opening: 'الافتتاح', cf_inflows: 'المقبوضات', cf_outflows: 'المدفوعات',
+  },
+  fr: {
+    cf_brief_title: 'D?ficit de tr?sorerie pr?vu : {date}',
+    cf_brief_details: 'Le solde pr?vu {closing} est inf?rieur au fonds de caisse {float}. Consultez les pr?visions pour les principales sorties.',
+    cf_title: 'Prévisions de trésorerie', cf_assumptions: '91 jours · ventes comptant par jour de semaine sur 8 semaines · recouvrement : 80 % (0–30 jours), 50 % (31–60), 20 % (plus anciens ou sans date), sur 30 jours. Achats futurs hors commandes bloquées exclus.',
+    cf_refresh: 'Actualiser', cf_error: 'Impossible de charger les prévisions.', cf_loading: 'Chargement des prévisions…',
+    cf_lowest: 'Jour du solde minimum', cf_shortfall: 'Première clôture sous le fonds de caisse', cf_none: 'Aucun déficit sur 91 jours',
+    cf_closing: 'Solde de clôture', cf_float: 'Fonds de caisse minimum', cf_drivers: 'Principales sorties jusqu’au premier déficit (ou solde minimum)',
+    cf_date: 'Date', cf_kind: 'Type', cf_name: 'Description', cf_amount: 'Montant (USD)', cf_obligation: 'Charge fixe',
+    cf_payable: 'Dette fournisseur', cf_po: 'Commande bloquée', cf_draw: 'Prélèvements du propriétaire', cf_daily: 'Projection quotidienne (USD)', cf_opening: 'Ouverture', cf_inflows: 'Entrées', cf_outflows: 'Sorties',
+  },
+};
