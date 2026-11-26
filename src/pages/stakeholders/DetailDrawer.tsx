@@ -1,3 +1,4 @@
+import { SupplierDrawerScorecard } from '../or/SuppliersTab';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Drawer, Tabs, Badge, Button, DataTable, Skeleton } from '../../components/ui';
 import type { DataTableColumn } from '../../components/ui';
@@ -131,6 +132,7 @@ export function DetailDrawer({ open, onClose, stakeholder, currencies, onEdit, o
       }
     >
       <div className="flex flex-col gap-4">
+        {stakeholder.type === 'supplier' && <SupplierDrawerScorecard key={stakeholder.id} supplierId={stakeholder.id} />}
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={stakeholder.type === 'customer' ? 'primary' : 'info'}>
             {stakeholder.type === 'customer' ? t('stk_type_customer') : t('stk_type_supplier')}
