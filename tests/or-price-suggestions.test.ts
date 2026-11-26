@@ -45,11 +45,17 @@ test('candidate optimum respects target and ten percent volume cap; impossible c
   assert.equal(evaluateCandidates({ ...product, cost: 9.9 }, 100, 50, 19.8, fit), null);
 });
 
-test('insufficient-data fallback uses only margin target and does not imply measured sensitivity', () => {
-  const result = evaluateCandidates(product, 10, 20, 7.5, null)!;
-  assert.equal(result.suggested_price, 7.5);
-  assert.equal(result.units_change, 0);
-  assert.equal(result.profit_change, -25);
+test('insufficient-data fallback never cuts a healthy price and raises one below the target margin', () => {
+  // Margin 40% already beats the 20% target: without measured sensitivity, keep today's price.
+  const keep = evaluateCandidates(product, 10, 20, 7.5, null)!;
+  assert.equal(keep.suggested_price, product.price);
+  assert.equal(keep.units_change, 0);
+  assert.equal(keep.profit_change, 0);
+  // Margin 10% is under target: today's price is not allowed, so the target-margin price is suggested.
+  const raise = evaluateCandidates({ ...product, cost: 9 }, 10, 20, 11.25, null)!;
+  assert.equal(raise.suggested_price, 11.25);
+  assert.equal(raise.units_change, 0);
+  assert.ok(raise.profit_change > 0);
 });
 
 test('USD candidates round to cents and LBP equivalents use shop rounding', () => {
@@ -66,7 +72,8 @@ test('loader includes live/archive net line sales, excludes deleted/incomplete/o
   const tenant = seedTenant(app.db, 'Price suggestions', 'price-suggestions@example.com');
   const other = seedTenant(app.db, 'Other prices', 'price-suggestions-other@example.com');
   const id = seedProduct(app.db, tenant, { name: 'Price product', barcode: 'PRICE-TEST', price: 10 });
-  app.db.prepare('UPDATE products SET cost = 6 WHERE id = ?').run(id);
+  // Margin under the 20% target, so the product is listed (a raise) even when it has no recent sales.
+  app.db.prepare('UPDATE products SET cost = 9 WHERE id = ?').run(id);
   const sale = await app.api('POST', '/api/transactions', { tenantId: tenant, body: {
     type: 'sale', items: [{ id, quantity: 10, price: 10, discount_type: 'percentage', discount_value: 10 }],
     currency: 'USD', exchange_rate: 1, payments: [],

@@ -1,5 +1,5 @@
 import { db } from '../db.js';
-import { localCurrencyFor } from '../localCurrency.js';
+import { localCurrencyFor, localRoundingStep } from '../localCurrency.js';
 import { roundedLocalPrice } from '../lbpRateAlerts.js';
 import { suggestedPrice } from './marginAlerts.js';
 import { fitElasticity, categoryElasticities, evaluateCandidates, type SaleDay, type PriceProduct, type Elasticity } from './priceSuggestions.js';
@@ -11,7 +11,7 @@ export function loadPriceSuggestions(tenant: number) {
   let overrides: Record<string, unknown> = {};
   try { const parsed = JSON.parse(settings.margin_target_pct_by_category || '{}'); if (parsed && typeof parsed === 'object') overrides = parsed; } catch { /* default target */ }
   const localCurrency = localCurrencyFor(tenant);
-  const rounding = Number(settings.lbp_rounding_step) > 0 ? Number(settings.lbp_rounding_step) : 1;
+  const rounding = localRoundingStep(settings.lbp_rounding_step, localCurrency?.rate);
   const products = db.prepare(`SELECT id, name, category, price, cost FROM products WHERE tenant_id = ?
     AND deleted_at IS NULL AND IFNULL(active, 1) = 1 AND IFNULL(is_bundle, 0) = 0 AND price > 0 AND cost > 0`).all(tenant) as PriceProduct[];
   const branch = (tx: string, items: string) => `SELECT i.product_id AS product_id, date(t.created_at, 'localtime') AS day,
@@ -43,6 +43,8 @@ export function loadPriceSuggestions(tenant: number) {
       source: own ? 'own' : fit ? 'category' : 'insufficient',
       confidence: own && own.r_squared >= 0.5 && own.standard_error <= 0.5 ? 'high' : fit && !own ? 'medium' : 'low',
       fit, candidate, suggested_price_lbp: candidate && localCurrency ? roundedLocalPrice(candidate.suggested_price, localCurrency.rate, rounding) : null };
-  }).sort((a, b) => (b.candidate?.profit_change ?? -Infinity) - (a.candidate?.profit_change ?? -Infinity) || a.name.localeCompare(b.name));
+  // Only actionable rows: a suggestion equal to today's price is "keep", not advice.
+  }).filter(r => r.candidate && Math.abs(r.candidate.suggested_price - r.price) >= 0.005)
+    .sort((a, b) => (b.candidate?.profit_change ?? -Infinity) - (a.candidate?.profit_change ?? -Infinity) || a.name.localeCompare(b.name));
   return { products: results, localCurrency };
 }

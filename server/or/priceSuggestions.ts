@@ -58,7 +58,9 @@ export function categoryElasticities(products: PriceProduct[], fits: Map<number,
 
 export function evaluateCandidates(p: PriceProduct, units: number, target: number, targetPrice: number, fit: Elasticity | null) {
   const baseline = units * (p.price - p.cost);
-  const prices = new Set<number>([Math.round(targetPrice * 100) / 100]);
+  // Today's price is always an option, so "keep the price" wins unless a change is expected to earn
+  // more; the target-margin price is only a candidate, never forced (it would cut a healthy price).
+  const prices = new Set<number>([Math.round(p.price * 100) / 100, Math.round(targetPrice * 100) / 100]);
   if (fit) for (let step = -20; step <= 30; step++) prices.add(Math.round(p.price * (1 + step * 0.005) * 100) / 100);
   const candidates = [...prices].filter(price => price > 0 && (1 - p.cost / price) * 100 >= target - 1e-9)
     .map(price => {

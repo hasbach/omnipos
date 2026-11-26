@@ -28,10 +28,6 @@ export function LineChart({ labels, series, height = 220, width = 640, valueForm
     /* charts can be used outside I18nProvider in rare cases. */
   }
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const padding = { top: 16, right: 16, bottom: 28, left: 44 };
-  const innerW = width - padding.left - padding.right;
-  const innerH = height - padding.top - padding.bottom;
-
   const allValues = series.flatMap((s) => s.data);
   // Round the axis out to a "nice" step (1/2/2.5/5 × 10^n over 4 gridlines) so labels read
   // $0 / $150 / $300 … rather than $152.76 / $305.51.
@@ -48,11 +44,17 @@ export function LineChart({ labels, series, height = 220, width = 640, valueForm
   const min = Math.floor(rawMin / step) * step;
   const range = max - min || 1;
 
+  const fmt = valueFormatter || ((v: number) => formatNumber(v, { decimals: 0 }));
+  // Size the left gutter to the widest axis label (~6px per char at 10px) so "$10,000.00" isn't clipped.
+  const tickCount = Math.round(range / step);
+  const widestTick = Math.max(0, ...Array.from({ length: tickCount + 1 }, (_, i) => fmt(Math.round((max - step * i) / step) * step).length));
+  const padding = { top: 16, right: 16, bottom: 28, left: Math.max(44, widestTick * 6 + 14) };
+  const innerW = width - padding.left - padding.right;
+  const innerH = height - padding.top - padding.bottom;
+
   const n = labels.length;
   const xFor = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * innerW);
   const yFor = (v: number) => innerH - ((v - min) / range) * innerH;
-
-  const fmt = valueFormatter || ((v: number) => formatNumber(v, { decimals: 0 }));
 
   return (
     <div className={['relative w-full', className].join(' ')}>

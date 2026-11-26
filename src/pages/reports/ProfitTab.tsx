@@ -101,7 +101,7 @@ export function ProfitTab() {
     day: 'numeric', month: 'short', timeZone: 'UTC',
   }).format(new Date(day + 'T00:00:00Z'));
   const series: LineChartSeries[] = [{ name: t('rep_daily_sales', 'Sales'), data: currentDays.map((day) => day.revenue) }];
-  if (dailySalesTarget !== null) {
+  if (dailySalesTarget !== null && dailySalesTarget > 0) {
     series.push({
       name: t('rep_profit_break_even', 'Break-even'),
       color: 'var(--color-warning)',
@@ -132,6 +132,9 @@ export function ProfitTab() {
           <p className="mb-3 text-sm font-medium">
             {dailySalesTarget === null
               ? t('rep_profit_no_target', 'A positive gross margin is needed to calculate the break-even target.')
+              : dailySalesTarget <= 0
+              // No fixed bills recorded and no expenses last month: a $0 target would read as "nothing needed".
+              ? t('rep_profit_no_bills', 'Add your monthly bills (rent, salaries, generator) in OmniPulse OR settings, or record last month’s expenses, to see your daily break-even target.')
               : t('rep_profit_target', 'You need {sales} in sales per day to cover your bills.')
                 .replace('{sales}', usd(dailySalesTarget))}
           </p>

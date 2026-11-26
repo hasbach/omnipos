@@ -1,5 +1,5 @@
 import { db, logAction } from './db.js';
-import { effectiveLocalRate } from './localCurrency.js';
+import { effectiveLocalRate, localRoundingStep } from './localCurrency.js';
 import { localPricePatch, staleLocalPrices, paymentCurrencyShares } from './lbpRateAlerts.js';
 import { writeProductFields } from './productEditFields.js';
 import locales from '../src/intl/locales/lbpRateAlerts.js';
@@ -13,7 +13,7 @@ export function rateReview(tenantId: number, stakeholderId?: number) {
   const local = effectiveLocalRate(tenantId, stakeholderId);
   const settings = Object.fromEntries((db.prepare("SELECT key, value FROM settings WHERE tenant_id = ? AND key IN ('lbp_rounding_step', 'lbp_stale_tolerance_pct')").all(tenantId) as any[]).map(r => [r.key, r.value]));
   const tolerance = Number.isFinite(Number(settings.lbp_stale_tolerance_pct)) && Number(settings.lbp_stale_tolerance_pct) >= 0 && Number(settings.lbp_stale_tolerance_pct) <= 100 ? Number(settings.lbp_stale_tolerance_pct) : 3;
-  const step = Number.isFinite(Number(settings.lbp_rounding_step)) && Number(settings.lbp_rounding_step) > 0 ? Number(settings.lbp_rounding_step) : 1;
+  const step = localRoundingStep(settings.lbp_rounding_step, local?.rate);
   const products = local ? (db.prepare('SELECT * FROM products WHERE tenant_id = ? AND deleted_at IS NULL AND price_lbp IS NOT NULL').all(tenantId) as any[])
     .filter(p => staleLocalPrices(p, local.rate, tolerance, step))
     .map(p => ({ ...p, proposed: localPricePatch(p, local.rate, step) })) : [];
