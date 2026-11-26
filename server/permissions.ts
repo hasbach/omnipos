@@ -182,6 +182,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/or/suppliers/:id/scorecard', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/status', need: null },
   { method: 'GET', pattern: '/api/or/margins', need: 'or.view' },
+  { method: 'GET', pattern: '/api/or/price-suggestions', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/bundle-ideas', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/cycle-counts', need: ['or.cycle_count', 'or.view'] },
   { method: 'GET', pattern: '/api/or/cycle-counts/*', need: ['or.cycle_count', 'or.view'] },

@@ -1,3 +1,4 @@
+import { loadPriceSuggestions } from './priceSuggestionsData.js';
 import { readSupplierScorecard } from './supplierScorecardData.js';
 import { ownerSummaryRoute, ownerSummarySettingsRoute } from './ownerSummaryData.js';
 import { loadForecastAccuracy, saveForecastConfig } from "./demandForecastData.js";
@@ -103,6 +104,10 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
 
   app.get("/api/or/margins", authenticate, requireOrLicense, (req: any, res: any) => {
     try { res.json(loadMarginAlerts(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+
+  app.get('/api/or/price-suggestions', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(loadPriceSuggestions(req.session.tenantId)); } catch (e) { fail(res, e); }
   });
 
   // --- Morning Briefing / Overview ---
