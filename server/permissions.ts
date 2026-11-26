@@ -300,6 +300,8 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'POST', pattern: '/api/import/:entity', need: 'import.run' },
 
   // --- products (GET list / GET :query stay open for the POS) ---
+  { method: 'GET', pattern: '/api/local-rate/stale-prices', need: 'products.edit' },
+  { method: 'POST', pattern: '/api/local-rate/update-prices', need: 'products.edit' },
   { method: 'GET', pattern: '/api/products/export', need: 'products.view' },
   { method: 'POST', pattern: '/api/products/bulk-import', need: 'products.edit' },
   { method: 'POST', pattern: '/api/products/bulk-price', need: 'products.edit' },

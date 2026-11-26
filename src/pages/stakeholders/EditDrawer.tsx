@@ -112,12 +112,15 @@ export function EditDrawer({ open, onClose, stakeholder, defaultType, onSaved, c
         payload.balance = Number(form.balance) || 0;
       }
 
+      let savedId = stakeholder?.id;
       if (isEdit && stakeholder?.id) {
         await api.put(`/api/stakeholders/${stakeholder.id}`, payload);
       } else {
-        await api.post('/api/stakeholders', payload);
+        const created = await api.post<{ id: number }>('/api/stakeholders', payload);
+        savedId = created.id;
       }
       toast.success(t('set_saved_toast', 'Saved'));
+      window.dispatchEvent(new CustomEvent('lbp-rate-changed', { detail: savedId }));
       onSaved();
       onClose();
     } catch (err: any) {

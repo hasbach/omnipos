@@ -1,3 +1,4 @@
+import { lbpBriefingItems } from '../lbpRateAlertData.js';
 import { cashForecastBriefing } from "./cashForecastData.js";
 // Unified Nightly OR Pipeline (`runNightlyOrPipeline`): single idempotent pipeline per (tenant, business_date).
 // 1. Sync & classify `or_sku_metrics` (30-day weighted velocity, DOS, ABC class)
@@ -312,6 +313,8 @@ export function runNightlyOrPipeline(
       actionsCreated++;
     }
     for (const item of marginBriefingItems(tenantId)) { insAction.run(tenantId, runDate, item.priority, item.category, item.title, item.details, "PRODUCT", item.reference_id); actionsCreated++; }
+
+    for (const item of lbpBriefingItems(tenantId, runDate)) { insAction.run(...item); actionsCreated++; }
 
     // Retire today's open items that this run no longer produced.
     const stale = db
