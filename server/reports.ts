@@ -10,6 +10,7 @@
 // totals). Tax is never part of revenue — it's reported separately. This is computed once, by
 // computeAllocatedLines() below, and every per-line report (by-product, by-category, by-customer,
 // by-cashier) is built from that same array so they all reconcile with /api/reports/summary.
+import { inventoryHealthHandler } from "./reports/inventoryHealth.js";
 import { db } from "./db.js";
 import { lineNet, globalDiscountAmount } from "./reports/sales.js";
 import { readProfitReport } from "./reports/profitQuery.js";
@@ -489,6 +490,7 @@ function txCount(tenantId: number, from: string, to: string): number {
 // ---------------------------------------------------------------------------
 
 export function setupReportRoutes(app: any, authenticate: any) {
+  app.get("/api/reports/inventory-health", authenticate, inventoryHealthHandler(db));
   app.get("/api/reports/profit", authenticate, (req: any, res: any) => {
     try {
       res.json(readProfitReport(req.session.tenantId));
