@@ -413,3 +413,22 @@ test("PUT accepts entry-currency metadata (currency/exchange_rate) without touch
   const badCur = await app.api("PUT", `/api/transactions/${id}`, { tenantId, body: { items: [{ product_id: productId, quantity: 2, unit_price: 3 }], currency: "  " } });
   assert.equal(badCur.status, 400);
 });
+
+test("invoice edit history names the user who edited a purchase or a sale", async () => {
+  const editor = Number(app.db.prepare("INSERT INTO users (tenant_id, name, role, pin) VALUES (?, 'Maya Editor', 'manager', '4321')").run(tenantId).lastInsertRowid);
+  const productId = seedProduct(app.db, tenantId, { barcode: "EDIT-WHO", name: "Who Edited", price: 10, stock: 20 });
+  for (const type of ["purchase", "sale"]) {
+    const created = await app.api("POST", "/api/transactions", {
+      tenantId, body: { type, items: [{ id: productId, quantity: 2, price: 4 }], currency: "USD", exchange_rate: 1, payments: [] },
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const put = await app.api("PUT", `/api/transactions/${created.body.id}`, {
+      tenantId, body: { items: [{ product_id: productId, quantity: 3, unit_price: 4 }], user_id: editor, reason: "Wrong quantity" },
+    });
+    assert.equal(put.status, 200, JSON.stringify(put.body));
+    const edits = await app.api("GET", `/api/transactions/${created.body.id}/edits`, { tenantId });
+    assert.equal(edits.status, 200);
+    assert.equal(edits.body[0].user_id, editor, `${type}: the edit records its user`);
+    assert.equal(edits.body[0].user_name, "Maya Editor", `${type}: the history shows the editor's name, not "Unknown user"`);
+  }
+});
