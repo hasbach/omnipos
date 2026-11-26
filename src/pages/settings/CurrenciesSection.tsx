@@ -1,3 +1,4 @@
+import { LbpPriceReview } from '../products/LbpPriceReview';
 import React, { useEffect, useState } from 'react';
 import {
   Card,
@@ -53,6 +54,7 @@ export function CurrenciesSection() {
         await api.post('/api/currencies', editing);
       }
       toast.success(t('set_saved_toast'));
+      window.dispatchEvent(new CustomEvent('lbp-rate-changed', { detail: 0 }));
       setEditing(null);
       fetchCurrencies();
     } catch (err: any) {
@@ -112,6 +114,7 @@ export function CurrenciesSection() {
 
   return (
     <Card>
+      <LbpPriceReview />
       <CardHeader>
         <div className="flex items-center gap-2 text-text-2">
           <Coins size={18} />

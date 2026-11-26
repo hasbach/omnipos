@@ -257,7 +257,8 @@ export const NATURAL_KEYS: Record<string, string[]> = {
 // migration get pushed once.
 export const OPTIONAL_CLOUD_COLUMNS: Record<string, string[]> = {
   or_owner_draws: ['core_cash_global_id'],
-  or_tenant_config: ['owner_stakeholder_id'],
+  or_tenant_config: ['owner_stakeholder_id', 'payables_reserve_days'],
+  or_supplier_profiles: ['payment_terms_days'],
   users: ['active'],
   stakeholders: ['local_rate', 'discount_percent'],
   transactions: ['local_rate', 'local_currency', 'order_global_id'],

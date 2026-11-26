@@ -1,3 +1,7 @@
+import { writeProductFields } from './productEditFields.js';
+import { setupLbpRateAlertRoutes, refreshLbpRateBriefing } from './lbpRateAlertData.js';
+import { setupAssistantRoutes } from './assistant/routes.js';
+import { setupPurchaseScanRoutes } from './purchaseScan/routes.js';
 import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
 import { buildStatement } from "./statement.js";
@@ -372,11 +376,14 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   // (debounced, push-only; the 10 s local check remains the safety net).
   const broadcast: Function = (...args: any[]) => { notifyLocalChange(); return rawBroadcast(...args); };
   setupReportRoutes(app, authenticate);
+  setupLbpRateAlertRoutes(app, authenticate, broadcast);
   setupImportRoutes(app, authenticate, broadcast);
   setupTenantResetRoutes(app, authenticate, broadcast, { purgeCloudTransactionalData });
   setupSettlementRoutes(app, authenticate, broadcast);
   setupCashFlowRoutes(app, authenticate, broadcast);
   setupCashAccountRoutes(app, authenticate, broadcast);
+  setupPurchaseScanRoutes(app, authenticate);
+  setupAssistantRoutes(app, authenticate);
   setupCommerceRoutes(app, authenticate);
   setupOrderRoutes(app, authenticate, broadcast);
   setupOrRoutes(app, authenticate, broadcast);
@@ -767,22 +774,22 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
       // Move payments
       db.prepare(`
-      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id)
-      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id
+      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id, deleted_at)
+      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id, deleted_at
       FROM payments WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
       // Move transaction items
       db.prepare(`
-      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id)
-      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id
+      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id, deleted_at)
+      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id, deleted_at
       FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
       // Move transactions
       db.prepare(`
-      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id)
-      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id
+      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id, deleted_at)
+      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id, deleted_at
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
@@ -807,8 +814,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       // used to just delete these with no trace anywhere, which meant every itemized cash-in/out
       // and its reason was permanently unrecoverable after every settlement.
       db.prepare(`
-        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id)
-        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id
+        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id, deleted_at)
+        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id, deleted_at
         FROM cash_flow WHERE tenant_id = ?
       `).run(tenantId);
 
@@ -1126,8 +1133,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         // POST /api/stock/adjust), because a form holding a stale stock value would otherwise silently
         // undo every sale made while it was open. COALESCE keeps the current value when it's omitted.
         // Absent `units` leaves the product's units untouched.
-        const info = db.prepare("UPDATE products SET name = ?, price = ?, price_lbp = ?, package_price = ?, package_price_lbp = ?, cost = ?, cost_lbp = ?, units_per_package = ?, stock = COALESCE(?, stock), reorder_point = ?, track_inventory = ?, category = ?, currency = ?, unit = ?, price_wholesale = ?, price_wholesale_lbp = ?, price_super_wholesale = ?, price_super_wholesale_lbp = ?, min_price = ? WHERE id = ? AND tenant_id = ?")
-          .run(name, price, price_lbp || null, package_price || null, package_price_lbp || null, cost || null, cost_lbp || null, units_per_package || 1, (stock === undefined || stock === null || stock === '') ? null : Number(stock), reorder_point || 0, track_inventory === 0 ? 0 : 1, category, currency, unit, price_wholesale || null, price_wholesale_lbp || null, price_super_wholesale || null, price_super_wholesale_lbp || null, min_price || null, id, tenantId);
+        const info = writeProductFields(tenantId, id, req.body);
         // Same tolerance as before for an unknown id (a no-op update), but never touch barcodes/units
         // of a product that isn't this tenant's.
         if (info.changes > 0) saveProductBundle(tenantId, Number(id), false, is_bundle, bundle_items);
@@ -1289,6 +1295,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       db.prepare("UPDATE currencies SET is_default = 0 WHERE tenant_id = ?").run(tenantId);
     }
     const info = db.prepare("INSERT INTO currencies (tenant_id, code, symbol, rate, is_default) VALUES (?, ?, ?, ?, ?)").run(tenantId, code, symbol, rate, is_default ? 1 : 0);
+    refreshLbpRateBriefing(tenantId);
     res.json({ id: info.lastInsertRowid });
   });
 
@@ -1300,6 +1307,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       db.prepare("UPDATE currencies SET is_default = 0 WHERE tenant_id = ?").run(tenantId);
     }
     db.prepare("UPDATE currencies SET code = ?, symbol = ?, rate = ?, is_default = ? WHERE id = ? AND tenant_id = ?").run(code, symbol, rate, is_default ? 1 : 0, id, tenantId);
+    refreshLbpRateBriefing(tenantId);
     res.json({ success: true });
     broadcast({ type: 'SETTINGS_UPDATED' }, tenantId);
   });
@@ -1386,6 +1394,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       upsert.run(tenantId, key, String(value));
     }
     logAction(tenantId, 1, 'Settings Updated', JSON.stringify(settings));
+    if ('lbp_stale_tolerance_pct' in settings || 'lbp_rounding_step' in settings) refreshLbpRateBriefing(tenantId);
     res.json({ success: true });
     broadcast({ type: 'SETTINGS_UPDATED' }, tenantId);
   });
@@ -1406,6 +1415,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
         writeBalanceLog(Number(result.lastInsertRowid), tenantId, 0, Number(balance), { source: 'opening', user_id: tenantUserId(tenantId, req.body.user_id), note: 'Opening balance at creation' });
       }
       logAction(tenantId, 1, 'Stakeholder Created', `Name: ${name}, Type: ${type}`);
+      if (req.body.local_rate != null) refreshLbpRateBriefing(tenantId);
       res.json({ id: result.lastInsertRowid });
     } catch (err: any) {
       console.error("Stakeholder Create Error:", err);
@@ -1438,6 +1448,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       db.prepare("UPDATE stakeholders SET balance_baseline = ? WHERE id = ? AND tenant_id = ?").run(Number(balance) - effect, req.params.id, tenantId);
       recomputeStakeholderBalance(Number(req.params.id), tenantId, { source: 'manual_edit', user_id: tenantUserId(tenantId, req.body.user_id), note: 'Balance edited manually' });
     }
+    if (req.body.local_rate !== undefined) refreshLbpRateBriefing(tenantId);
     logAction(tenantId, 1, 'Stakeholder Updated', `ID: ${req.params.id}, Name: ${name}, Type: ${type}`);
     res.json({ success: true });
   });

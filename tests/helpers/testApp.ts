@@ -45,6 +45,7 @@ export async function createTestApp(options: { broadcast?: (data: any, tenantId:
   // See server.ts: the import wizard needs a bigger body limit than the global default, mounted
   // route-scoped and before the global parser (which no-ops once req._body is already set).
   app.use('/api/import', express.json({ limit: '25mb' }));
+  app.use('/api/purchase-scan', express.json({ limit: '14mb' }));
   app.use('/api/commerce', express.raw({ type: 'image/webp', limit: '3mb' }));
   app.use(express.json());
   app.use(session({ secret: "test-secret", resave: false, saveUninitialized: false }));

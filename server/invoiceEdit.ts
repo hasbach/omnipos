@@ -664,8 +664,12 @@ function currentPaymentsSafe(dbRef: any, paymentsTable: string, id: number) {
 }
 
 export function getTransactionEdits(tenantId: number, transactionId: number) {
+  // user_name: the invoice detail drawer shows "By {user}" (it read "Unknown user" for every edit
+  // before, since only user_id was returned). Same join as getCashFlowEdits.
   const rows = db.prepare(
-    "SELECT * FROM transaction_edits WHERE tenant_id = ? AND transaction_id = ? ORDER BY created_at DESC"
+    `SELECT e.*, u.name AS user_name FROM transaction_edits e
+       LEFT JOIN users u ON u.id = e.user_id AND u.tenant_id = e.tenant_id
+      WHERE e.tenant_id = ? AND e.transaction_id = ? ORDER BY e.created_at DESC`
   ).all(tenantId, transactionId) as any[];
   return rows.map((r) => ({
     ...r,

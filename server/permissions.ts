@@ -18,6 +18,7 @@ import { db, logAction } from './db.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 
 export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
+  { area: 'assistant', keys: ['assistant.use'] },
   { area: 'dashboard', keys: ['dashboard.overview'] },
   { area: 'sales', keys: ['invoices.view', 'invoices.edit', 'invoices.delete', 'invoices.refund', 'daily_sales.view', 'live_monitor.view'] },
   { area: 'inventory', keys: ['products.view', 'products.edit', 'stock.view', 'stock.adjust'] },
@@ -61,10 +62,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
 
 // ---- storage -------------------------------------------------------------------------------------
 
-const ROLE_PERMISSIONS_VERSION = 4;
+const ROLE_PERMISSIONS_VERSION = 5;
 
 /**
- * v4 adds OmniPulse OR defaults. v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
+ * v5 adds shop assistant defaults. v4 adds OmniPulse OR defaults. v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
  * correct a day. Grant each once, then stamp the version. Idempotent and
  * lazy — runs the first time a tenant's stored map is read. Tenants without a stored map use the
  * defaults (which already include the new key) and are stamped without a rewrite.
@@ -93,6 +94,7 @@ function migrateStoredMap(tenantId: number | string, map: Record<string, string[
     };
     grantOnce(3, 'orders.');
     grantOnce(4, 'or.');
+    grantOnce(5, 'assistant.');
     db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(out));
   }
   db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions_version', ?)").run(tenantId, String(ROLE_PERMISSIONS_VERSION));
@@ -167,8 +169,21 @@ function isCustomerStandingDiscount(tenantId: number, stakeholderId: unknown, pe
 
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
+  { method: 'POST', pattern: '/api/assistant/ask', need: 'assistant.use' },
   // --- OmniPulse OR (paid add-on module) ---
+  { method: 'GET', pattern: '/api/or/owner-summary', need: 'or.manage' },
+  { method: 'GET', pattern: '/api/or/owner-summary-settings', need: 'or.manage' },
+  { method: 'PUT', pattern: '/api/or/owner-summary-settings', need: 'or.manage' },
+  { method: 'GET', pattern: '/api/or/forecast-accuracy', need: 'or.view' },
+  { method: 'PUT', pattern: '/api/or/forecast-config', need: 'or.manage' },
+  { method: 'GET', pattern: '/api/or/cashier-risk', need: 'or.manage' },
+  { method: 'GET', pattern: '/api/or/cash-forecast', need: 'or.view' },
+  { method: 'GET', pattern: '/api/or/suppliers/scorecard', need: 'or.view' },
+  { method: 'GET', pattern: '/api/or/suppliers/:id/scorecard', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/status', need: null },
+  { method: 'GET', pattern: '/api/or/margins', need: 'or.view' },
+  { method: 'GET', pattern: '/api/or/price-suggestions', need: 'or.view' },
+  { method: 'GET', pattern: '/api/or/bundle-ideas', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/cycle-counts', need: ['or.cycle_count', 'or.view'] },
   { method: 'GET', pattern: '/api/or/cycle-counts/*', need: ['or.cycle_count', 'or.view'] },
   { method: 'POST', pattern: '/api/or/cycle-counts/:id/submit', need: ['or.cycle_count', 'or.manage'] },
@@ -237,6 +252,8 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/reports/daily-sales-by-customer', need: ['daily_sales.view', 'reports.view'] },
   { method: 'GET', pattern: '/api/reports/daily-sales-by-category', need: ['daily_sales.view', 'reports.view'] },
   { method: 'GET', pattern: '/api/reports/sales', need: 'reports.view' },
+  { method: 'GET', pattern: '/api/reports/inventory-health', need: 'reports.view' },
+  { method: 'GET', pattern: '/api/reports/profit', need: 'reports.view' },
   { method: 'GET', pattern: '/api/reports/summary', need: OVERVIEW_OR_REPORTS },
   { method: 'GET', pattern: '/api/reports/sales-trend', need: OVERVIEW_OR_REPORTS },
   { method: 'GET', pattern: '/api/reports/by-product', need: OVERVIEW_OR_REPORTS },
@@ -293,6 +310,8 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'POST', pattern: '/api/import/:entity', need: 'import.run' },
 
   // --- products (GET list / GET :query stay open for the POS) ---
+  { method: 'GET', pattern: '/api/local-rate/stale-prices', need: 'products.edit' },
+  { method: 'POST', pattern: '/api/local-rate/update-prices', need: 'products.edit' },
   { method: 'GET', pattern: '/api/products/export', need: 'products.view' },
   { method: 'POST', pattern: '/api/products/bulk-import', need: 'products.edit' },
   { method: 'POST', pattern: '/api/products/bulk-price', need: 'products.edit' },
@@ -305,6 +324,10 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: '/api/stock/adjustments', need: 'stock.view' },
   { method: 'GET', pattern: '/api/stock/movements/:productId', need: 'stock.view' },
 
+  { method: 'GET', pattern: '/api/purchase-scan/key', need: 'settings.manage' },
+  { method: 'POST', pattern: '/api/purchase-scan/key', need: 'settings.manage' },
+  { method: 'POST', pattern: '/api/purchase-scan', need: 'purchases.edit' },
+  { method: 'POST', pattern: '/api/purchase-scan/mappings', need: 'purchases.edit' },
   // --- purchases ---
   { method: 'GET', pattern: '/api/purchases', need: 'purchases.view' },
   { method: 'GET', pattern: '/api/purchases/:id', need: 'purchases.view' },

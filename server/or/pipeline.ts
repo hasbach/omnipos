@@ -1,3 +1,7 @@
+import { lbpBriefingItems } from '../lbpRateAlertData.js';
+import { loadDemandForecasts } from "./demandForecastData.js";
+import { cashForecastBriefing } from "./cashForecastData.js";
+import { cashierRiskBriefing } from "./cashierRiskData.js";
 // Unified Nightly OR Pipeline (`runNightlyOrPipeline`): single idempotent pipeline per (tenant, business_date).
 // 1. Sync & classify `or_sku_metrics` (30-day weighted velocity, DOS, ABC class)
 // 2. Accrue today's `or_fixed_obligations` into `OPEX_RESERVE` bucket + ledger
@@ -11,6 +15,7 @@ import { computeOpexReserve, computeSpendableCash } from "./spendableCash.js";
 import { generateCycleCountSession, recordStockAnomaly } from "./cycleCount.js";
 import { isOrLicenseValid } from "./license.js";
 import { rowGlobalId, stableGlobalId } from "./stableId.js";
+import { marginBriefingItems } from "./marginAlerts.js";
 
 export interface PipelineSummary {
   run_date: string;
@@ -87,6 +92,8 @@ function computeSkuMetrics(tenantId: number): number {
     entry.dailyQtys.push(q);
   }
 
+  const forecasts = loadDemandForecasts(tenantId);
+
   // Sort by 30d revenue descending for Pareto ABC classification (top 80% = A, next 15% = B, rest = C)
   const ranked = products
     .map((p) => {
@@ -94,13 +101,14 @@ function computeSkuMetrics(tenantId: number): number {
       const d7 = s.qty7 / 7;
       const d14 = s.qty14 / 14;
       const d30 = s.qty30 / 30;
-      const weightedDaily = 0.5 * d7 + 0.3 * d14 + 0.2 * d30;
+      const forecast = forecasts.get(p.id);
+      const weightedDaily = forecast?.method === "seasonal-trend" ? forecast.daily : 0.5 * d7 + 0.3 * d14 + 0.2 * d30;
       // Empirical 30-day daily std dev (including zero-sale days)
       const mean = d30;
       const sumSqNonZero = s.dailyQtys.reduce((acc, q) => acc + (q - mean) ** 2, 0);
       const zeroDays = Math.max(0, 30 - s.dailyQtys.length);
       const variance = (sumSqNonZero + zeroDays * mean * mean) / 30;
-      const std30 = Math.sqrt(Math.max(0, variance));
+      const std30 = forecast?.method === "seasonal-trend" ? forecast.residualStd : Math.sqrt(Math.max(0, variance));
       const stock = Number(p.stock) || 0;
       const dos = weightedDaily > 0.0001 ? round2(stock / weightedDaily) : null;
       const cashVelocity = round2(s.margin30 > 0 ? s.margin30 : s.rev30 * 0.25);
@@ -108,6 +116,7 @@ function computeSkuMetrics(tenantId: number): number {
         product_id: p.id,
         dailySales: round2(weightedDaily),
         std30: round2(std30),
+        leadDays: forecast?.method === "seasonal-trend" ? forecast.leadDays : 2,
         rev30d: round2(s.rev30),
         margin30d: round2(s.margin30),
         dos,
@@ -145,7 +154,7 @@ function computeSkuMetrics(tenantId: number): number {
       else if (share <= 0.95) abc = "B";
     }
     const z = abc === "A" ? 1.65 : abc === "B" ? 1.28 : 0.84;
-    const safetyStock = round2(z * r.std30 * Math.sqrt(2)); // 2-day baseline lead time
+    const safetyStock = round2(z * r.std30 * Math.sqrt(r.leadDays)); // supplier lead time, 2-day fallback
     upsert.run(tenantId, r.product_id, r.dailySales, r.std30, safetyStock, r.rev30d, r.margin30d, r.dos, abc, r.cashVelocity);
   }
   return ranked.length;
@@ -186,11 +195,11 @@ export function runNightlyOrPipeline(
     opexAccrued = computeOpexReserve(tenantId, runDate);
 
     // Step 3: Survival Mode Evaluation (14-day Cash Runway vs OpEx + PO locks + overdue supplier debt)
-    const spendable = computeSpendableCash(tenantId);
+    const spendable = computeSpendableCash(tenantId, runDate);
     runwayDays = spendable.runway_days;
-    // Profit covers bills + owner draws: GROWTH, or RECOVERY while the money for upcoming bills isn't set aside yet.
+    // No projected cash shortfall: GROWTH, or RECOVERY while reserves are not funded.
     // Otherwise the runway at the net burn decides: < 7 days CRISIS, < 14 days RECOVERY, else GROWTH.
-    if (spendable.net_daily_burn_usd <= 0.01) {
+    if (runwayDays === null) {
       nextMode = spendable.free_spendable_cash_usd < 0 ? "RECOVERY" : "GROWTH";
     } else {
       const days = runwayDays ?? 0;
@@ -304,6 +313,15 @@ export function runNightlyOrPipeline(
       }
       actionsCreated++;
     }
+
+    for (const item of cashForecastBriefing(tenantId, runDate)) {
+      insAction.run(...item);
+      actionsCreated++;
+    }
+    for (const item of marginBriefingItems(tenantId)) { insAction.run(tenantId, runDate, item.priority, item.category, item.title, item.details, "PRODUCT", item.reference_id); actionsCreated++; }
+
+    for (const item of lbpBriefingItems(tenantId, runDate)) { insAction.run(...item); actionsCreated++; }
+    for (const item of cashierRiskBriefing(tenantId, runDate)) { insAction.run(tenantId, runDate, item.priority, item.category, item.title, item.details, null, null); actionsCreated++; }
 
     // Retire today's open items that this run no longer produced.
     const stale = db

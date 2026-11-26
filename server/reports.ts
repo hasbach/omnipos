@@ -10,7 +10,10 @@
 // totals). Tax is never part of revenue — it's reported separately. This is computed once, by
 // computeAllocatedLines() below, and every per-line report (by-product, by-category, by-customer,
 // by-cashier) is built from that same array so they all reconcile with /api/reports/summary.
+import { inventoryHealthHandler } from "./reports/inventoryHealth.js";
 import { db } from "./db.js";
+import { lineNet, globalDiscountAmount } from "./reports/sales.js";
+import { readProfitReport } from "./reports/profitQuery.js";
 import { REAL_MONEY_SQL } from "./paymentMethods.js";
 
 // ---------------------------------------------------------------------------
@@ -32,25 +35,6 @@ function resolveRange(query: any): { from: string; to: string } {
   const from = typeof query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(query.from) ? query.from : localMonthStart();
   const to = typeof query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(query.to) ? query.to : localToday();
   return { from, to };
-}
-
-// Matches the exact per-item discount math used by POST /api/transactions (unit_price*qty, then a
-// percentage or fixed discount applied on top; fixed is floored at 0).
-function lineNet(unitPrice: number, qty: number, discountType: string | null, discountValue: number | null): number {
-  let total = unitPrice * qty;
-  if (discountValue) {
-    total = discountType === "percentage" ? total * (1 - discountValue / 100) : Math.max(0, total - discountValue);
-  }
-  return total;
-}
-
-// The global (whole-invoice) discount amount, matching POST's clamping: a percentage is applied to
-// the subtotal, a fixed amount is clamped to it (never inflates a line's share past 100%).
-function globalDiscountAmount(subtotal: number, discountType: string | null, discountValue: number | null): number {
-  if (!discountValue) return 0;
-  if (discountType === "percentage") return subtotal * (discountValue / 100);
-  if (discountType === "fixed") return Math.min(discountValue, subtotal);
-  return 0;
 }
 
 export interface RawLine {
@@ -506,6 +490,16 @@ function txCount(tenantId: number, from: string, to: string): number {
 // ---------------------------------------------------------------------------
 
 export function setupReportRoutes(app: any, authenticate: any) {
+  app.get("/api/reports/inventory-health", authenticate, inventoryHealthHandler(db));
+  app.get("/api/reports/profit", authenticate, (req: any, res: any) => {
+    try {
+      res.json(readProfitReport(req.session.tenantId));
+    } catch (e: any) {
+      console.error("[reports/profit]", e);
+      res.status(500).json({ error: e?.message || "Failed to build the profit report." });
+    }
+  });
+
   app.get("/api/reports/summary", authenticate, (req: any, res: any) => {
     try {
       const tenantId = req.session.tenantId;

@@ -7,6 +7,8 @@ import { api } from '../lib/api';
 import { usePermissions } from '../lib/usePermissions';
 import { resolveDateRangePreset, type DateRange, type CurrencyLike } from '../lib/format';
 
+import { ProfitTab } from './reports/ProfitTab';
+import { InventoryHealthTab } from './reports/InventoryHealthTab';
 import { OverviewTab } from './reports/OverviewTab';
 import { ProductsTab } from './reports/ProductsTab';
 import { CategoriesTab } from './reports/CategoriesTab';
@@ -29,8 +31,8 @@ interface CurrencyRow {
 }
 
 type TabKey =
-  | 'overview' | 'outflows' | 'products' | 'categories' | 'customers' | 'suppliers' | 'cashiers'
-  | 'payments' | 'inventory' | 'aging' | 'custom-builder' | 'statement' | 'daily-yearly';
+  | 'overview' | 'profit' | 'outflows' | 'products' | 'categories' | 'customers' | 'suppliers' | 'cashiers'
+  | 'payments' | 'inventory' | 'inventory-health' | 'aging' | 'custom-builder' | 'statement' | 'daily-yearly';
 
 export default function Reports() {
   const { t } = useI18n();
@@ -62,6 +64,7 @@ export default function Reports() {
   const tabItems = useMemo(
     () => [
       { value: 'overview', label: t('rep_tab_overview', 'Overview / P&L') },
+      { value: 'profit', label: t('rep_tab_profit', 'Profit & break-even') },
       { value: 'outflows', label: t('rep_tab_outflows', 'Money out') },
       { value: 'products', label: t('rep_tab_products', 'Products') },
       { value: 'categories', label: t('rep_tab_categories', 'Categories') },
@@ -70,6 +73,7 @@ export default function Reports() {
       { value: 'cashiers', label: t('rep_tab_cashiers', 'Cashiers') },
       { value: 'payments', label: t('rep_tab_payments', 'Payments') },
       { value: 'inventory', label: t('rep_tab_inventory', 'Inventory') },
+      { value: 'inventory-health', label: t('ih_tab') },
       { value: 'aging', label: t('rep_tab_aging', 'Aging') },
       { value: 'custom-builder', label: t('rep_tab_custom_builder', 'Custom report builder') },
       { value: 'statement', label: t('rep_tab_customer_statement', 'Customer statement') },
@@ -105,6 +109,7 @@ export default function Reports() {
 
       <div className="pt-2">
         {tab === 'overview' && <OverviewTab {...tabProps} />}
+        {tab === 'profit' && <ProfitTab />}
         {tab === 'outflows' && <OutflowsTab {...tabProps} />}
         {tab === 'products' && <ProductsTab {...tabProps} />}
         {tab === 'categories' && <CategoriesTab {...tabProps} />}
@@ -113,6 +118,7 @@ export default function Reports() {
         {tab === 'cashiers' && <CashiersTab {...tabProps} />}
         {tab === 'payments' && <PaymentsTab {...tabProps} />}
         {tab === 'inventory' && <InventoryTab {...tabProps} />}
+        {tab === 'inventory-health' && <InventoryHealthTab localCurrency={localCurrency} />}
         {tab === 'aging' && <AgingTab {...tabProps} onOpenStatement={openStatement} />}
         {tab === 'custom-builder' && <CustomBuilderTab businessName={businessName} />}
         {tab === 'statement' && (

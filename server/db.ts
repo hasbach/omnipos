@@ -1013,6 +1013,10 @@ db.exec(`
     PRIMARY KEY(tenant_id, run_date)
   );
 `);
+// Supplier terms and payable reserve horizon (idempotent).
+try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN payment_terms_days INTEGER NOT NULL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE or_tenant_config ADD COLUMN payables_reserve_days INTEGER NOT NULL DEFAULT 7"); } catch {}
+
 try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN min_order_usd REAL NOT NULL DEFAULT 0;"); } catch {}
 try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN delivery_fee_usd REAL NOT NULL DEFAULT 0;"); } catch {}
 try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN demand_std_30d REAL NOT NULL DEFAULT 0;"); } catch {}
@@ -1345,6 +1349,20 @@ export function convertOrderableUnitIds(database: any = db): number {
   const n = convertOrderableUnitIds();
   if (n) console.log(`[db] converted orderable units of ${n} store listing(s) to unit keys`);
 }
+
+// Local-only purchase scan secrets and mapping memory; intentionally excluded from sync.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS local_tenant_settings (
+    tenant_id INTEGER NOT NULL REFERENCES tenants(id), key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, key)
+  );
+  CREATE TABLE IF NOT EXISTS supplier_item_mappings (
+    tenant_id INTEGER NOT NULL REFERENCES tenants(id), supplier_id INTEGER NOT NULL REFERENCES stakeholders(id) ON DELETE CASCADE,
+    normalized_item_name TEXT NOT NULL, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, supplier_id, normalized_item_name)
+  );
+`);
 
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
