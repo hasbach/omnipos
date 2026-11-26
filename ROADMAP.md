@@ -109,6 +109,13 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.13.6 — Real app version in Settings (2026-11-26)
+- Settings -> Updates, the dashboard and the POS update notice showed "v2.5.0" forever: they read
+  `tenants.current_version`, a placeholder from the old pre-electron-updater update system (DB default '2.5.0').
+  The app now reports its real version from package.json (`server/appVersion.ts`); the legacy
+  `available_version` prompt is retired, and each register writes its version to its cloud tenant row at sign-in so
+  the Live Monitor / Super Admin show which version each shop runs.
+
 ### 1.13.5 — Product bundles, disable users, OR on real data, logo (2026-11-26)
 - **Product bundles:** a product flagged as a bundle (own barcode, price, photo) made of existing products with
   quantities; sold at the POS like any product and stored as one line per component (stock, unit cost, reports and
