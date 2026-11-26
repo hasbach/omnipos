@@ -13,11 +13,9 @@ import { formatMoney } from '../lib/format';
 import { usePermissions } from '../lib/usePermissions';
 import type { Product, Stakeholder } from '../types';
 import MarginsTab from './or/MarginsTab';
-
-type TabKey = 'cash-forecast' | 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings' | 'margins';
 import { BundleIdeas } from './or/BundleIdeas';
 
-type TabKey = 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings' | 'bundle-ideas';
+type TabKey = 'briefing' | 'cash-forecast' | 'margins' | 'bundle-ideas' | 'draws' | 'pos' | 'cycle' | 'settings';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -493,20 +491,20 @@ export default function OmniPulseOR() {
         items={[
           { value: 'briefing', label: t('or_tab_briefing', 'Morning Briefing') },
           { value: 'cash-forecast', label: t('cf_title') },
+          { value: 'margins', label: t('or_margins') },
           { value: 'bundle-ideas', label: t('bi_title') },
           { value: 'draws', label: t('or_tab_draws', 'Owner Draws') },
           { value: 'pos', label: t('or_tab_pos', 'PO Cash-Lock') },
           { value: 'cycle', label: t('or_tab_cycle', '5-Min Cycle Count') },
-          { value: 'margins', label: t('or_margins') },
           ...(can('or.manage') ? [{ value: 'settings', label: t('or_tab_settings', 'Settings & Presets') }] : []),
         ]}
       />
 
       {tab === 'cash-forecast' && <CashForecastTab />}
-
       {tab === 'margins' && <MarginsTab />}
-      {/* TAB 1: MORNING BRIEFING */}
       {tab === 'bundle-ideas' && <BundleIdeas products={products} onSaved={loadAll} />}
+
+      {/* TAB 1: MORNING BRIEFING */}
       {tab === 'briefing' && sp && (
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
