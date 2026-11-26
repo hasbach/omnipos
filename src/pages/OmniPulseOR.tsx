@@ -47,7 +47,7 @@ export default function OmniPulseOR() {
   const [activeSession, setActiveSession] = useState<any>(null);
   const [countInputs, setCountInputs] = useState<Record<number, string>>({});
   const [anomalies, setAnomalies] = useState<any[]>([]);
-  const [configData, setConfigData] = useState<{ config: any; policies: any[]; obligations: any[] } | null>(null);
+  const [configData, setConfigData] = useState<{ config: any; policies: any[]; obligations: any[]; suppliers: any[] } | null>(null);
 
   // Reference data
   const [products, setProducts] = useState<Product[]>([]);
@@ -458,6 +458,7 @@ export default function OmniPulseOR() {
     );
   }
 
+  const settlements = briefing?.settlements;
   const sp = briefing?.spendable;
   const cfg = configData?.config || briefing?.config;
 
@@ -519,6 +520,54 @@ export default function OmniPulseOR() {
               icon={Truck}
             />
           </div>
+          {settlements && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {[
+                { key: 'or_owed_suppliers', aging: settlements.payable_aging },
+                { key: 'or_customers_owe', aging: settlements.receivable_aging },
+              ].map(({ key, aging }) => (
+                <Card
+                  key={key}
+                  className="p-5 space-y-2"
+                >
+                  <h3 className="font-semibold">{t(key)}</h3>
+                  <strong>{formatMoney(aging.total_usd, USD)}</strong>
+                  <div className="text-xs text-text-3 space-y-1">
+                    <p>{t('or_age_0_30')}: {formatMoney(aging.days_0_30, USD)}</p>
+                    <p>{t('or_age_31_60')}: {formatMoney(aging.days_31_60, USD)}</p>
+                    <p>{t('or_age_60_plus')}: {formatMoney(aging.days_60_plus, USD)}</p>
+                    <p>{t('or_undated')}: {formatMoney(aging.undated, USD)}</p>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+          {settlements && (
+            <Card className="p-5 space-y-3">
+              <h3 className="font-semibold">{t('or_debt_briefing')}</h3>
+              <p>{t('or_payables_reserved')}: {formatMoney(sp.payables_reserve_usd, USD)}</p>
+              {[
+                { key: 'or_supplier_overdue', rows: settlements.briefing.overdue },
+                { key: 'or_supplier_due_week', rows: settlements.briefing.due_week },
+                { key: 'or_chase_customers', rows: settlements.briefing.chase },
+              ].map(({ key, rows }) => (
+                <div key={key}>
+                  <h4 className="font-medium text-sm">{t(key)}</h4>
+                  {rows.length === 0 && <p className="text-xs text-text-3">{t('or_no_debt_items')}</p>}
+                  {rows.map((row: any, index: number) => (
+                    <p
+                      key={index}
+                      className="text-sm"
+                    >
+                      {row.name} · {formatMoney(row.amount_usd, USD)} · {row.age_days === null ? t('or_undated') : t('or_debt_age').replace('{days}', String(row.age_days))}
+                      {row.due_date && <span> · {t('or_invoice_due')}: {row.due_date}</span>}
+                      {row.phone && <span> · {row.phone}</span>}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </Card>
+          )}
           <div className="text-xs text-text-3 flex flex-wrap gap-4">
             <span>Drawer: <strong>{formatMoney(sp.drawer_balance_usd, USD)}</strong></span>
             <span>Safe/Bank: <strong>{formatMoney(sp.savings_balance_usd + sp.bank_balance_usd, USD)}</strong></span>
@@ -983,6 +1032,42 @@ export default function OmniPulseOR() {
             </div>
           </Card>
 
+          <Card className="p-5 space-y-4">
+            <h3 className="font-semibold text-sm">{t('or_supplier_terms')}</h3>
+            <p className="text-xs text-text-3">{t('or_supplier_terms_hint')}</p>
+            <label className="block text-xs font-medium">
+              {t('or_payables_horizon')}
+              <Input
+                type="number"
+                min={0}
+                max={3650}
+                disabled={!can('or.manage')}
+                defaultValue={configData.config.payables_reserve_days ?? 7}
+                onBlur={(e) => handleUpdateConfig({ payables_reserve_days: Number(e.target.value) })}
+              />
+            </label>
+            {(configData.suppliers || []).map((supplier: any) => (
+              <label
+                key={supplier.id}
+                className="block text-xs font-medium"
+              >
+                {supplier.name}
+                <Input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  disabled={!can('or.manage')}
+                  defaultValue={supplier.payment_terms_days}
+                  onBlur={async (e) => {
+                    try {
+                      await api.put('/api/or/suppliers/' + supplier.id + '/terms', { payment_terms_days: Number(e.target.value) });
+                      await loadAll();
+                    } catch (error: any) { toast.error(error.message || t('or_terms_save_failed')); }
+                  }}
+                />
+              </label>
+            ))}
+          </Card>
           <Card className="p-5 space-y-4">
             <h3 className="font-semibold text-sm">Fixed Obligations (OpEx Reserve & Runway)</h3>
             <div className="grid sm:grid-cols-5 gap-2">

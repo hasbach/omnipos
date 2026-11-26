@@ -15,6 +15,7 @@ export interface OrTenantConfig {
   enable_po_cash_lock: number;
   enable_cycle_count: number;
   enable_recipe_deduction: number;
+  payables_reserve_days?: number;
   min_drawer_float: number;
   cycle_count_daily_limit: number;
   variance_alert_pct: number;
@@ -222,6 +223,10 @@ export function updateOrConfig(tenantId: number, patch: Partial<OrTenantConfig>)
   const boolVal = (v: any, fallback: number) => (v === undefined ? fallback : v ? 1 : 0);
   const minFloat = patch.min_drawer_float !== undefined ? Math.max(0, Number(patch.min_drawer_float) || 0) : cur.min_drawer_float;
   const dailyLimit = patch.cycle_count_daily_limit !== undefined ? Math.max(1, Math.min(50, Math.round(Number(patch.cycle_count_daily_limit) || 8))) : cur.cycle_count_daily_limit;
+  const reserveDays = patch.payables_reserve_days ?? cur.payables_reserve_days ?? 7;
+  if (!Number.isInteger(reserveDays) || reserveDays < 0 || reserveDays > 3650) {
+    throw new ValidationError("Invalid payable reserve days.", 400);
+  }
   const variancePct = patch.variance_alert_pct !== undefined ? Math.max(0, Number(patch.variance_alert_pct) || 5) : cur.variance_alert_pct;
 
   let ownerStakeholderId: number | null = cur.owner_stakeholder_id ?? null;
@@ -247,7 +252,7 @@ export function updateOrConfig(tenantId: number, patch: Partial<OrTenantConfig>)
     `UPDATE or_tenant_config
         SET business_type = ?, survival_mode = ?, enable_owner_draw = ?, enable_po_cash_lock = ?,
             enable_cycle_count = ?, enable_recipe_deduction = ?, min_drawer_float = ?,
-            cycle_count_daily_limit = ?, variance_alert_pct = ?, owner_stakeholder_id = ?
+            cycle_count_daily_limit = ?, variance_alert_pct = ?, owner_stakeholder_id = ?, payables_reserve_days = ?
       WHERE tenant_id = ?`
   ).run(
     businessType,
@@ -260,6 +265,7 @@ export function updateOrConfig(tenantId: number, patch: Partial<OrTenantConfig>)
     dailyLimit,
     variancePct,
     ownerStakeholderId,
+    reserveDays,
     tenantId
   );
 

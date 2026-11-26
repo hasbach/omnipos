@@ -542,7 +542,9 @@ test("PO receiving: amount-only POs go through Purchases, itemized partial deliv
   assert.equal(Math.abs(sup.balance), 50);
   const sp2 = await app.api("GET", "/api/or/spendable-cash", s.as);
   assert.equal(sp2.body.active_po_locks_usd, 0);
-  assert.equal(sp2.body.free_spendable_cash_usd, 850);
+  // 1000 - 150 paid = 850 in hand, minus the $50 supplier credit due now (terms 0) held as a payables reserve
+  assert.equal(sp2.body.payables_reserve_usd, 50);
+  assert.equal(sp2.body.free_spendable_cash_usd, 800);
 });
 
 test("a purchase invoice only touches a PO lock when linked, and a non-final link keeps the PO open", async () => {

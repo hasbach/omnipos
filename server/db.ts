@@ -1013,6 +1013,10 @@ db.exec(`
     PRIMARY KEY(tenant_id, run_date)
   );
 `);
+// Supplier terms and payable reserve horizon (idempotent).
+try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN payment_terms_days INTEGER NOT NULL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE or_tenant_config ADD COLUMN payables_reserve_days INTEGER NOT NULL DEFAULT 7"); } catch {}
+
 try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN min_order_usd REAL NOT NULL DEFAULT 0;"); } catch {}
 try { db.exec("ALTER TABLE or_supplier_profiles ADD COLUMN delivery_fee_usd REAL NOT NULL DEFAULT 0;"); } catch {}
 try { db.exec("ALTER TABLE or_sku_metrics ADD COLUMN demand_std_30d REAL NOT NULL DEFAULT 0;"); } catch {}

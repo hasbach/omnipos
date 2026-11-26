@@ -186,11 +186,11 @@ export function runNightlyOrPipeline(
     opexAccrued = computeOpexReserve(tenantId, runDate);
 
     // Step 3: Survival Mode Evaluation (14-day Cash Runway vs OpEx + PO locks + overdue supplier debt)
-    const spendable = computeSpendableCash(tenantId);
+    const spendable = computeSpendableCash(tenantId, runDate);
     runwayDays = spendable.runway_days;
-    // Profit covers bills + owner draws: GROWTH, or RECOVERY while the money for upcoming bills isn't set aside yet.
+    // No projected cash shortfall: GROWTH, or RECOVERY while reserves are not funded.
     // Otherwise the runway at the net burn decides: < 7 days CRISIS, < 14 days RECOVERY, else GROWTH.
-    if (spendable.net_daily_burn_usd <= 0.01) {
+    if (runwayDays === null) {
       nextMode = spendable.free_spendable_cash_usd < 0 ? "RECOVERY" : "GROWTH";
     } else {
       const days = runwayDays ?? 0;

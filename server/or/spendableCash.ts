@@ -1,5 +1,7 @@
+import { loadOpenPayablesReceivables } from "./payablesData.js";
+import { payableReserve, runwayWithPayables } from "./payables.js";
 // Real Spendable Cash Engine & Virtual Cash Bucket Ledger.
-// Formula: Free Spendable Cash = Total Liquid Cash - Min Drawer Float - Locked OpEx Reserve - Sum(Active PO Locks).
+// Formula: liquid cash - drawer float - accrued bills - PO locks - near-term supplier payables.
 import { db } from "../db.js";
 import { listCashAccounts } from "../cashAccounts.js";
 import { dailyObligationRate, ensureOrInitialized } from "./config.js";
@@ -7,6 +9,7 @@ import { localDateIso, round2 } from "./coreBridge.js";
 import { stableGlobalId } from "./stableId.js";
 
 export interface SpendableCashSnapshot {
+  payables_reserve_usd: number;
   drawer_balance_usd: number;
   savings_balance_usd: number;
   bank_balance_usd: number;
@@ -179,7 +182,7 @@ export function averageDailyOwnerDraws(tenantId: number): number {
 }
 
 /** Computes Real Spendable Cash directly from OmniPOS Core `cash_accounts` + OR locks/reserves. */
-export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
+export function computeSpendableCash(tenantId: number, today = localDateIso()): SpendableCashSnapshot {
   const config = ensureOrInitialized(tenantId);
   const accounts = listCashAccounts(tenantId, false);
 
@@ -195,7 +198,7 @@ export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
   const totalLiquid = round2(drawer + savings + bank);
 
   // Derived every time (never accumulated): what each fixed obligation has built up since its last due date.
-  const lockedOpex = computeOpexReserve(tenantId);
+  const lockedOpex = computeOpexReserve(tenantId, today);
 
   const poLockRow = db
     .prepare(
@@ -207,7 +210,9 @@ export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
   const activePoLocks = round2(Math.max(0, Number(poLockRow?.locked) || 0));
 
   const minFloat = round2(Math.max(0, Number(config.min_drawer_float) || 0));
-  const freeSpendable = round2(totalLiquid - minFloat - lockedOpex - activePoLocks);
+  const { payables } = loadOpenPayablesReceivables(tenantId, today);
+  const payablesReserve = payableReserve(payables, today, config.payables_reserve_days ?? 7);
+  const freeSpendable = round2(totalLiquid - minFloat - lockedOpex - activePoLocks - payablesReserve);
 
   const obligations = db
     .prepare("SELECT amount_usd, frequency FROM or_fixed_obligations WHERE tenant_id = ? AND active = 1 AND deleted_at IS NULL")
@@ -216,14 +221,15 @@ export function computeSpendableCash(tenantId: number): SpendableCashSnapshot {
 
   // Runway: cash on hand (minus float and active PO locks) divided by the NET daily burn - bills plus owner draws
   // minus the gross profit the shop actually earns each day. A shop whose profit covers its bills has no runway
-  // limit (null), however little cash sits in the drawer tonight.
+  // limit (null) unless an invoice falling due exhausts the available cash.
   const grossProfit = averageDailyGrossProfit(tenantId);
   const ownerDraws = averageDailyOwnerDraws(tenantId);
   const netBurn = round2(dailyOpexBurn + ownerDraws - grossProfit);
   const runwayCash = Math.max(0, totalLiquid - minFloat - activePoLocks);
-  const runwayDays = netBurn > 0.01 ? round2(runwayCash / netBurn) : null;
+  const runwayDays = runwayWithPayables(runwayCash, netBurn, payables, today);
 
   return {
+    payables_reserve_usd: payablesReserve,
     drawer_balance_usd: round2(drawer),
     savings_balance_usd: round2(savings),
     bank_balance_usd: round2(bank),
