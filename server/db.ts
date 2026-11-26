@@ -1350,6 +1350,20 @@ export function convertOrderableUnitIds(database: any = db): number {
   if (n) console.log(`[db] converted orderable units of ${n} store listing(s) to unit keys`);
 }
 
+// Local-only purchase scan secrets and mapping memory; intentionally excluded from sync.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS local_tenant_settings (
+    tenant_id INTEGER NOT NULL REFERENCES tenants(id), key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, key)
+  );
+  CREATE TABLE IF NOT EXISTS supplier_item_mappings (
+    tenant_id INTEGER NOT NULL REFERENCES tenants(id), supplier_id INTEGER NOT NULL REFERENCES stakeholders(id) ON DELETE CASCADE,
+    normalized_item_name TEXT NOT NULL, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, supplier_id, normalized_item_name)
+  );
+`);
+
 // Seed data if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
 if (tenantCount.count === 0) {

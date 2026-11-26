@@ -1,3 +1,4 @@
+import { setupPurchaseScanRoutes } from './purchaseScan/routes.js';
 import { getLanAddresses } from "./discovery.js";
 import { db, logAction } from "./db.js";
 import { buildStatement } from "./statement.js";
@@ -377,6 +378,7 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
   setupSettlementRoutes(app, authenticate, broadcast);
   setupCashFlowRoutes(app, authenticate, broadcast);
   setupCashAccountRoutes(app, authenticate, broadcast);
+  setupPurchaseScanRoutes(app, authenticate);
   setupCommerceRoutes(app, authenticate);
   setupOrderRoutes(app, authenticate, broadcast);
   setupOrRoutes(app, authenticate, broadcast);
