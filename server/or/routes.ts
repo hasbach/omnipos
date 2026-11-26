@@ -1,3 +1,4 @@
+import { readSupplierScorecard } from './supplierScorecardData.js';
 import { loadCashForecast } from "./cashForecastData.js";
 import { loadOpenPayablesReceivables } from "./payablesData.js";
 import { stableGlobalId, rowGlobalId } from "./stableId.js";
@@ -55,6 +56,19 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
     }
     return res.status(500).json({ error: e?.message || String(e) });
   };
+
+  app.get('/api/or/suppliers/scorecard', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(readSupplierScorecard(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+  app.get('/api/or/suppliers/:id/scorecard', authenticate, requireOrLicense, (req: any, res: any) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid supplier id' });
+      const result = readSupplierScorecard(req.session.tenantId, id);
+      if (!result.suppliers.length) return res.status(404).json({ error: 'Supplier not found' });
+      res.json(result);
+    } catch (e) { fail(res, e); }
+  });
 
   // Public (for authenticated tenants): returns whether the OmniPulse OR add-on is licensed
   app.get("/api/or/status", authenticate, (req: any, res: any) => {

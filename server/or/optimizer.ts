@@ -1,3 +1,5 @@
+import { preferredSupplierPrices } from './supplierScorecard.js';
+import { loadSupplierScorecards } from './supplierScorecardData.js';
 // Builds a tenant-specific MILP problem from live OmniPOS SQLite data, invokes the active SolverAdapter
 // (HiGHS WASM offline or OR-Tools cloud), and optionally materializes recommended DRAFT PO commitments.
 import crypto from "crypto";
@@ -189,13 +191,15 @@ export function buildOptimizationProblem(
     )
     .all(tenantId) as any[];
 
+  const supplierPreferences = preferredSupplierPrices(loadSupplierScorecards(tenantId));
   const defaultShelfLife = config.business_type === "RESTAURANT" ? 4 : 30;
   const skus: OptimizerSkuInput[] = [];
   for (const r of skuRows) {
     // Only a supplier this product is known to come from: never the "first supplier" as a guess.
-    const supId = r.primary_supplier_id || lastPurchaseSupplier.get(r.id) || null;
+    const preferred = supplierPreferences.get(r.id);
+    const supId = preferred?.supplier_id || r.primary_supplier_id || lastPurchaseSupplier.get(r.id) || null;
     if (!supId) continue;
-    const cost = Number(r.cost) || 0;
+    const cost = preferred?.unit_cost_usd ?? (Number(r.cost) || 0);
     const price = Number(r.price) || cost * 1.25;
     const packFactor = packFactorMap.get(r.id) || Math.max(1, Number(r.units_per_package) || 1);
     skus.push({
