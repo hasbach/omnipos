@@ -1,6 +1,7 @@
 import { readSupplierScorecard } from './supplierScorecardData.js';
 import { loadForecastAccuracy, saveForecastConfig } from "./demandForecastData.js";
 import { loadCashForecast } from "./cashForecastData.js";
+import { cashierRiskRoute, protectCashierBriefing } from "./cashierRiskData.js";
 import { loadOpenPayablesReceivables } from "./payablesData.js";
 import { stableGlobalId, rowGlobalId } from "./stableId.js";
 // Express routes for OmniPulse OR (paid add-on module).
@@ -47,6 +48,8 @@ import { loadMarginAlerts } from "./marginAlerts.js";
 import { readBundleIdeas } from "./bundleIdeasData.js";
 
 export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) {
+  app.get('/api/or/cashier-risk', authenticate, requireOrLicense, cashierRiskRoute);
+  app.get('/api/or/briefing', authenticate, protectCashierBriefing);
   app.get('/api/or/bundle-ideas', authenticate, requireOrLicense, (req: any, res: any) => {
     try { res.json(readBundleIdeas(req.session.tenantId, req.query)); } catch (e) { fail(res, e); }
   });

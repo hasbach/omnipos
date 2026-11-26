@@ -170,6 +170,7 @@ export const ROUTE_RULES: RouteRule[] = [
   // --- OmniPulse OR (paid add-on module) ---
   { method: 'GET', pattern: '/api/or/forecast-accuracy', need: 'or.view' },
   { method: 'PUT', pattern: '/api/or/forecast-config', need: 'or.manage' },
+  { method: 'GET', pattern: '/api/or/cashier-risk', need: 'or.manage' },
   { method: 'GET', pattern: '/api/or/cash-forecast', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/suppliers/scorecard', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/suppliers/:id/scorecard', need: 'or.view' },

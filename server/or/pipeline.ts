@@ -1,6 +1,7 @@
 import { lbpBriefingItems } from '../lbpRateAlertData.js';
 import { loadDemandForecasts } from "./demandForecastData.js";
 import { cashForecastBriefing } from "./cashForecastData.js";
+import { cashierRiskBriefing } from "./cashierRiskData.js";
 // Unified Nightly OR Pipeline (`runNightlyOrPipeline`): single idempotent pipeline per (tenant, business_date).
 // 1. Sync & classify `or_sku_metrics` (30-day weighted velocity, DOS, ABC class)
 // 2. Accrue today's `or_fixed_obligations` into `OPEX_RESERVE` bucket + ledger
@@ -320,6 +321,7 @@ export function runNightlyOrPipeline(
     for (const item of marginBriefingItems(tenantId)) { insAction.run(tenantId, runDate, item.priority, item.category, item.title, item.details, "PRODUCT", item.reference_id); actionsCreated++; }
 
     for (const item of lbpBriefingItems(tenantId, runDate)) { insAction.run(...item); actionsCreated++; }
+    for (const item of cashierRiskBriefing(tenantId, runDate)) { insAction.run(tenantId, runDate, item.priority, item.category, item.title, item.details, null, null); actionsCreated++; }
 
     // Retire today's open items that this run no longer produced.
     const stale = db
