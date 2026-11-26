@@ -1,3 +1,5 @@
+import { loadOpenPayablesReceivables } from "./payablesData.js";
+import { stableGlobalId, rowGlobalId } from "./stableId.js";
 // Express routes for OmniPulse OR (paid add-on module).
 import { db } from "../db.js";
 import { ValidationError, validationErrorBody } from "../errors.js";
@@ -93,6 +95,7 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
       res.json({
         config,
         spendable,
+        settlements: loadOpenPayablesReceivables(tenantId),
         draw_usage: drawUsage,
         actions,
         open_anomalies_count: Number(openAnomalies?.c || 0),
@@ -133,6 +136,9 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
       const tenantId = req.session.tenantId;
       res.json({
         config: ensureOrInitialized(tenantId),
+        suppliers: db.prepare(`SELECT s.id, s.name, COALESCE(p.payment_terms_days, 0) AS payment_terms_days
+          FROM stakeholders s LEFT JOIN or_supplier_profiles p ON p.supplier_id = s.id AND p.tenant_id = s.tenant_id AND p.deleted_at IS NULL
+          WHERE s.tenant_id = ? AND s.type = 'supplier' AND s.deleted_at IS NULL ORDER BY s.name`).all(tenantId),
         policies: listDrawPolicies(tenantId),
         obligations: listFixedObligations(tenantId),
       });
@@ -204,6 +210,25 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
     } catch (e) {
       fail(res, e);
     }
+  });
+
+  app.put("/api/or/suppliers/:id/terms", authenticate, requireOrLicense, (req: any, res: any) => {
+    try {
+      const tenantId = req.session.tenantId;
+      const supplierId = Number(req.params.id);
+      if (!sessionHasPermission(req, "or.manage")) return res.status(403).json({ error: "Permission denied." });
+      const terms = req.body?.payment_terms_days;
+      if (!Number.isInteger(terms) || terms < 0 || terms > 3650) throw new ValidationError("Invalid supplier payment terms.", 400);
+      const supplier = db.prepare("SELECT id FROM stakeholders WHERE tenant_id = ? AND id = ? AND type = 'supplier' AND deleted_at IS NULL").get(tenantId, supplierId);
+      if (!supplier) throw new ValidationError("Supplier not found.", 404);
+      const supplierGlobalId = rowGlobalId("stakeholders", supplierId);
+      if (!supplierGlobalId) throw new ValidationError("Supplier global ID missing.", 409);
+      const globalId = stableGlobalId(tenantId, "or_supplier_profiles", supplierGlobalId);
+      db.prepare(`INSERT INTO or_supplier_profiles (global_id, tenant_id, supplier_id, payment_terms_days)
+        VALUES (?, ?, ?, ?) ON CONFLICT(tenant_id, supplier_id) DO UPDATE SET payment_terms_days = excluded.payment_terms_days, deleted_at = NULL`).run(globalId, tenantId, supplierId, terms);
+      broadcast({ type: "OR_UPDATED" }, tenantId);
+      res.json({ payment_terms_days: terms });
+    } catch (e) { fail(res, e); }
   });
 
   // --- Spendable Cash & Bucket Ledger ---
