@@ -133,8 +133,8 @@ export function computeAccountBalance(tenantId: number, accountId: number): { ba
   return { balance_usd: round2(usd), by_currency: byCur };
 }
 
-export function listCashAccounts(tenantId: number, includeInactive = false): CashAccountWithBalance[] {
-  ensureDefaultCashAccount(tenantId);
+export function listCashAccounts(tenantId: number, includeInactive = false, readOnly = false): CashAccountWithBalance[] {
+  if (!readOnly) ensureDefaultCashAccount(tenantId);
   const rows = db
     .prepare(`SELECT * FROM cash_accounts WHERE tenant_id = ? AND deleted_at IS NULL ${includeInactive ? "" : "AND active = 1"} ORDER BY is_default DESC, id ASC`)
     .all(tenantId) as CashAccountRow[];

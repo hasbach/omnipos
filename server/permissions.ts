@@ -18,6 +18,7 @@ import { db, logAction } from './db.js';
 import { ValidationError, validationErrorBody } from './errors.js';
 
 export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
+  { area: 'assistant', keys: ['assistant.use'] },
   { area: 'dashboard', keys: ['dashboard.overview'] },
   { area: 'sales', keys: ['invoices.view', 'invoices.edit', 'invoices.delete', 'invoices.refund', 'daily_sales.view', 'live_monitor.view'] },
   { area: 'inventory', keys: ['products.view', 'products.edit', 'stock.view', 'stock.adjust'] },
@@ -61,10 +62,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
 
 // ---- storage -------------------------------------------------------------------------------------
 
-const ROLE_PERMISSIONS_VERSION = 4;
+const ROLE_PERMISSIONS_VERSION = 5;
 
 /**
- * v4 adds OmniPulse OR defaults. v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
+ * v5 adds shop assistant defaults. v4 adds OmniPulse OR defaults. v3 adds per-role order defaults. v2 grants settlement history to roles that could already close or
  * correct a day. Grant each once, then stamp the version. Idempotent and
  * lazy — runs the first time a tenant's stored map is read. Tenants without a stored map use the
  * defaults (which already include the new key) and are stamped without a rewrite.
@@ -93,6 +94,7 @@ function migrateStoredMap(tenantId: number | string, map: Record<string, string[
     };
     grantOnce(3, 'orders.');
     grantOnce(4, 'or.');
+    grantOnce(5, 'assistant.');
     db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions', ?)").run(tenantId, JSON.stringify(out));
   }
   db.prepare("INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (?, 'role_permissions_version', ?)").run(tenantId, String(ROLE_PERMISSIONS_VERSION));
@@ -167,6 +169,7 @@ function isCustomerStandingDiscount(tenantId: number, stakeholderId: unknown, pe
 
 // FIRST match wins — keep specific paths above their `:param` siblings.
 export const ROUTE_RULES: RouteRule[] = [
+  { method: 'POST', pattern: '/api/assistant/ask', need: 'assistant.use' },
   // --- OmniPulse OR (paid add-on module) ---
   { method: 'GET', pattern: '/api/or/cash-forecast', need: 'or.view' },
   { method: 'GET', pattern: '/api/or/status', need: null },
