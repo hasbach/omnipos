@@ -40,8 +40,12 @@ import {
 import { runNightlyOrPipeline } from "./pipeline.js";
 import { applyOptimizationPlan, runOrOptimizer } from "./optimizer.js";
 import { localDateIso } from "./coreBridge.js";
+import { readBundleIdeas } from "./bundleIdeasData.js";
 
 export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) {
+  app.get('/api/or/bundle-ideas', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(readBundleIdeas(req.session.tenantId, req.query)); } catch (e) { fail(res, e); }
+  });
   const fail = (res: any, e: any) => {
     if (e instanceof ValidationError) return res.status(e.status).json(validationErrorBody(e));
     if (e?.code === "OR_OPTIMIZER_BUSY" || e?.code === "OR_OPTIMIZER_TIMEOUT") {

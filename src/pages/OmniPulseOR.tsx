@@ -11,8 +11,9 @@ import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { usePermissions } from '../lib/usePermissions';
 import type { Product, Stakeholder } from '../types';
+import { BundleIdeas } from './or/BundleIdeas';
 
-type TabKey = 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings';
+type TabKey = 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings' | 'bundle-ideas';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -487,6 +488,7 @@ export default function OmniPulseOR() {
         onChange={(v) => setTab(v as TabKey)}
         items={[
           { value: 'briefing', label: t('or_tab_briefing', 'Morning Briefing') },
+          { value: 'bundle-ideas', label: t('bi_title') },
           { value: 'draws', label: t('or_tab_draws', 'Owner Draws') },
           { value: 'pos', label: t('or_tab_pos', 'PO Cash-Lock') },
           { value: 'cycle', label: t('or_tab_cycle', '5-Min Cycle Count') },
@@ -495,6 +497,7 @@ export default function OmniPulseOR() {
       />
 
       {/* TAB 1: MORNING BRIEFING */}
+      {tab === 'bundle-ideas' && <BundleIdeas products={products} onSaved={loadAll} />}
       {tab === 'briefing' && sp && (
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
