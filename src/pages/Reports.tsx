@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { usePermissions } from '../lib/usePermissions';
 import { resolveDateRangePreset, type DateRange, type CurrencyLike } from '../lib/format';
 
+import { ProfitTab } from './reports/ProfitTab';
 import { OverviewTab } from './reports/OverviewTab';
 import { ProductsTab } from './reports/ProductsTab';
 import { CategoriesTab } from './reports/CategoriesTab';
@@ -29,7 +30,7 @@ interface CurrencyRow {
 }
 
 type TabKey =
-  | 'overview' | 'outflows' | 'products' | 'categories' | 'customers' | 'suppliers' | 'cashiers'
+  | 'overview' | 'profit' | 'outflows' | 'products' | 'categories' | 'customers' | 'suppliers' | 'cashiers'
   | 'payments' | 'inventory' | 'aging' | 'custom-builder' | 'statement' | 'daily-yearly';
 
 export default function Reports() {
@@ -62,6 +63,7 @@ export default function Reports() {
   const tabItems = useMemo(
     () => [
       { value: 'overview', label: t('rep_tab_overview', 'Overview / P&L') },
+      { value: 'profit', label: t('rep_tab_profit', 'Profit & break-even') },
       { value: 'outflows', label: t('rep_tab_outflows', 'Money out') },
       { value: 'products', label: t('rep_tab_products', 'Products') },
       { value: 'categories', label: t('rep_tab_categories', 'Categories') },
@@ -105,6 +107,7 @@ export default function Reports() {
 
       <div className="pt-2">
         {tab === 'overview' && <OverviewTab {...tabProps} />}
+        {tab === 'profit' && <ProfitTab />}
         {tab === 'outflows' && <OutflowsTab {...tabProps} />}
         {tab === 'products' && <ProductsTab {...tabProps} />}
         {tab === 'categories' && <CategoriesTab {...tabProps} />}
