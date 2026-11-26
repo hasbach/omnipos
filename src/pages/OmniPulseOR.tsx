@@ -17,9 +17,10 @@ import { formatMoney } from '../lib/format';
 import { usePermissions } from '../lib/usePermissions';
 import type { Product, Stakeholder } from '../types';
 import MarginsTab from './or/MarginsTab';
+import PriceSuggestionsTab from './or/PriceSuggestionsTab';
 import { BundleIdeas } from './or/BundleIdeas';
 
-type TabKey = 'briefing' | 'cash-forecast' | 'forecast' | 'margins' | 'suppliers' | 'bundle-ideas' | 'cashiers' | 'draws' | 'pos' | 'cycle' | 'settings';
+type TabKey = 'briefing' | 'cash-forecast' | 'forecast' | 'margins' | 'prices' | 'suppliers' | 'bundle-ideas' | 'cashiers' | 'draws' | 'pos' | 'cycle' | 'settings';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -499,6 +500,7 @@ export default function OmniPulseOR() {
           { value: 'cash-forecast', label: t('cf_title') },
           { value: 'forecast', label: t('df_title') },
           { value: 'margins', label: t('or_margins') },
+          { value: 'prices', label: t('ps_title') },
           { value: 'suppliers', label: t('sc_title') },
           { value: 'bundle-ideas', label: t('bi_title') },
           ...(can('or.manage') ? [{ value: 'cashiers', label: t('cr_title') }] : []),
@@ -514,6 +516,7 @@ export default function OmniPulseOR() {
       {tab === 'cashiers' && can('or.manage') && <CashiersTab />}
       {tab === 'cash-forecast' && <CashForecastTab />}
       {tab === 'margins' && <MarginsTab />}
+      {tab === 'prices' && <PriceSuggestionsTab products={products} onSaved={loadAll} />}
       {tab === 'bundle-ideas' && <BundleIdeas products={products} onSaved={loadAll} />}
 
       {/* TAB 1: MORNING BRIEFING */}
