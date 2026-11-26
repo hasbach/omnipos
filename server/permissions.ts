@@ -171,6 +171,9 @@ function isCustomerStandingDiscount(tenantId: number, stakeholderId: unknown, pe
 export const ROUTE_RULES: RouteRule[] = [
   { method: 'POST', pattern: '/api/assistant/ask', need: 'assistant.use' },
   // --- OmniPulse OR (paid add-on module) ---
+  { method: 'GET', pattern: '/api/or/owner-summary', need: 'or.manage' },
+  { method: 'GET', pattern: '/api/or/owner-summary-settings', need: 'or.manage' },
+  { method: 'PUT', pattern: '/api/or/owner-summary-settings', need: 'or.manage' },
   { method: 'GET', pattern: '/api/or/forecast-accuracy', need: 'or.view' },
   { method: 'PUT', pattern: '/api/or/forecast-config', need: 'or.manage' },
   { method: 'GET', pattern: '/api/or/cashier-risk', need: 'or.manage' },

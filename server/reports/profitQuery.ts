@@ -4,7 +4,7 @@ import { dailySalesDate, dailySalesTypeFilter } from "./sales.js";
 
 function salesBranch(transactions: string, items: string) {
   return `
-    SELECT t.id AS transaction_id, t.type, t.day, t.status, t.deleted_at,
+    SELECT ${transactions === 'archived_transactions' ? '-t.id' : 't.id'} AS transaction_id, t.type, t.day, t.status, t.deleted_at,
            CASE WHEN t.stakeholder_id = @owner THEN 1 ELSE 0 END AS owner,
            i.quantity, i.unit_price, i.unit_cost, p.cost AS product_cost, i.discount_type, i.discount_value,
            t.discount_type AS tx_discount_type, t.discount_value AS tx_discount_value
@@ -27,9 +27,9 @@ function outflowBranch(table: string) {
   `;
 }
 
-export function readProfitReport(tenant: number, now = new Date()) {
+export function readProfitReport(tenant: number, now = new Date(), day?: string) {
   const calendar = profitCalendar(now);
-  const bounds = { tenant, from: calendar.days[0], to: calendar.days[calendar.days.length - 1] };
+  const bounds = { tenant, from: day ?? calendar.days[0], to: day ?? calendar.days[calendar.days.length - 1] };
   const config = db.prepare(`
     SELECT owner_stakeholder_id FROM or_tenant_config
     WHERE tenant_id = ? AND deleted_at IS NULL

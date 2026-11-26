@@ -1,4 +1,5 @@
 import { readSupplierScorecard } from './supplierScorecardData.js';
+import { ownerSummaryRoute, ownerSummarySettingsRoute } from './ownerSummaryData.js';
 import { loadForecastAccuracy, saveForecastConfig } from "./demandForecastData.js";
 import { loadCashForecast } from "./cashForecastData.js";
 import { cashierRiskRoute, protectCashierBriefing } from "./cashierRiskData.js";
@@ -48,6 +49,9 @@ import { loadMarginAlerts } from "./marginAlerts.js";
 import { readBundleIdeas } from "./bundleIdeasData.js";
 
 export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) {
+  app.get('/api/or/owner-summary', authenticate, ownerSummaryRoute);
+  app.get('/api/or/owner-summary-settings', authenticate, ownerSummarySettingsRoute);
+  app.put('/api/or/owner-summary-settings', authenticate, ownerSummarySettingsRoute);
   app.get('/api/or/cashier-risk', authenticate, requireOrLicense, cashierRiskRoute);
   app.get('/api/or/briefing', authenticate, protectCashierBriefing);
   app.get('/api/or/bundle-ideas', authenticate, requireOrLicense, (req: any, res: any) => {

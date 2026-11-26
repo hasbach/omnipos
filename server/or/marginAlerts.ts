@@ -74,7 +74,7 @@ export function loadMarginAlerts(tenantId: number) {
   });
 }
 
-export function marginBriefingItems(tenantId: number) {
+export function marginBriefingItems(tenantId: number, limit = 10) {
   const language = (db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'language'").get(tenantId) as any)?.value;
   const dictionary = marginLocales[language as keyof typeof marginLocales] || marginLocales.en;
   const t = (key: keyof typeof dictionary, values: Record<string, string> = {}) => dictionary[key].replace(/\{(\w+)\}/g, (_, k) => values[k] ?? '');
@@ -83,7 +83,7 @@ export function marginBriefingItems(tenantId: number) {
   const urgent = loadMarginAlerts(tenantId)
     .filter(p => p.erosion || p.margin < 0 || (p.lbp_margin != null && p.lbp_margin < 0))
     .sort((a, b) => Math.min(a.margin, a.lbp_margin ?? a.margin) - Math.min(b.margin, b.lbp_margin ?? b.margin))
-    .slice(0, 10);
+    .slice(0, limit);
   return urgent.map(p => ({
     priority: p.margin < 0 || (p.lbp_margin != null && p.lbp_margin < 0) ? 'CRITICAL' : 'HIGH',
     category: 'MARGIN_EROSION', title: p.name,

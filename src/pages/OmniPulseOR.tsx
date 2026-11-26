@@ -1,4 +1,5 @@
 import SuppliersTab from './or/SuppliersTab';
+import OwnerSummaryCard from './or/OwnerSummaryCard';
 import ForecastTab from './or/ForecastTab';
 import CashForecastTab from './or/CashForecastTab';
 import CashiersTab from './or/CashiersTab';
@@ -435,6 +436,8 @@ export default function OmniPulseOR() {
   if (!status?.licensed) {
     return (
       <div className="max-w-3xl mx-auto py-12 space-y-6">
+        {can('or.manage') && <OwnerSummaryCard />}
+        {can('or.manage') && <OwnerSummaryCard settings />}
         <Card className="p-8 text-center space-y-5">
           <div className="mx-auto w-14 h-14 rounded-2xl bg-primary-soft text-primary flex items-center justify-center">
             <Lock size={28} />
@@ -514,6 +517,7 @@ export default function OmniPulseOR() {
       {tab === 'bundle-ideas' && <BundleIdeas products={products} onSaved={loadAll} />}
 
       {/* TAB 1: MORNING BRIEFING */}
+      {tab === 'briefing' && can('or.manage') && <OwnerSummaryCard key={briefing?.date || String(runningPipeline)} />}
       {tab === 'briefing' && sp && (
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -989,6 +993,7 @@ export default function OmniPulseOR() {
       )}
 
       {/* TAB 5: SETTINGS & PRESETS */}
+      {tab === 'settings' && can('or.manage') && <OwnerSummaryCard settings />}
       {tab === 'settings' && configData && (
         <div className="space-y-6">
           <Card className="p-5 space-y-4">
