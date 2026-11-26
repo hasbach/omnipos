@@ -12,6 +12,7 @@ import { computeOpexReserve, computeSpendableCash } from "./spendableCash.js";
 import { generateCycleCountSession, recordStockAnomaly } from "./cycleCount.js";
 import { isOrLicenseValid } from "./license.js";
 import { rowGlobalId, stableGlobalId } from "./stableId.js";
+import { marginBriefingItems } from "./marginAlerts.js";
 
 export interface PipelineSummary {
   run_date: string;
@@ -310,6 +311,7 @@ export function runNightlyOrPipeline(
       insAction.run(...item);
       actionsCreated++;
     }
+    for (const item of marginBriefingItems(tenantId)) { insAction.run(tenantId, runDate, item.priority, item.category, item.title, item.details, "PRODUCT", item.reference_id); actionsCreated++; }
 
     // Retire today's open items that this run no longer produced.
     const stale = db

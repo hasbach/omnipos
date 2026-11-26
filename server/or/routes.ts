@@ -41,6 +41,7 @@ import {
 import { runNightlyOrPipeline } from "./pipeline.js";
 import { applyOptimizationPlan, runOrOptimizer } from "./optimizer.js";
 import { localDateIso } from "./coreBridge.js";
+import { loadMarginAlerts } from "./marginAlerts.js";
 
 export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) {
   const fail = (res: any, e: any) => {
@@ -65,6 +66,10 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
 
   app.get("/api/or/cash-forecast", authenticate, requireOrLicense, (req: any, res: any) => {
     try { res.json(loadCashForecast(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+
+  app.get("/api/or/margins", authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(loadMarginAlerts(req.session.tenantId)); } catch (e) { fail(res, e); }
   });
 
   // --- Morning Briefing / Overview ---
