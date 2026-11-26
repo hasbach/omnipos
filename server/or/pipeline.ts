@@ -1,3 +1,4 @@
+import { cashForecastBriefing } from "./cashForecastData.js";
 // Unified Nightly OR Pipeline (`runNightlyOrPipeline`): single idempotent pipeline per (tenant, business_date).
 // 1. Sync & classify `or_sku_metrics` (30-day weighted velocity, DOS, ABC class)
 // 2. Accrue today's `or_fixed_obligations` into `OPEX_RESERVE` bucket + ledger
@@ -302,6 +303,11 @@ export function runNightlyOrPipeline(
           sku.product_id
         );
       }
+      actionsCreated++;
+    }
+
+    for (const item of cashForecastBriefing(tenantId, runDate)) {
+      insAction.run(...item);
       actionsCreated++;
     }
 

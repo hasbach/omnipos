@@ -1,3 +1,4 @@
+import CashForecastTab from './or/CashForecastTab';
 import React, { useEffect, useState } from 'react';
 import {
   Activity, AlertTriangle, CheckCircle2, ClipboardCheck, Lock, Plus, RefreshCw,
@@ -12,7 +13,7 @@ import { formatMoney } from '../lib/format';
 import { usePermissions } from '../lib/usePermissions';
 import type { Product, Stakeholder } from '../types';
 
-type TabKey = 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings';
+type TabKey = 'cash-forecast' | 'briefing' | 'draws' | 'pos' | 'cycle' | 'settings';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -487,12 +488,15 @@ export default function OmniPulseOR() {
         onChange={(v) => setTab(v as TabKey)}
         items={[
           { value: 'briefing', label: t('or_tab_briefing', 'Morning Briefing') },
+          { value: 'cash-forecast', label: t('cf_title') },
           { value: 'draws', label: t('or_tab_draws', 'Owner Draws') },
           { value: 'pos', label: t('or_tab_pos', 'PO Cash-Lock') },
           { value: 'cycle', label: t('or_tab_cycle', '5-Min Cycle Count') },
           ...(can('or.manage') ? [{ value: 'settings', label: t('or_tab_settings', 'Settings & Presets') }] : []),
         ]}
       />
+
+      {tab === 'cash-forecast' && <CashForecastTab />}
 
       {/* TAB 1: MORNING BRIEFING */}
       {tab === 'briefing' && sp && (

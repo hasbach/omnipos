@@ -1,3 +1,4 @@
+import { loadCashForecast } from "./cashForecastData.js";
 import { loadOpenPayablesReceivables } from "./payablesData.js";
 import { stableGlobalId, rowGlobalId } from "./stableId.js";
 // Express routes for OmniPulse OR (paid add-on module).
@@ -60,6 +61,10 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
     } catch (e) {
       fail(res, e);
     }
+  });
+
+  app.get("/api/or/cash-forecast", authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(loadCashForecast(req.session.tenantId)); } catch (e) { fail(res, e); }
   });
 
   // --- Morning Briefing / Overview ---
