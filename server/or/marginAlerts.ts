@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { localCurrencyFor } from "../localCurrency.js";
+import { localCurrencyFor, localRoundingStep } from "../localCurrency.js";
 import marginLocales from "../../src/intl/locales/margins.js";
 
 export function suggestedPrice(cost: number, target: number, step = 0.01): number {
@@ -39,7 +39,7 @@ export function loadMarginAlerts(tenantId: number) {
   let overrides: Record<string, number> = {};
   try { overrides = JSON.parse(settings.margin_target_pct_by_category || '{}') || {}; } catch { /* use tenant target */ }
   const local = localCurrencyFor(tenantId);
-  const step = Number(settings.lbp_rounding_step) > 0 ? Number(settings.lbp_rounding_step) : 1;
+  const step = localRoundingStep(settings.lbp_rounding_step, local?.rate);
   const history = db.prepare(`SELECT t.id AS tx_id, t.created_at AS created_at, t.type AS type, ti.id AS id, ti.product_id AS product_id, ti.quantity AS quantity, ti.unit_cost AS unit_cost, ti.unit_price AS unit_price FROM transactions t
     JOIN transaction_items ti ON ti.transaction_id = t.id WHERE t.tenant_id = ? AND t.deleted_at IS NULL AND ti.deleted_at IS NULL
     UNION ALL SELECT t.id AS tx_id, t.created_at, t.type, ti.id, ti.product_id, ti.quantity, ti.unit_cost, ti.unit_price FROM archived_transactions t

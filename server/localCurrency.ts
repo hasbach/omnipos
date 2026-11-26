@@ -14,6 +14,14 @@ export function localCurrencyFor(tenantId: number): LocalCurrency | null {
   return row ? { code: row.code, symbol: row.symbol, rate: Number(row.rate) } : null;
 }
 
+/** Step that computed local prices round to: the tenant's `lbp_rounding_step` setting when set, else
+ *  1,000 for a high-rate currency like LBP (as the payment screen rounds converted amounts), else 1. */
+export function localRoundingStep(setting: unknown, rate: number | null | undefined): number {
+  const configured = Number(setting);
+  if (setting != null && setting !== '' && Number.isFinite(configured) && configured > 0) return configured;
+  return rate && rate > 100 ? 1000 : 1;
+}
+
 export interface EffectiveLocalRate extends LocalCurrency { source: 'party' | 'global' }
 
 /** A party's own local-currency rate (stakeholders.local_rate) or null when it uses the global one. */

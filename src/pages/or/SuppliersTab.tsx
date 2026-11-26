@@ -6,7 +6,9 @@ import type { SupplierScorecard } from '../../../server/or/supplierScorecard';
 import type { supplierComparisons } from '../../../server/or/supplierScorecard';
 
 type Response = { suppliers: SupplierScorecard[]; comparisons: ReturnType<typeof supplierComparisons> };
-const money = (value: number) => `$${value.toFixed(4)}`;
+// Totals in cents; per-piece purchase prices keep up to 4 decimals (cheap items cost fractions of a cent).
+const total = (value: number) => `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (value: number) => `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 
 export default function SuppliersTab({ supplierId }: { supplierId?: number }) {
   const { t } = useI18n();
@@ -47,9 +49,9 @@ export default function SuppliersTab({ supplierId }: { supplierId?: number }) {
                   <td className="p-2">{percent(s.fill_rate_score)}</td>
                   <td className="p-2">{s.payment_terms_days === null ? t('sc_unknown') : `${s.payment_terms_days} ${t('sc_days')}`}</td>
                   <td className="p-2">{percent(s.on_time_rate)} ({s.delivery_count})</td>
-                  <td className="p-2">{money(s.bought_90d_usd)}</td>
-                  <td className="p-2">{money(s.bought_all_usd)}</td>
-                  <td className="p-2">{money(s.owed_usd)}</td>
+                  <td className="p-2">{total(s.bought_90d_usd)}</td>
+                  <td className="p-2">{total(s.bought_all_usd)}</td>
+                  <td className="p-2">{total(s.owed_usd)}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -57,13 +59,13 @@ export default function SuppliersTab({ supplierId }: { supplierId?: number }) {
           {data?.suppliers.length === 0 && <p>{t('sc_empty')}</p>}
           {data?.suppliers.filter(s => s.id === selected).map(s => (
             <div key={s.id} className="space-y-3">
-              <h4 className="font-semibold">{s.name} � {t('sc_trend')}</h4>
+              <h4 className="font-semibold">{s.name} · {t('sc_trend')}</h4>
               {s.products.length === 0 && <p>{t('sc_empty')}</p>}
               {s.products.map(p => {
                 const comparison = comparisons.get(p.product_id);
                 return (
                   <div key={p.product_id} className="border-t border-border py-2 space-y-1">
-                    <p>{p.product_name}: {money(p.last_price)} <span aria-label={t(p.change === null || p.change === 0 ? 'sc_flat' : p.change > 0 ? 'sc_up' : 'sc_down')}>{p.change === null || p.change === 0 ? '?' : p.change > 0 ? '?' : '?'}</span></p>
+                    <p>{p.product_name}: {money(p.last_price)} <span aria-label={t(p.change === null || p.change === 0 ? 'sc_flat' : p.change > 0 ? 'sc_up' : 'sc_down')}>{p.change === null || p.change === 0 ? '→' : p.change > 0 ? '↑' : '↓'}</span></p>
                     <p>{t('sc_average')}: {p.average_90d === null ? t('sc_unknown') : money(p.average_90d)}</p>
                     {comparison && <p>{t('sc_cheapest')}: {comparison.cheapest_last.name} {money(comparison.cheapest_last.last_price)}; {t('sc_average')}: {comparison.cheapest_average_90d ? `${comparison.cheapest_average_90d.name} ${money(comparison.cheapest_average_90d.average_90d!)}` : t('sc_unknown')}</p>}
                     {!supplierId && <ul>{p.history.map((h, i) => <li key={i}>{h.date.slice(0, 10)}: {money(h.price)}</li>)}</ul>}

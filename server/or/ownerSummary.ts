@@ -27,7 +27,7 @@ export function summaryLanguage(value: unknown): SummaryLanguage {
 export function buildOwnerSummary(data: OwnerSummaryInput, language: SummaryLanguage = 'ar'): string {
   const t = (key: keyof typeof locales.ar) => locales[language][key];
   const clean = (value: string) => value.replace(/[\r\n\t]+/g, ' ').trim();
-  const money = (amount: number) => `$${amount.toFixed(2)}` + (data.local
+  const money = (amount: number) => `${amount < 0 ? '-' : ''}$${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` + (data.local
     ? ` [${(amount * data.local.rate).toLocaleString('en-US', { maximumFractionDigits: 0 })} ${data.local.code}]` : '');
   const lines = [
     `${t('os_title')} — ${data.date}`,
@@ -41,7 +41,7 @@ export function buildOwnerSummary(data: OwnerSummaryInput, language: SummaryLang
     if (data.free !== undefined) lines.push(`${t('os_free')}: ${money(data.free)}`);
     if (data.shortfall) lines.push(`${t('os_shortfall')}: ${data.shortfall}`);
     if (data.due && data.due > 0) lines.push(`${t('os_due')}: ${money(data.due)}`);
-    if (data.reorder?.length) lines.push(`${t('os_reorder')}: ${data.reorder.slice(0, 3).map(p => `${clean(p.name)} (${p.days_of_supply.toFixed(1)} ${t('os_days')})`).join(' • ')}`);
+    if (data.reorder?.length) lines.push(`${t('os_reorder')}: ${data.reorder.slice(0, 3).map(p => `${clean(p.name)} (${p.days_of_supply > 0 ? `${p.days_of_supply.toFixed(1)} ${t('os_days')}` : t('os_out')})`).join(' • ')}`);
   }
   if (data.chase?.length) lines.push(`${t('os_chase')}: ${data.chase.slice(0, 3).map(p => `${clean(p.name)} ${money(p.amount_usd)}`).join(' • ')}`);
   if (data.licensed) for (const key of ['margin', 'stale', 'risk'] as const) {
