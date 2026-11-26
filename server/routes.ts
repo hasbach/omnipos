@@ -774,22 +774,22 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
 
       // Move payments
       db.prepare(`
-      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id)
-      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id
+      INSERT INTO archived_payments (id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id, deleted_at)
+      SELECT id, transaction_id, amount, method, currency, exchange_rate, created_at, global_id, account_id, deleted_at
       FROM payments WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
       // Move transaction items
       db.prepare(`
-      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id)
-      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id
+      INSERT INTO archived_transaction_items (id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id, deleted_at)
+      SELECT id, transaction_id, product_id, quantity, unit_price, discount_type, discount_value, tax_type, tax_value, unit_cost, uom_id, uom_name, uom_factor, uom_qty, original_item_id, bundle_id, bundle_name, bundle_qty, bundle_line, global_id, deleted_at
       FROM transaction_items WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)
     `).run(tenantId);
 
       // Move transactions
       db.prepare(`
-      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id)
-      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id
+      INSERT INTO archived_transactions (id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id, deleted_at)
+      SELECT id, tenant_id, stakeholder_id, user_id, type, total_amount, currency, exchange_rate, discount_type, discount_value, tax_type, tax_value, status, terminal_id, terminal_sequence, original_transaction_id, price_level, notes, reference, edited_at, edit_count, local_rate, local_currency, order_global_id, created_at, global_id, deleted_at
       FROM transactions WHERE tenant_id = ?
     `).run(tenantId);
 
@@ -814,8 +814,8 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
       // used to just delete these with no trace anywhere, which meant every itemized cash-in/out
       // and its reason was permanently unrecoverable after every settlement.
       db.prepare(`
-        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id)
-        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id
+        INSERT INTO archived_cash_flow (id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id, deleted_at)
+        SELECT id, tenant_id, user_id, type, amount, currency, exchange_rate, reason, created_at, category, counterparty, global_id, stakeholder_id, account_id, transfer_id, deleted_at
         FROM cash_flow WHERE tenant_id = ?
       `).run(tenantId);
 
