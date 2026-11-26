@@ -18,7 +18,7 @@ import type { Product, Stakeholder } from '../types';
 import MarginsTab from './or/MarginsTab';
 import { BundleIdeas } from './or/BundleIdeas';
 
-type TabKey = 'suppliers' | 'briefing' | 'cash-forecast' | 'margins' | 'bundle-ideas' | 'draws' | 'pos' | 'cycle' | 'settings' | 'forecast' | 'cashiers';
+type TabKey = 'briefing' | 'cash-forecast' | 'forecast' | 'margins' | 'suppliers' | 'bundle-ideas' | 'cashiers' | 'draws' | 'pos' | 'cycle' | 'settings';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -492,13 +492,13 @@ export default function OmniPulseOR() {
         value={tab}
         onChange={(v) => setTab(v as TabKey)}
         items={[
-          { value: 'suppliers', label: t('sc_title') },
           { value: 'briefing', label: t('or_tab_briefing', 'Morning Briefing') },
-          { value: 'forecast', label: t('df_title') },
-          ...(can('or.manage') ? [{ value: 'cashiers', label: t('cr_title') }] : []),
           { value: 'cash-forecast', label: t('cf_title') },
+          { value: 'forecast', label: t('df_title') },
           { value: 'margins', label: t('or_margins') },
+          { value: 'suppliers', label: t('sc_title') },
           { value: 'bundle-ideas', label: t('bi_title') },
+          ...(can('or.manage') ? [{ value: 'cashiers', label: t('cr_title') }] : []),
           { value: 'draws', label: t('or_tab_draws', 'Owner Draws') },
           { value: 'pos', label: t('or_tab_pos', 'PO Cash-Lock') },
           { value: 'cycle', label: t('or_tab_cycle', '5-Min Cycle Count') },
