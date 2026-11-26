@@ -34,6 +34,7 @@ export interface ProductEditorDrawerProps {
   priceLevelsEnabled?: boolean;
   /** Every product of the tenant: the bundle card picks its components from these. */
   products?: Product[];
+  initialBundle?: { name: string; price: number; cost: number; bundle_items: BundleDraftItem[] };
   onClose: () => void;
   onSaved: () => void;
 }
@@ -127,7 +128,7 @@ const TIER_FIELD: Record<TierKey, { usd: keyof FormState; lbp: keyof FormState }
   super_wholesale: { usd: 'price_super_wholesale', lbp: 'price_super_wholesale_lbp' },
 };
 
-export function ProductEditorDrawer({ open, product, categories, localCurrency, priceLevelsEnabled = true, products = [], onClose, onSaved }: ProductEditorDrawerProps) {
+export function ProductEditorDrawer({ open, product, categories, localCurrency, priceLevelsEnabled = true, products = [], initialBundle, onClose, onSaved }: ProductEditorDrawerProps) {
   const { t } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
@@ -155,9 +156,10 @@ export function ProductEditorDrawer({ open, product, categories, localCurrency, 
   useEffect(() => {
     if (!open) return;
     const next = product ? fromProduct(product) : blankForm();
+    if (!product && initialBundle) Object.assign(next, initialBundle, { is_bundle: 1, track_inventory: 0 });
     setForm(next);
     setInitialSnapshot(JSON.stringify(next));
-    setTab('general');
+    setTab(!product && initialBundle ? 'bundle' : 'general');
     setBarcodeInput('');
     setNameError(null);
     setFieldErrors({});
