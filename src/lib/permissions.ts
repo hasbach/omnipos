@@ -3,6 +3,7 @@
 // the authority (it answers 403 PERMISSION_DENIED); this only decides what to show.
 
 export const PERMISSION_GROUPS: { area: string; keys: string[] }[] = [
+  { area: 'assistant', keys: ['assistant.use'] },
   { area: 'dashboard', keys: ['dashboard.overview'] },
   { area: 'sales', keys: ['invoices.view', 'invoices.edit', 'invoices.delete', 'invoices.refund', 'daily_sales.view', 'live_monitor.view'] },
   { area: 'inventory', keys: ['products.view', 'products.edit', 'stock.view', 'stock.adjust'] },

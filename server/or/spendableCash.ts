@@ -182,9 +182,9 @@ export function averageDailyOwnerDraws(tenantId: number): number {
 }
 
 /** Computes Real Spendable Cash directly from OmniPOS Core `cash_accounts` + OR locks/reserves. */
-export function computeSpendableCash(tenantId: number, today = localDateIso()): SpendableCashSnapshot {
-  const config = ensureOrInitialized(tenantId);
-  const accounts = listCashAccounts(tenantId, false);
+export function computeSpendableCash(tenantId: number, today = localDateIso(), readOnly = false): SpendableCashSnapshot {
+  const config = readOnly ? db.prepare("SELECT * FROM or_tenant_config WHERE tenant_id = ? AND deleted_at IS NULL").get(tenantId) as ReturnType<typeof ensureOrInitialized> : ensureOrInitialized(tenantId);
+  const accounts = listCashAccounts(tenantId, false, readOnly);
 
   let drawer = 0;
   let savings = 0;

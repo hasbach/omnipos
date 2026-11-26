@@ -1,4 +1,7 @@
+import { readSupplierScorecard } from './supplierScorecardData.js';
+import { loadForecastAccuracy, saveForecastConfig } from "./demandForecastData.js";
 import { loadCashForecast } from "./cashForecastData.js";
+import { cashierRiskRoute, protectCashierBriefing } from "./cashierRiskData.js";
 import { loadOpenPayablesReceivables } from "./payablesData.js";
 import { stableGlobalId, rowGlobalId } from "./stableId.js";
 // Express routes for OmniPulse OR (paid add-on module).
@@ -45,6 +48,8 @@ import { loadMarginAlerts } from "./marginAlerts.js";
 import { readBundleIdeas } from "./bundleIdeasData.js";
 
 export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) {
+  app.get('/api/or/cashier-risk', authenticate, requireOrLicense, cashierRiskRoute);
+  app.get('/api/or/briefing', authenticate, protectCashierBriefing);
   app.get('/api/or/bundle-ideas', authenticate, requireOrLicense, (req: any, res: any) => {
     try { res.json(readBundleIdeas(req.session.tenantId, req.query)); } catch (e) { fail(res, e); }
   });
@@ -55,6 +60,26 @@ export function setupOrRoutes(app: any, authenticate: any, broadcast: Function) 
     }
     return res.status(500).json({ error: e?.message || String(e) });
   };
+
+  app.get('/api/or/suppliers/scorecard', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(readSupplierScorecard(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+  app.get('/api/or/suppliers/:id/scorecard', authenticate, requireOrLicense, (req: any, res: any) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid supplier id' });
+      const result = readSupplierScorecard(req.session.tenantId, id);
+      if (!result.suppliers.length) return res.status(404).json({ error: 'Supplier not found' });
+      res.json(result);
+    } catch (e) { fail(res, e); }
+  });
+
+  app.get('/api/or/forecast-accuracy', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(loadForecastAccuracy(req.session.tenantId)); } catch (e) { fail(res, e); }
+  });
+  app.put('/api/or/forecast-config', authenticate, requireOrLicense, (req: any, res: any) => {
+    try { res.json(saveForecastConfig(req.session.tenantId, req.body)); } catch (e) { fail(res, e); }
+  });
 
   // Public (for authenticated tenants): returns whether the OmniPulse OR add-on is licensed
   app.get("/api/or/status", authenticate, (req: any, res: any) => {

@@ -1,4 +1,7 @@
+import SuppliersTab from './or/SuppliersTab';
+import ForecastTab from './or/ForecastTab';
 import CashForecastTab from './or/CashForecastTab';
+import CashiersTab from './or/CashiersTab';
 import React, { useEffect, useState } from 'react';
 import {
   Activity, AlertTriangle, CheckCircle2, ClipboardCheck, Lock, Plus, RefreshCw,
@@ -15,7 +18,7 @@ import type { Product, Stakeholder } from '../types';
 import MarginsTab from './or/MarginsTab';
 import { BundleIdeas } from './or/BundleIdeas';
 
-type TabKey = 'briefing' | 'cash-forecast' | 'margins' | 'bundle-ideas' | 'draws' | 'pos' | 'cycle' | 'settings';
+type TabKey = 'briefing' | 'cash-forecast' | 'forecast' | 'margins' | 'suppliers' | 'bundle-ideas' | 'cashiers' | 'draws' | 'pos' | 'cycle' | 'settings';
 const USD = { code: 'USD', symbol: '$' };
 
 const MODE_VARIANT: Record<string, 'danger' | 'warning' | 'success'> = {
@@ -491,8 +494,11 @@ export default function OmniPulseOR() {
         items={[
           { value: 'briefing', label: t('or_tab_briefing', 'Morning Briefing') },
           { value: 'cash-forecast', label: t('cf_title') },
+          { value: 'forecast', label: t('df_title') },
           { value: 'margins', label: t('or_margins') },
+          { value: 'suppliers', label: t('sc_title') },
           { value: 'bundle-ideas', label: t('bi_title') },
+          ...(can('or.manage') ? [{ value: 'cashiers', label: t('cr_title') }] : []),
           { value: 'draws', label: t('or_tab_draws', 'Owner Draws') },
           { value: 'pos', label: t('or_tab_pos', 'PO Cash-Lock') },
           { value: 'cycle', label: t('or_tab_cycle', '5-Min Cycle Count') },
@@ -500,6 +506,9 @@ export default function OmniPulseOR() {
         ]}
       />
 
+      {tab === 'suppliers' && <SuppliersTab />}
+      {tab === 'forecast' && <ForecastTab />}
+      {tab === 'cashiers' && can('or.manage') && <CashiersTab />}
       {tab === 'cash-forecast' && <CashForecastTab />}
       {tab === 'margins' && <MarginsTab />}
       {tab === 'bundle-ideas' && <BundleIdeas products={products} onSaved={loadAll} />}

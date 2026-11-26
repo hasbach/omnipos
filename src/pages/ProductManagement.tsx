@@ -1,3 +1,4 @@
+import { LbpPriceReview } from './products/LbpPriceReview';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence } from 'motion/react';
@@ -447,6 +448,7 @@ export default function ProductManagement() {
         }
       />
 
+      <LbpPriceReview />
       <Toolbar
         className="mb-3"
         actions={

@@ -1,3 +1,4 @@
+import { LbpPriceReview } from './products/LbpPriceReview';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, HandCoins, AlertTriangle, Plus, Edit2, Trash2, Upload } from 'lucide-react';
@@ -299,6 +300,7 @@ export default function StakeholderManagement() {
         defaultPageSize={25}
       />
 
+      <LbpPriceReview refreshKey={stakeholders} />
       <EditDrawer
         open={editDrawerOpen}
         onClose={() => setEditDrawerOpen(false)}
