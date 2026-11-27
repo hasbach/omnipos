@@ -3060,6 +3060,60 @@ export function setupRoutes(app: any, wss: any, rawBroadcast: Function, authenti
     }
   });
 
+  // Bulk stock correction: set many products to one quantity in a single audited step (e.g. zero
+  // out every negative/out-of-stock item after a count). Targets explicit product_ids, or a scope:
+  // 'out' = tracked stock <= 0, 'negative' = tracked stock < 0. Bundles and untracked (service)
+  // products are always skipped, as are products already at the target quantity. Each change
+  // writes its own stock_adjustments row, exactly like POST /api/stock/adjust.
+  app.post("/api/stock/bulk-adjust", authenticate, (req: any, res) => {
+    const tenantId = req.session.tenantId;
+    const { product_ids, scope, new_qty, reason } = req.body;
+
+    if (!Number.isFinite(new_qty) || new_qty < 0) return res.status(400).json({ error: "Invalid new_qty.", field: 'new_qty' });
+    const hasIds = Array.isArray(product_ids) && product_ids.length > 0;
+    if (!hasIds && !['out', 'negative'].includes(scope)) return res.status(400).json({ error: "Provide product_ids or a scope of 'out' or 'negative'." });
+
+    let query = "SELECT id, stock, cost FROM products WHERE tenant_id = ? AND IFNULL(track_inventory, 1) != 0 AND IFNULL(is_bundle, 0) = 0";
+    const params: any[] = [tenantId];
+    if (hasIds) {
+      const ids = product_ids.map(Number).filter(Number.isFinite);
+      if (!ids.length) return res.status(400).json({ error: "Invalid product_ids." });
+      query += ` AND id IN (${ids.map(() => '?').join(',')})`;
+      params.push(...ids);
+    }
+    if (scope === 'out') query += " AND IFNULL(stock, 0) <= 0";
+    else if (scope === 'negative') query += " AND IFNULL(stock, 0) < 0";
+
+    const products = db.prepare(query).all(...params) as any[];
+    const userId = tenantUserId(tenantId, req.body.user_id);
+    const setStock = db.prepare("UPDATE products SET stock = ? WHERE id = ? AND tenant_id = ?");
+    const insertAdj = db.prepare(
+      "INSERT INTO stock_adjustments (tenant_id, product_id, user_id, qty_before, qty_after, delta, reason, unit_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+
+    let updated = 0;
+    const run = db.transaction(() => {
+      for (const p of products) {
+        const qtyBefore = p.stock || 0;
+        if (Math.abs(qtyBefore - new_qty) < 1e-9) continue;
+        setStock.run(new_qty, p.id, tenantId);
+        insertAdj.run(tenantId, p.id, userId, qtyBefore, new_qty, new_qty - qtyBefore, reason || null, p.cost ?? null);
+        updated++;
+      }
+    });
+
+    try {
+      run();
+      if (updated > 0) {
+        logAction(tenantId, userId, 'Stock Adjusted', `Bulk: ${updated} products set to ${new_qty} (${reason || 'no reason given'})`);
+        broadcast({ type: 'PRODUCTS_UPDATED' }, tenantId);
+      }
+      res.json({ updated, skipped: products.length - updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get("/api/stock/adjustments", authenticate, (req: any, res) => {
     const tenantId = req.session.tenantId;
     const { product_id, from, to } = req.query;

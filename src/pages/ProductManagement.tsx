@@ -5,7 +5,7 @@ import { AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
-import { Download, Plus, Printer, Tag, Trash2, Upload, Edit2, Globe, EyeOff } from 'lucide-react';
+import { Download, Plus, Printer, Tag, Trash2, Upload, Edit2, Globe, EyeOff, Boxes } from 'lucide-react';
 
 import {
   PageHeader,
@@ -31,6 +31,7 @@ import { Product, Currency } from '../types';
 import LabelPrinter from '../components/LabelPrinter';
 import { ProductEditorDrawer } from './products/ProductEditorDrawer';
 import { BulkPriceModal } from './products/BulkPriceModal';
+import { BulkStockModal } from './stock/BulkStockModal';
 import { commerceApi, type CommerceStatus } from '../lib/commerceApi';
 import { translateServerError } from '../lib/serverErrors';
 import { bundleAvailability, bundleContentsLabel } from '../lib/bundles';
@@ -53,6 +54,7 @@ export default function ProductManagement() {
   const { can } = usePermissions();
   const canEdit = can('products.edit');
   const canImport = can('import.run');
+  const canAdjustStock = can('stock.adjust');
   // Online store bulk publish: only when commerce is on, a store exists and the role may publish.
   const canPublish = can('store.publish');
   const [commerce, setCommerce] = useState<CommerceStatus | null>(null);
@@ -72,6 +74,7 @@ export default function ProductManagement() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
+  const [bulkStockOpen, setBulkStockOpen] = useState(false);
   const [showLabelPrinter, setShowLabelPrinter] = useState(false);
   const [labelPreSelected, setLabelPreSelected] = useState<number[]>([]);
 
@@ -441,6 +444,11 @@ export default function ProductManagement() {
                 <Tag size={16} /> {t('prod_bulk_price', 'Bulk price update')}
               </Button>
             )}
+            {canAdjustStock && (
+              <Button variant="secondary" onClick={() => setBulkStockOpen(true)}>
+                <Boxes size={16} /> {t('stock_bulk_button', 'Bulk stock update')}
+              </Button>
+            )}
             {canEdit && <Button variant="primary" onClick={openCreate}>
               <Plus size={16} /> {t('prod_add', 'Add product')}
             </Button>}
@@ -508,6 +516,11 @@ export default function ProductManagement() {
               <Button size="sm" variant="secondary" onClick={() => setBulkPriceOpen(true)}>
                 <Tag size={14} /> {t('prod_bulk_price_update_selected', 'Bulk price update')}
               </Button>
+              {canAdjustStock && (
+                <Button size="sm" variant="secondary" onClick={() => setBulkStockOpen(true)}>
+                  <Boxes size={14} /> {t('stock_bulk_button_selected', 'Set stock')}
+                </Button>
+              )}
               {commerce?.enabled && commerce.store && canPublish && (
                 <>
                   <Button size="sm" variant="secondary" onClick={() => handleBulkPublish(selected, true, clear)} disabled={selected.length > 1000}>
@@ -550,6 +563,14 @@ export default function ProductManagement() {
         selectedIds={selectedKeys}
         categories={categories}
         priceLevelsEnabled={priceLevelsEnabled}
+        onApplied={fetchProducts}
+      />
+
+      <BulkStockModal
+        open={bulkStockOpen}
+        onClose={() => setBulkStockOpen(false)}
+        products={products}
+        selectedIds={selectedKeys}
         onApplied={fetchProducts}
       />
 
