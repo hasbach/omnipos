@@ -20,6 +20,7 @@ import { usePermissions } from '../lib/usePermissions';
 import { formatDateTime, formatMoney } from '../lib/format';
 import { Product, Currency } from '../types';
 import { AdjustStockModal, AdjustStockTarget } from './stock/AdjustStockModal';
+import { BulkStockModal } from './stock/BulkStockModal';
 import { MovementsDrawer } from './stock/MovementsDrawer';
 
 type StatusFilter = 'all' | 'low' | 'out';
@@ -74,6 +75,7 @@ export default function StockManagement() {
   const [status, setStatus] = useState<StatusFilter>('all');
 
   const [adjustTarget, setAdjustTarget] = useState<AdjustStockTarget | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [movementsTarget, setMovementsTarget] = useState<{ id: number; name: string } | null>(null);
   const [orLicensed, setOrLicensed] = useState(false);
   const [flaggingId, setFlaggingId] = useState<number | null>(null);
@@ -261,7 +263,17 @@ export default function StockManagement() {
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader title={t('stock_title', 'Stock')} subtitle={t('stock_subtitle')} />
+      <PageHeader
+        title={t('stock_title', 'Stock')}
+        subtitle={t('stock_subtitle')}
+        actions={
+          canAdjust ? (
+            <Button variant="secondary" onClick={() => setBulkOpen(true)}>
+              <PackageX size={16} /> {t('stock_bulk_button', 'Bulk stock update')}
+            </Button>
+          ) : undefined
+        }
+      />
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <StatCard label={t('stock_kpi_tracked_skus', 'Tracked SKUs')} value={valuation?.totals.product_count ?? 0} icon={Boxes} />
@@ -334,6 +346,16 @@ export default function StockManagement() {
         product={adjustTarget}
         onClose={() => setAdjustTarget(null)}
         onSaved={() => {
+          fetchAll();
+          if (tab === 'adjustments') fetchAdjustments();
+        }}
+      />
+
+      <BulkStockModal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        products={products}
+        onApplied={() => {
           fetchAll();
           if (tab === 'adjustments') fetchAdjustments();
         }}

@@ -427,6 +427,7 @@ const DEFAULT_TABLE: [string, string, string[]][] = [
   ["POST", "/api/products/bulk-price", ["admin", "manager"]],
   ["GET", "/api/products", ["admin", "manager", "accountant", "staff", "cashier"]],
   ["POST", "/api/stock/adjust", ["admin", "manager"]],
+  ["POST", "/api/stock/bulk-adjust", ["admin", "manager"]],
   ["GET", "/api/stock/adjustments", ["admin", "manager", "staff"]],
   ["DELETE", "/api/stakeholders/1", ["admin", "manager"]],
   ["POST", "/api/stakeholders", ["admin", "manager", "accountant", "staff", "cashier"]],

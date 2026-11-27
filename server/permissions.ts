@@ -321,6 +321,7 @@ export const ROUTE_RULES: RouteRule[] = [
 
   // --- stock ---
   { method: 'POST', pattern: '/api/stock/adjust', need: 'stock.adjust' },
+  { method: 'POST', pattern: '/api/stock/bulk-adjust', need: 'stock.adjust' },
   { method: 'GET', pattern: '/api/stock/adjustments', need: 'stock.view' },
   { method: 'GET', pattern: '/api/stock/movements/:productId', need: 'stock.view' },
 
