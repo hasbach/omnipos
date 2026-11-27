@@ -114,6 +114,12 @@ Other items: _(add fixes and ideas here)_
 
 ## Shipped
 
+### 1.14.1 — Bulk stock update (2026-11-27)
+- **Stock / Products:** "Bulk stock update" sets many products to one quantity at once — all out-of-stock items
+  (0 or less), negative stock only, or the selected rows — with a reason and a before/after preview. Default 0 clears
+  negative stock. Each change is recorded in stock adjustments (`POST /api/stock/bulk-adjust`, permission
+  `stock.adjust`); service items and bundles are skipped.
+
 ### 1.14.0 — Growth: the shop's CFO (2026-11-26)
 - **OmniPulse OR:** money owed both ways (supplier payment terms, due dates, 0-30/31-60/60+ aging, payables reserved in
   spendable cash and runway, customers to chase); 13-week cash forecast; seasonal demand forecast (weekday, salary
